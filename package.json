@@ -1,0 +1,58 @@
+{
+  "name": "@gerege-systems/eid-mongolia-sdk",
+  "version": "0.1.0",
+  "description": "e-ID Mongolia Relying Party SDK — иргэнээр утсаар нь нэвтрэлт ба хууль ёсны цахим гарын үсэг (RP-API v3, Smart-ID нийцтэй).",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsup src/index.ts --format esm,cjs --dts --clean",
+    "test": "npm run build && node --test --experimental-strip-types test/sdk.test.ts",
+    "lint": "tsc --noEmit"
+  },
+  "keywords": [
+    "eid",
+    "eid-mongolia",
+    "smart-id",
+    "eidas",
+    "mongolia",
+    "authentication",
+    "digital-signature",
+    "pki",
+    "relying-party"
+  ],
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "tsup": "^8.0.0",
+    "typescript": "^5.4.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gerege-systems/eid-mongolia-sdk.git"
+  },
+  "homepage": "https://eidmongolia.mn/developers",
+  "bugs": {
+    "url": "https://github.com/gerege-systems/eid-mongolia-sdk/issues"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  }
+}
