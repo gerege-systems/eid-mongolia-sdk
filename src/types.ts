@@ -150,7 +150,10 @@ export interface OrgResult {
 export interface RpCredentials {
   /** relying_parties-д бүртгэлтэй RP UUID. */
   rpUUID: string;
-  /** Иргэнд харагдах RP нэр (≤32 байт UTF-8). */
+  /**
+   * Дэд системийн нэр (ж: «Интернэт банк») — CA-д session бүрд хадгалагдана, ≤120 тэмдэгт
+   * (сервер илүүг таслана). Иргэний утсан дээр харагдах нэр нь RP-ийн бүртгэлийн нэр.
+   */
   rpName: string;
   /** API secret (rp_sk_…). Зөвхөн backend-д хадгална — браузерт ХЭЗЭЭ Ч задлахгүй. */
   apiSecret: string;

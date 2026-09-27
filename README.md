@@ -29,7 +29,7 @@ const eid = new EidClient({
   baseUrl: "https://ca.eidmongolia.mn",
   credentials: {
     rpUUID: process.env.EID_RP_UUID!,
-    rpName: "Хаан Банк",
+    rpName: "Интернэт банк", // дэд системийн нэр, ≤120 тэмдэгт
     apiSecret: process.env.EID_SECRET!, // rp_sk_…
   },
   trust: { trustAnchorsPem: [process.env.EID_NATIONAL_ROOT_CA_PEM!] }, // ← Mongolian National Root CA, production-д ЗААВАЛ
