@@ -5,7 +5,7 @@
 //   client.validator — хариуг крипто-баталгаажуулах (cert chain + signature)
 //
 // Жишээ (push нэвтрэлт):
-//   const eid = new EidClient({ baseUrl: "https://ca.eidmongolia.mn",
+//   const eid = new EidClient({   // baseUrl анхдагч https://rp.eidmongolia.mn
 //     credentials: { rpUUID, rpName: "Хаан Банк", apiSecret: process.env.EID_SECRET! },
 //     trust: { trustAnchorsPem: [NATIONAL_ROOT_CA_PEM] } });
 //   const s = await eid.auth.notificationByEtsi("PNOMN-12345678",
@@ -23,8 +23,11 @@ import { ResponseValidator, type TrustConfig } from "./validator.js";
 import type { CertificateLevel, RpCredentials } from "./types.js";
 
 export interface ClientConfig {
-  /** RP-API суурь URL (/v3-гүйгээр — SDK нэмнэ). Ж: https://ca.eidmongolia.mn */
-  baseUrl: string;
+  /**
+   * RP-API-ийн БҮТЭН суурь URL — SDK зам залгахаас өөр юу ч нэмэхгүй (0.3.0-аас /v3 залгахгүй).
+   * Анхдагч: {@link DEFAULT_BASE_URL} (`https://rp.eidmongolia.mn`). mTLS-тэй RP ч мөн энэ хост.
+   */
+  baseUrl?: string;
   /** RP таних мэдээлэл + API secret. */
   credentials: RpCredentials;
   /** Default certLevel (auth/sign бүрд). Default QUALIFIED. */
@@ -39,6 +42,30 @@ export interface ClientConfig {
   trust?: TrustConfig;
 }
 
+/** RP-API-ийн албан ёсны хост (2026-09-28-наас бүх RP, /v3-гүй). */
+export const DEFAULT_BASE_URL = "https://rp.eidmongolia.mn";
+
+// Хуучин (0.2.x) хэлбэр: ca. хост руу /v3 залгадаг байсан. ca. дээр RP-API /v3-гүй байхгүй тул чимээгүй 404-ийн
+// оронд тодорхой алдаа.
+const LEGACY_HOSTS = new Set(["ca.eidmongolia.mn", "e-id.mn", "www.e-id.mn"]);
+
+/** baseUrl-ийг шалгаж, төгсгөлийн "/"-ийг хасна. */
+export function resolveBaseUrl(baseUrl: string | undefined): string {
+  const raw = (baseUrl ?? DEFAULT_BASE_URL).trim().replace(/\/+$/, "");
+  let u: URL;
+  try {
+    u = new URL(raw);
+  } catch {
+    throw new Error(`EidClient: baseUrl буруу URL: ${raw}`);
+  }
+  if (LEGACY_HOSTS.has(u.hostname) && (u.pathname === "" || u.pathname === "/")) {
+    throw new Error(
+      `EidClient: RP-API ${u.hostname}-аас ${DEFAULT_BASE_URL} руу шилжсэн (/v3-гүй) — baseUrl-ийг ${DEFAULT_BASE_URL} болгоно уу (эсвэл хоосон орхи).`,
+    );
+  }
+  return raw;
+}
+
 export class EidClient {
   readonly auth: AuthApi;
   readonly sign: SignApi;
@@ -46,10 +73,9 @@ export class EidClient {
   readonly validator: ResponseValidator;
 
   constructor(cfg: ClientConfig) {
-    if (!cfg.baseUrl) throw new Error("EidClient: baseUrl шаардлагатай");
     if (!cfg.credentials?.apiSecret) throw new Error("EidClient: credentials.apiSecret шаардлагатай");
 
-    const base = cfg.baseUrl.replace(/\/+$/, "") + "/v3";
+    const base = resolveBaseUrl(cfg.baseUrl);
     const http = new Http({
       baseUrl: base,
       apiSecret: cfg.credentials.apiSecret,

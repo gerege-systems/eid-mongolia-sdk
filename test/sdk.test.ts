@@ -16,6 +16,9 @@ import {
   AuthenticationError,
   ForbiddenError,
   ApiError,
+  EidClient,
+  DEFAULT_BASE_URL,
+  resolveBaseUrl,
 } from "../dist/index.js";
 
 // Smart-ID RP-API v3 docs (signature_protocols.html)-ийн албан ёсны вектор — сервер, iOS,
@@ -174,4 +177,27 @@ test("Http — Bearer header илгээдэг", async () => {
   });
   await http.get("/session/x");
   assert.equal(seenAuth, "Bearer rp_sk_secret123");
+});
+
+test("resolveBaseUrl — анхдагч rp., /v3 залгахгүй, хуучин ca. хост тодорхой алдаа", () => {
+  assert.equal(resolveBaseUrl(undefined), "https://rp.eidmongolia.mn");
+  assert.equal(DEFAULT_BASE_URL, "https://rp.eidmongolia.mn");
+  assert.equal(resolveBaseUrl("https://rp.eidmongolia.mn/"), "https://rp.eidmongolia.mn");
+  assert.equal(resolveBaseUrl("https://rp.eidmongolia.mn/v3"), "https://rp.eidmongolia.mn/v3");
+  assert.equal(resolveBaseUrl("http://localhost:8080/v3"), "http://localhost:8080/v3");
+  assert.throws(() => resolveBaseUrl("https://ca.eidmongolia.mn"), /rp\.eidmongolia\.mn/);
+  assert.throws(() => resolveBaseUrl("not a url"), /буруу URL/);
+});
+
+test("EidClient — rp. хост руу /v3-гүй зам дууддаг", async () => {
+  let seen = "";
+  const eid = new EidClient({
+    credentials: { rpUUID: "u", rpName: "n", apiSecret: "rp_sk_x" },
+    fetchImpl: async (url) => {
+      seen = String(url);
+      return new Response(JSON.stringify({ state: "RUNNING" }), { status: 200 });
+    },
+  });
+  await eid.session.poll("abc", 1000).catch(() => undefined);
+  assert.ok(seen.startsWith("https://rp.eidmongolia.mn/session/abc"), seen);
 });

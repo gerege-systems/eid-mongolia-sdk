@@ -26,7 +26,7 @@ Node.js ≥ 22 (global `fetch`, `node:crypto`).
 import { EidClient } from "@gerege-systems/eid-mongolia-sdk";
 
 const eid = new EidClient({
-  baseUrl: "https://ca.eidmongolia.mn",
+  // baseUrl анхдагч https://rp.eidmongolia.mn (RP-API, /v3-гүй) — mTLS-тэй RP ч мөн энэ хост
   credentials: {
     rpUUID: process.env.EID_RP_UUID!,
     rpName: "Интернэт банк", // дэд системийн нэр, ≤120 тэмдэгт

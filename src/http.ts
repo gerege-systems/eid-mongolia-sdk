@@ -4,7 +4,7 @@
 import { AuthenticationError, ForbiddenError, ApiError, NetworkError } from "./errors.js";
 
 export interface HttpConfig {
-  /** RP-API суурь URL, /v3 хүртэл. Ж: https://ca.eidmongolia.mn/v3 */
+  /** RP-API-ийн бүтэн суурь URL. Ж: https://rp.eidmongolia.mn */
   baseUrl: string;
   /** API secret (rp_sk_…) — Authorization: Bearer-д орно. */
   apiSecret: string;
