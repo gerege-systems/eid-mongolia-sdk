@@ -1,6 +1,6 @@
 // @eid-mongolia/sdk — нийтийн гадаргуу.
 
-export { EidClient, type ClientConfig } from "./client.js";
+export { EidClient, DEFAULT_BASE_URL, resolveBaseUrl, type ClientConfig } from "./client.js";
 export { Http, type HttpConfig } from "./http.js";
 export { AuthApi, type AuthOptions, type AuthDefaults } from "./auth.js";
 export { SignApi, type SignOptions, type SignDefaults } from "./sign.js";
