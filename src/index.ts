@@ -24,6 +24,14 @@ export {
   type AcspV2Params,
 } from "./crypto.js";
 export {
+  deviceLink,
+  openOrShowQR,
+  isMobileUserAgent,
+  type DeviceLinkInput,
+  type NavigatorLike,
+  type OpenOrShowQROptions,
+} from "./devicelink.js";
+export {
   EidError,
   AuthenticationError,
   ForbiddenError,
@@ -31,6 +39,7 @@ export {
   NetworkError,
   SessionFailedError,
   ValidationError,
+  DeviceLinkError,
 } from "./errors.js";
 export type {
   CertificateLevel,
