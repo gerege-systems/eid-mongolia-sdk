@@ -19,7 +19,12 @@ import {
   EidClient,
   DEFAULT_BASE_URL,
   resolveBaseUrl,
+  deviceLink,
+  openOrShowQR,
+  isMobileUserAgent,
+  DeviceLinkError,
 } from "../dist/index.js";
+import * as browser from "../dist/browser.js";
 
 // Smart-ID RP-API v3 docs (signature_protocols.html)-ийн албан ёсны вектор — сервер, iOS,
 // Android, TS дөрвүүлээ ЭНЭ digest-ийг гаргах ёстой.
@@ -200,4 +205,79 @@ test("EidClient — rp. хост руу /v3-гүй зам дууддаг", async
   });
   await eid.session.poll("abc", 1000).catch(() => undefined);
   assert.ok(seen.startsWith("https://rp.eidmongolia.mn/session/abc"), seen);
+});
+
+const DL = {
+  sessionId: "3f2b8c1e-9a4d-4e21-b7c3-0d5e6f7a8b9c",
+  vc: "04821",
+  deviceLinkBase: "https://ca.eidmongolia.mn/dl",
+};
+
+test("deviceLink — CA гэрээ: {base}?sessionId=&vc=", () => {
+  assert.equal(deviceLink(DL), `https://ca.eidmongolia.mn/dl?sessionId=${DL.sessionId}&vc=04821`);
+  // суурийн бусад query хадгалагдана, sessionId/vc давхардахгүй
+  assert.equal(
+    deviceLink({ ...DL, deviceLinkBase: "https://x.test/dl?b=1&vc=99999" }),
+    `https://x.test/dl?b=1&vc=04821&sessionId=${DL.sessionId}`,
+  );
+  assert.equal(browser.deviceLink(DL), deviceLink(DL));
+});
+
+test("deviceLink — буруу оролт DeviceLinkError", () => {
+  assert.throws(() => deviceLink({ ...DL, deviceLinkBase: null }), DeviceLinkError);
+  assert.throws(() => deviceLink({ ...DL, deviceLinkBase: "  " }), DeviceLinkError);
+  assert.throws(() => deviceLink({ ...DL, deviceLinkBase: "eidmongolia://approve" }), DeviceLinkError);
+  assert.throws(() => deviceLink({ ...DL, deviceLinkBase: "geregesmartid://x" }), DeviceLinkError);
+  assert.throws(() => deviceLink({ ...DL, deviceLinkBase: "/dl" }), DeviceLinkError);
+  assert.throws(() => deviceLink({ ...DL, sessionId: "abc" }), DeviceLinkError);
+  assert.throws(() => deviceLink({ ...DL, sessionId: DL.sessionId.toUpperCase() }), DeviceLinkError);
+  assert.throws(() => deviceLink({ ...DL, vc: null }), DeviceLinkError);
+  assert.throws(() => deviceLink({ ...DL, vc: "1234" }), DeviceLinkError);
+  assert.throws(() => deviceLink({ ...DL, vc: "12345&x=1" }), DeviceLinkError);
+  assert.ok(new DeviceLinkError("x") instanceof browser.EidError);
+});
+
+test("isMobileUserAgent — Android/iPhone/iPadOS desktop UA/UA-CH", () => {
+  const ipadUA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15";
+  assert.equal(isMobileUserAgent({ userAgent: "Mozilla/5.0 (Linux; Android 14; Pixel 8) Mobile" }), true);
+  assert.equal(isMobileUserAgent({ userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)" }), true);
+  assert.equal(isMobileUserAgent({ userAgent: ipadUA, maxTouchPoints: 5 }), true);
+  assert.equal(isMobileUserAgent({ userAgent: ipadUA, maxTouchPoints: 0 }), false);
+  assert.equal(isMobileUserAgent({ userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64)", userAgentData: { mobile: true } }), true);
+  assert.equal(isMobileUserAgent({ userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" }), false);
+});
+
+test("openOrShowQR — гар утсанд location.assign, desktop-д showQR", () => {
+  const g = globalThis as { location?: unknown };
+  const prev = g.location;
+  const assigned: string[] = [];
+  g.location = { assign: (u: string) => assigned.push(u) };
+  try {
+    const shown: string[] = [];
+    assert.equal(openOrShowQR(DL, { showQR: (l) => shown.push(l), isMobile: true }), "opened");
+    assert.deepEqual(assigned, [deviceLink(DL)]);
+    assert.deepEqual(shown, []);
+    assert.equal(openOrShowQR(DL, { showQR: (l) => shown.push(l), isMobile: () => false }), "qr");
+    assert.deepEqual(shown, [deviceLink(DL)]);
+    assert.equal(assigned.length, 1);
+    assert.throws(() => openOrShowQR({ ...DL, deviceLinkBase: null }, { showQR: () => {}, isMobile: true }), DeviceLinkError);
+    assert.equal(assigned.length, 1);
+  } finally {
+    g.location = prev;
+  }
+});
+
+test("auth.deviceLinkAnonymous — deviceLinkBase ба vc (мөр) задлагдана", async () => {
+  const eid = new EidClient({
+    credentials: { rpUUID: "u", rpName: "n", apiSecret: "rp_sk_x" },
+    fetchImpl: async () =>
+      new Response(
+        JSON.stringify({ sessionID: DL.sessionId, sessionToken: "t", sessionSecret: "s", deviceLinkBase: DL.deviceLinkBase, vc: "04821" }),
+        { status: 200 },
+      ),
+  });
+  const s = await eid.auth.deviceLinkAnonymous([{ type: "displayTextAndPIN", displayText60: "x" }]);
+  assert.equal(s.vc, "04821");
+  assert.equal(s.deviceLinkBase, DL.deviceLinkBase);
+  assert.equal(deviceLink(s), deviceLink(DL));
 });

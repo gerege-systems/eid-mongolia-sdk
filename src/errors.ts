@@ -44,3 +44,9 @@ export class SessionFailedError extends EidError {
  * (хуурамч/proxy хийгдсэн байж болзошгүй).
  */
 export class ValidationError extends EidError {}
+
+/**
+ * Device-link (App2App/Web2App) холбоос угсрах боломжгүй — хариунд `deviceLinkBase` байхгүй,
+ * эсвэл sessionId/vc/суурь URL хэлбэр буруу. Session-ийг дахин эхлүүлнэ; холбоосыг таахгүй.
+ */
+export class DeviceLinkError extends EidError {}

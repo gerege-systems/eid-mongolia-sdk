@@ -101,11 +101,14 @@ export class AuthApi {
 
   private parseDeviceLink(raw: unknown, acsp: AcspContext): DeviceLinkSession {
     const r = rec(raw);
+    // CA device-link хариунд vc нь мөр; notification-ийн хэлбэр ({type,value})-ийг ч хүлээн авна.
+    const vc = typeof r.vc === "object" && r.vc !== null ? rec(r.vc).value : r.vc;
     return {
       sessionId: String(r.sessionID),
       sessionToken: r.sessionToken != null ? String(r.sessionToken) : null,
       sessionSecret: r.sessionSecret != null ? String(r.sessionSecret) : null,
       deviceLinkBase: r.deviceLinkBase != null ? String(r.deviceLinkBase) : null,
+      vc: vc != null ? String(vc) : null,
       rpChallenge: acsp.rpChallenge,
       acsp,
     };

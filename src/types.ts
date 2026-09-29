@@ -103,8 +103,16 @@ export interface DeviceLinkSession {
   sessionId: string;
   sessionToken: string | null;
   sessionSecret: string | null;
-  /** QR/deeplink үүсгэх суурь URL. */
+  /**
+   * QR/App2App/Web2App холбоосын суурь URL (ж: `https://ca.eidmongolia.mn/dl`). Холбоосыг
+   * өөрөө угсрахгүй — {@link deviceLink}-ээр.
+   */
   deviceLinkBase: string | null;
+  /**
+   * Verification Code (5 оронтой) — иргэний утсан дээр харагдах кодтой НҮДЭЭР тулгахад RP UI-д
+   * харуулна. ПИН БИШ. Холбоосын `vc` параметрт мөн орно.
+   */
+  vc: string | null;
   rpChallenge: string;
   acsp?: AcspContext;
 }
