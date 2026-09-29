@@ -2,7 +2,7 @@
 
 **e-ID Mongolia** (Монгол Улсын иргэний цахим үнэмлэх) Relying Party SDK — иргэнээр утсаар нь нэвтрэлт
 (authentication) ба хууль ёсны цахим гарын үсэг (qualified signature) хийлгэх Node.js/TypeScript сан.
-RP-API v3, Smart-ID нийцтэй. Бүрэн баримт: <https://eidmongolia.mn/developers>.
+RP-API v3, Smart-ID нийцтэй. Бүрэн баримт: <https://developer.eidmongolia.mn/>.
 
 > ⚠️ Зөвхөн **backend**-д ажиллана (`@gerege-systems/eid-mongolia-sdk/browser`-ийн device-link туслахаас бусад).
 > API secret (`rp_sk_…`) браузер/гар утсанд хэзээ ч задлахгүй.
@@ -19,7 +19,7 @@ Node.js ≥ 22 (global `fetch`, `node:crypto`).
 
 `POST https://ca.eidmongolia.mn/v3/rp-applications` (эсвэл [developer.eidmongolia.mn](https://developer.eidmongolia.mn)) —
 оператор баталсны дараа **relyingPartyUUID** ба **API secret** (`rp_sk_…`) олгогдоно; secret **зөвхөн нэг удаа**
-харагдана. Дэлгэрэнгүй: <https://eidmongolia.mn/developers#burtgel>.
+харагдана. Дэлгэрэнгүй: <https://developer.eidmongolia.mn/#burtgel>.
 
 ## 2. Нэвтрэлт (push)
 

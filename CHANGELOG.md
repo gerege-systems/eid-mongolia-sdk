@@ -1,4 +1,9 @@
 # Changelog
+## 0.4.1 — 2026-09-29
+
+- Баримтын холбоос: README ба `package.json` `homepage` → `https://developer.eidmongolia.mn/` (`#burtgel` хэвээр).
+  `https://eidmongolia.mn/developers` хаагдана (404 болно). Кодын өөрчлөлтгүй.
+
 ## 0.4.0 — 2026-09-29
 
 - Ижил төхөөрөмж (App2App / Web2App): `deviceLink(session)` → `${deviceLinkBase}?sessionId=<uuid>&vc=<5 орон>`
