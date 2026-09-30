@@ -4,7 +4,7 @@
 (authentication) ба хууль ёсны цахим гарын үсэг (qualified signature) хийлгэх Node.js/TypeScript сан.
 RP-API v3, Smart-ID нийцтэй. Бүрэн баримт: <https://developer.eidmongolia.mn/>.
 
-> ⚠️ Зөвхөн **backend**-д ажиллана (`@gerege-systems/eid-mongolia-sdk/browser`-ийн device-link туслахаас бусад).
+> ⚠️ Зөвхөн **backend**-д ажиллана (`@gerege-systems/eid-mongolia-sdk/browser`-ийн legacy device-link туслахаас бусад).
 > API secret (`rp_sk_…`) браузер/гар утсанд хэзээ ч задлахгүй.
 
 ## Суулгах
@@ -67,60 +67,86 @@ const sig = eid.validator.validateSign(result, digest); // digest-ийн эср�
 console.log(sig.signatureValueB64, sig.subject);
 ```
 
-## 4. Ижил төхөөрөмж (App2App / Web2App)
+## 4. QR ба ижил төхөөрөмж — device link v3
 
-Иргэн RP-ийн сайт/аппыг **eID апптай ижил утсан дээр** нээсэн бол QR уншуулах боломжгүй — device-link
-session эхлүүлээд холбоосоор аппыг шууд нээнэ. Desktop дээр ижил холбоосыг QR болгож харуулна.
+Иргэн өөр төхөөрөмжийн дэлгэц дээрх **QR**-ийг утсаараа уншина, эсвэл RP-ийн сайт/аппыг eID апптай **ижил
+утсан** дээр нээсэн бол товчоор аппыг нээнэ (**Web2App** — утасны браузер, **App2App** — RP-ийн апп). Холбоосыг
+ЗӨВХӨН RP backend `buildDeviceLink`-ээр угсарна (Smart-ID RP-API v3 «dynamic link»):
 
-```ts
-// backend — session эхлүүлээд браузерт ЗӨВХӨН sessionId, vc, deviceLinkBase-ийг өгнө (secret/token биш)
-const s = await eid.auth.deviceLinkAnonymous([{ type: "displayTextAndPIN", displayText60: "Хаан Банк-д нэвтрэх" }]);
-res.json({ sessionId: s.sessionId, vc: s.vc, deviceLinkBase: s.deviceLinkBase }); // s.acsp-ийг серверт хадгал
-
-// холбоос: `${deviceLinkBase}?sessionId=<uuid>&vc=<5 орон>` (ж: https://ca.eidmongolia.mn/dl?...)
-import { deviceLink } from "@gerege-systems/eid-mongolia-sdk";
-const link = deviceLink(s);
+```
+QR:      {deviceLinkBase}?deviceLinkType=QR&elapsedSeconds={E}&sessionToken={T}&sessionType=auth&version=1.0&lang=mon&authCode={A}
+Web2App: {deviceLinkBase}?deviceLinkType=Web2App&sessionToken={T}&sessionType=auth&version=1.0&lang=mon&authCode={A}
 ```
 
-```ts
-// браузер — node:*-гүй тусдаа entry
-import { openOrShowQR } from "@gerege-systems/eid-mongolia-sdk/browser";
+- `authCode = BASE64URL(HMAC-SHA256(sessionSecret, …))` — холбоосын төрөл, session, RP-ийн challenge, callback-ийг
+  хамгаална. Сервер төрлийг session-д бэхэлж, гарын үсгийн `flowType` = тэр төрөл (хуурамчлах боломжгүй).
+- **QR секунд тутам шинэчлэгдэнэ** (`elapsedSeconds = floor(now − receivedAt)`); ~20 секундээс хуучин QR-ийг
+  сервер татгалзана → SMS/мессенжерээр дамжуулсан холбоос ажиллахгүй.
+- `sessionToken`, **`sessionSecret`-ийг зөвхөн backend-д** хадгална — браузер/апп руу ХЭЗЭЭ Ч бүү гарга.
+  Браузер QR-ийн бэлэн холбоосыг backend endpoint-оос секунд тутам авна.
+- QR ба товч хоёуланг нэг хуудсанд харуулах бол НЭГ session (`callbackUrl`-тай) эхлүүлж хоёр холбоос угсарна.
+  Web2App/App2App нь `callbackUrl`-тай session-д л хүчинтэй.
+- Гэрээ: [developer.eidmongolia.mn](https://developer.eidmongolia.mn/) ба ca-eidmongolia-mn `docs/DEVICE_LINK_V3.md`.
 
-button.onclick = () => {
-  // session-ийг урьдчилж авсан байна — энд await хийхгүй
-  const how = openOrShowQR(session, { showQR: (link) => renderQr(link) }); // "opened" | "qr"
-  showVc(session.vc); // иргэний утсан дээрх кодтой тулгуулна (ПИН биш)
-};
-// дараа нь backend: eid.session.waitForResult(sessionId) → eid.validator.validateAuth(result, s.acsp, {...})
+```ts
+import { buildDeviceLink, type DeviceLinkSession } from "@gerege-systems/eid-mongolia-sdk";
+
+// backend — session эхлүүлээд бүх хариуг СЕРВЕРТ хадгална (sessionToken/sessionSecret/receivedAt/acsp)
+const s = await eid.auth.deviceLinkAnonymous(
+  [{ type: "displayTextAndPIN", displayText60: "Хаан Банк-д нэвтрэх" }],
+  { callbackUrl: "https://bank.example.mn/eid/callback?state=…" }, // товч харуулах бол
+);
+store.put(s.sessionId, s);
+res.json({ sessionId: s.sessionId, vc: s.vc }); // браузерт ЗӨВХӨН эдгээр
+
+const link = (s: DeviceLinkSession, type: "QR" | "Web2App" | "App2App") =>
+  buildDeviceLink({
+    deviceLinkBase: s.deviceLinkBase!,
+    deviceLinkType: type,
+    sessionToken: s.sessionToken!,
+    sessionSecret: s.sessionSecret!,
+    sessionType: "auth",
+    lang: "mon",
+    receivedAt: s.receivedAt, // SDK хариу хүлээн авсан мөчийг тэмдэглэнэ
+    rpChallenge: s.acsp!.rpChallenge,
+    relyingPartyName: s.acsp!.relyingPartyName,
+    interactions: s.acsp!.interactions,
+    initialCallbackUrl: s.acsp!.initialCallbackUrl, // QR-д authCode-д орохгүй
+  });
+
+// GET /eid/qr?sessionId=…  → браузер 1 секунд тутам дуудаж QR-ийг дахин зурна (Cache-Control: no-store)
+app.get("/eid/qr", (req, res) => {
+  const s = store.get(String(req.query.sessionId)); // өөрийн browser session-д хамаарахыг шалга
+  if (!s) return res.sendStatus(404);
+  res.set("Cache-Control", "no-store").json({ link: link(s, "QR") });
+});
+// гар утсанд: товчны href = link(s, "Web2App") (нэг удаа, шинэчлэхгүй)
 ```
 
-**Эхлүүлсэн урсгалаа заавал тулга (relay хаалт).** RP аль урсгалыг эхлүүлснээ мэддэг — гарын үсэг зурагдсан
-`flowType` түүнтэй таарах ёстой, same-device үед callback-ийн `userChallengeVerifier` заавал:
+SSE/WebSocket-оор түлхэх бол `qrDeviceLinkTicker(input, (link) => send(link))` — шууд нэг, дараа нь секунд тутам
+холбоос гаргаж, буцаасан функцээр зогсооно (session дуусах/клиент салахад заавал).
+
+**Харуулсан төрлөө заавал тулга (relay хаалт).** `expectedFlowType` = RP-ийн харуулсан холбоосын төрөл:
 
 ```ts
-// desktop дээр QR харуулсан
+// QR хуудас → poll-оор дууссан үр дүн
 eid.validator.validateAuth(result, s.acsp, { expectedFlowType: "QR" });
 
-// гар утасны браузераас апп нээсэн (callbackUrl-тай session) — апп буцахдаа
-// `?userChallengeVerifier=...`-ийг callback URL-д нэмдэг
+// Web2App/App2App товч → апп callback URL-д `userChallengeVerifier` нэмж буцна
 eid.validator.validateAuth(result, s.acsp, {
-  expectedFlowType: "Web2App", // өөр аппаас бол "App2App"
+  expectedFlowType: "Web2App", // RP-ийн апп дахь товч бол "App2App"
   userChallengeVerifier: callbackQuery.get("userChallengeVerifier") ?? undefined,
 });
+// push (notificationBy*) → "Notification"
 ```
 
-> eID Mongolia апп бодит сувгийг 2.2.3 (build 58)-аас мэдээлнэ. Өмнөх build-ууд серверийн хүлээлтийг хуулдаг
-> (callback-тай session → `App2App`, үгүй → `QR`) тул серверт min_version тавигдтал энэ шалгалт relay-ээс бүрэн
-> хамгаалахгүй — гэхдээ QR урсгалд хуучин апптай ч эвдрэхгүй.
+QR ба товч хоёуланг харуулсан хуудсанд: callback-аар ирсэн үр дүнг `Web2App`/`App2App`-аар, poll-оор ирснийг
+`QR`-аар шалга (товчоор нээгдсэн session зөвхөн callback-аар дуусна).
 
-- Гар утас (iOS/Android, desktop UA илгээдэг iPadOS ч) бол `location.assign(link)` — Universal Link / App Link
-  аппыг нээнэ; бусад үед `showQR(link)`. Илрүүлэгчийг `isMobile: boolean | () => boolean`-оор солино
-  (анхдагч `isMobileUserAgent()`).
-- **Click handler дотроос шууд дууд.** iOS урт async гинжийн (fetch → await → …) дараах навигацийг
-  хэрэглэгчийн үйлдэл гэж үзэхгүй, Universal Link-ийг алгасаж `/dl` хуудсыг нээдэг — тэр хуудас
-  «Аппаар нээх» товч ба App Store / Play холбоосыг санал болгоно (апп суугаагүй үед ч мөн).
-- `deviceLinkBase` хариунд байхгүй, `sessionId` UUID биш, `vc` 5 орон биш бол `DeviceLinkError` — холбоосыг
-  таахгүй. Апп руу custom scheme-ээр шууд бүү холбо — зөвхөн `deviceLink()`-ийн https холбоос.
+> ⚠️ **Шилжилт.** eID Mongolia 2.2.3 (build 59)-өөс өмнөх апп v3 холбоосыг танихгүй. RP-ийн v3 рүү шилжилтийг
+> тохиргооны унтраалгаар (анхдагч legacy) хийж, build 59 store-д гарч `min_version=59` тавигдах мөчид асаана.
+> Legacy `deviceLink(session)` (`{deviceLinkBase}?sessionId=…&vc=…`) болон `/browser` entry-ийн
+> `openOrShowQR` **deprecated** — тэр мөчөөс сервер статик холбоосыг хүлээн авахгүй.
 
 ## Аюулгүй байдал — яагаад `validator` заавал
 
@@ -148,7 +174,7 @@ OK ирж болзошгүй. Иймд `ResponseValidator`:
 | `ValidationError` | cert chain/signature/level шалгалт бүтэлгүйтсэн |
 | `ApiError` | бусад HTTP алдаа (`.status`, `.body`) |
 | `NetworkError` | timeout/сүлжээ |
-| `DeviceLinkError` | device-link холбоос угсрах боломжгүй (`deviceLinkBase` байхгүй, sessionId/vc буруу) |
+| `DeviceLinkError` | device-link холбоос угсрах боломжгүй (`deviceLinkBase` https биш, token/secret/lang хэлбэр, төрөлд хэрэгтэй талбар дутуу) |
 
 ## mTLS (eIDAS qualified орчин)
 

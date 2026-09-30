@@ -111,6 +111,7 @@ export class AuthApi {
       vc: vc != null ? String(vc) : null,
       rpChallenge: acsp.rpChallenge,
       acsp,
+      receivedAt: Date.now(),
     };
   }
 

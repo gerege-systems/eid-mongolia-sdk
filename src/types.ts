@@ -98,14 +98,17 @@ export interface NotificationSession {
   acsp?: AcspContext;
 }
 
-/** Device-link (QR/App2App) session. Иргэн QR уншиж эсвэл deeplink дарж нэгдэнэ. */
+/**
+ * Device-link (QR/Web2App/App2App) session. Иргэн QR уншиж эсвэл товч дарж нэгдэнэ.
+ * `sessionToken`, `sessionSecret`-ийг ЗӨВХӨН backend-д хадгална — браузер руу бүү гарга.
+ */
 export interface DeviceLinkSession {
   sessionId: string;
   sessionToken: string | null;
   sessionSecret: string | null;
   /**
    * QR/App2App/Web2App холбоосын суурь URL (ж: `https://ca.eidmongolia.mn/dl`). Холбоосыг
-   * өөрөө угсрахгүй — {@link deviceLink}-ээр.
+   * өөрөө угсрахгүй — backend-д {@link buildDeviceLink}-ээр (v3).
    */
   deviceLinkBase: string | null;
   /**
@@ -115,6 +118,12 @@ export interface DeviceLinkSession {
   vc: string | null;
   rpChallenge: string;
   acsp?: AcspContext;
+  /**
+   * RP backend энэ хариуг хүлээн авсан мөч (ms epoch, SDK `Date.now()`-оор тэмдэглэнэ) — v3 QR-ийн
+   * `elapsedSeconds`-ийн эх ({@link buildDeviceLink} `receivedAt`). sessionToken/sessionSecret-тэй хамт
+   * ЗӨВХӨН backend-д хадгална.
+   */
+  receivedAt: number;
 }
 
 /** Session poll-ийн нэгтгэсэн үр дүн (validator-т орох түүхий материал). */

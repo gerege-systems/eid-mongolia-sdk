@@ -30,6 +30,8 @@ import {
   ResponseValidator,
   ValidationError,
   userChallengeOf,
+  buildDeviceLink,
+  qrDeviceLinkTicker,
 } from "../dist/index.js";
 import * as browser from "../dist/browser.js";
 
@@ -287,6 +289,118 @@ test("auth.deviceLinkAnonymous — deviceLinkBase ба vc (мөр) задлаг�
   assert.equal(s.vc, "04821");
   assert.equal(s.deviceLinkBase, DL.deviceLinkBase);
   assert.equal(deviceLink(s), deviceLink(DL));
+  assert.ok(Math.abs(s.receivedAt - Date.now()) < 5_000, "receivedAt = хариу хүлээн авсан мөч");
+});
+
+// ── Device link v3 (buildDeviceLink) ──
+// test/fixtures/devicelink_golden.json — ca-eidmongolia-mn `server/internal/crypto/testdata/devicelink_golden.json`
+// (commit 88834efa)-ийн ЗАСВАРГҮЙ хуулбар. Сервер, iOS, Android, TS дөрвүүлээ байт-ижил гаргах ёстой.
+// Шинэчлэх: эх файлыг дахин хуулна (векторыг энд засахгүй).
+const GOLDEN = JSON.parse(readFileSync(new URL("./fixtures/devicelink_golden.json", import.meta.url), "utf8"));
+const RECEIVED_AT = 1_790_000_000_123;
+
+function goldenInput(v: { input: Record<string, any> }, extraMs = 0) {
+  const i = v.input;
+  return {
+    deviceLinkBase: i.deviceLinkBase,
+    deviceLinkType: i.deviceLinkType,
+    sessionToken: i.sessionToken,
+    sessionSecret: i.sessionSecret,
+    sessionType: i.sessionType,
+    lang: i.lang,
+    receivedAt: RECEIVED_AT,
+    // floor шалгах: E секунд + 999 мс → E
+    now: RECEIVED_AT + (i.elapsedSeconds ?? 0) * 1000 + extraMs,
+    rpChallenge: i.sessionType === "auth" ? i.rpChallengeOrDigest : undefined,
+    digest: i.sessionType === "sign" ? i.rpChallengeOrDigest : undefined,
+    relyingPartyName: i.relyingPartyName,
+    interactions: i.interactions,
+    initialCallbackUrl: i.initialCallbackUrl,
+    schemeName: i.schemeName,
+    brokeredRpName: i.brokeredRpName,
+  };
+}
+
+test("buildDeviceLink — golden векторууд (SK баримт 9 + eID 6) байт-ижил", () => {
+  assert.equal(GOLDEN.vectors.length, 15);
+  for (const v of GOLDEN.vectors) {
+    assert.equal(buildDeviceLink(goldenInput(v)), v.deviceLink, v.name);
+    assert.equal(buildDeviceLink(goldenInput(v, 999)), v.deviceLink, `${v.name} (floor)`);
+    assert.ok(v.deviceLink.endsWith(`&authCode=${v.authCode}`), v.name);
+  }
+});
+
+test("buildDeviceLink — golden invalid холбоосуудын аль нь ч гарахгүй", () => {
+  const produced = new Set(GOLDEN.vectors.map((v: any) => buildDeviceLink(goldenInput(v))));
+  for (const bad of GOLDEN.invalid) assert.ok(!produced.has(bad.link), bad.name);
+});
+
+test("buildDeviceLink — QR-д callback authCode-д орохгүй; Web2App-д орно", () => {
+  const qr = GOLDEN.vectors.find((v: any) => v.name === "eid-qr-auth-e0");
+  const same = buildDeviceLink({ ...goldenInput(qr), initialCallbackUrl: undefined });
+  assert.equal(same, qr.deviceLink);
+  const w = GOLDEN.vectors.find((v: any) => v.name === "eid-web2app-auth");
+  assert.notEqual(buildDeviceLink({ ...goldenInput(w), initialCallbackUrl: "https://rp.example.mn/other" }), w.deviceLink);
+});
+
+test("buildDeviceLink — elapsedSeconds: floor, сөрөг → 0, Date хүлээн авна", () => {
+  const qr = GOLDEN.vectors.find((v: any) => v.name === "eid-qr-auth-e7");
+  const e = (link: string) => new URLSearchParams(link.split("?")[1]).get("elapsedSeconds");
+  assert.equal(e(buildDeviceLink({ ...goldenInput(qr), now: RECEIVED_AT + 7_999 })), "7");
+  assert.equal(e(buildDeviceLink({ ...goldenInput(qr), now: RECEIVED_AT - 3_000 })), "0");
+  assert.equal(
+    buildDeviceLink({ ...goldenInput(qr), receivedAt: new Date(RECEIVED_AT), now: new Date(RECEIVED_AT + 7_000) }),
+    qr.deviceLink,
+  );
+});
+
+test("buildDeviceLink — буруу оролт DeviceLinkError", () => {
+  const qr = goldenInput(GOLDEN.vectors.find((v: any) => v.name === "eid-qr-auth-e0"));
+  const w = goldenInput(GOLDEN.vectors.find((v: any) => v.name === "eid-web2app-auth"));
+  const bad: Array<[string, Record<string, unknown>]> = [
+    ["http base", { ...qr, deviceLinkBase: "http://ca.eidmongolia.mn/dl" }],
+    ["scheme base", { ...qr, deviceLinkBase: "eidmongolia://approve" }],
+    ["base query", { ...qr, deviceLinkBase: "https://ca.eidmongolia.mn/dl?x=1" }],
+    ["base empty", { ...qr, deviceLinkBase: "" }],
+    ["type", { ...qr, deviceLinkType: "Notification" }],
+    ["sessionType", { ...qr, sessionType: "login" }],
+    ["token &", { ...qr, sessionToken: "abc&vc=1" }],
+    ["token empty", { ...qr, sessionToken: "" }],
+    ["lang 2", { ...qr, lang: "mn" }],
+    ["lang upper", { ...qr, lang: "MON" }],
+    ["secret url", { ...qr, sessionSecret: "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8" }],
+    ["secret empty", { ...qr, sessionSecret: "" }],
+    ["auth no challenge", { ...qr, rpChallenge: undefined }],
+    ["sign no digest", { ...qr, sessionType: "sign", rpChallenge: undefined }],
+    ["cert challenge", { ...qr, sessionType: "cert" }],
+    ["QR no receivedAt", { ...qr, receivedAt: undefined }],
+    ["Web2App no callback", { ...w, initialCallbackUrl: "" }],
+    ["App2App no callback", { ...w, deviceLinkType: "App2App", initialCallbackUrl: undefined }],
+  ];
+  for (const [name, input] of bad) assert.throws(() => buildDeviceLink(input as any), DeviceLinkError, name);
+});
+
+test("qrDeviceLinkTicker — шууд нэг, дараа нь interval бүрд шинэ elapsedSeconds; stop зогсооно", async () => {
+  const qr = goldenInput(GOLDEN.vectors.find((v: any) => v.name === "eid-qr-auth-e0"));
+  const { now: _now, deviceLinkType: _t, ...input } = qr;
+  let clock = RECEIVED_AT;
+  const links: string[] = [];
+  const stop = qrDeviceLinkTicker(input, (l) => links.push(l), { intervalMs: 5, clock: () => (clock += 1000) - 1000 });
+  assert.equal(links.length, 1);
+  assert.ok(links[0]!.includes("elapsedSeconds=0&"));
+  await new Promise((r) => setTimeout(r, 30));
+  stop();
+  const n = links.length;
+  assert.ok(n >= 3, `ticks ${n}`);
+  links.forEach((l, i) => assert.ok(l.includes(`elapsedSeconds=${i}&`), l));
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(links.length, n, "stop-ийн дараа гарахгүй");
+  assert.throws(() => qrDeviceLinkTicker({ ...input, sessionSecret: "" }, () => {}), DeviceLinkError);
+});
+
+test("browser entry — sessionSecret шаарддаг buildDeviceLink ОРОХГҮЙ", () => {
+  assert.equal((browser as Record<string, unknown>).buildDeviceLink, undefined);
+  assert.equal((browser as Record<string, unknown>).qrDeviceLinkTicker, undefined);
 });
 
 // ── ResponseValidator.validateAuth — flowType/verifier (device-link relay хаалт) ──

@@ -34,6 +34,14 @@ export {
   type OpenOrShowQROptions,
 } from "./devicelink.js";
 export {
+  buildDeviceLink,
+  qrDeviceLinkTicker,
+  type BuildDeviceLinkInput,
+  type DeviceLinkType,
+  type DeviceLinkSessionType,
+  type QrDeviceLinkTickerOptions,
+} from "./devicelinkv3.js";
+export {
   EidError,
   AuthenticationError,
   ForbiddenError,
