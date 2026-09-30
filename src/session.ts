@@ -36,6 +36,9 @@ export function parseSessionResult(raw: unknown): SessionResult {
     serverRandom: str(sig.serverRandom),
     userChallenge: str(sig.userChallenge),
     flowType: str(sig.flowType),
+    // CA-ийн eID нэмэлт (f59d14ee-оос): гарын үсэг зурагдсан ACSP_V2 initialCallbackUrl. "" нь утга —
+    // null/undefined-аас ялгана (талбар алга = хуучин CA).
+    initialCallbackUrl: typeof sig.initialCallbackUrl === "string" ? sig.initialCallbackUrl : null,
     signatureAlgorithmParameters: parseSigParams(sig.signatureAlgorithmParameters),
     interactionTypeUsed: str(r.interactionTypeUsed),
     onBehalfOf: parseOrg(r.onBehalfOf),

@@ -155,7 +155,7 @@ export class ResponseValidator {
       brokeredRpName: acsp.brokeredRpName,
       interactions: acsp.interactions,
       interactionTypeUsed,
-      initialCallbackUrl: acsp.initialCallbackUrl,
+      initialCallbackUrl: signedCallbackUrl(result.initialCallbackUrl, acsp.initialCallbackUrl, flowType),
       flowType,
     });
     if (!verifyPayloadSignature(payload, result.signatureValueB64!, leaf.publicKey, alg, hash)) {
@@ -307,6 +307,25 @@ export class ResponseValidator {
     }
   }
 
+}
+
+/**
+ * ACSP_V2 payload-ийн `initialCallbackUrl` — CA урсгалаар шийднэ (Smart-ID: QR/Notification → `""`,
+ * Web2App/App2App → RP-ийн callback; шилжилтийн үед legacy `/dl?sessionId` ба push-д RP-ийн callback).
+ * Хариуны утгыг (`signature.initialCallbackUrl`) ашиглана, ГЭХДЭЭ зөвхөн `""` эсвэл RP-ийн session start-д
+ * илгээсэн callback-тай байт-ижил бол — дурын утгад итгэхгүй. Web2App/App2App-д заавал RP-ийн callback.
+ * Талбар алга (хуучин CA) → RP-ийн callback (өмнөх зан).
+ */
+export function signedCallbackUrl(fromResponse: string | null | undefined, rpCallback: string | undefined, flowType: string): string {
+  const rp = rpCallback ?? "";
+  if (fromResponse == null) return rp;
+  if (fromResponse !== "" && fromResponse !== rp) {
+    throw new ValidationError("signature.initialCallbackUrl нь хоосон ч биш, илгээсэн callback ч биш (хуурамч хариу байж болзошгүй)");
+  }
+  if ((flowType === "Web2App" || flowType === "App2App") && fromResponse !== rp) {
+    throw new ValidationError(`${flowType} урсгалд signature.initialCallbackUrl нь илгээсэн callback байх ёстой`);
+  }
+  return fromResponse;
 }
 
 /** Payload (auth) дээрх гарын үсэг — алгоритмаар салаалж node:crypto verify. */
