@@ -13,7 +13,30 @@
 import { X509Certificate, constants, createHash, publicDecrypt, verify, type KeyObject } from "node:crypto";
 import { buildAcspV2Payload, hashLen, nodeHash } from "./crypto.js";
 import { SessionFailedError, ValidationError } from "./errors.js";
-import type { AcspContext, CertificateLevel, SessionResult } from "./types.js";
+import type { AcspContext, CertificateLevel, FlowType, SessionResult } from "./types.js";
+
+/**
+ * validateAuth-ийн нэмэлт шалгалт — RP ЯМАР урсгал эхлүүлснээ мэддэг тул түүнийг тулгана
+ * (device-link relay хаалт).
+ */
+export interface ValidateAuthOptions {
+  /**
+   * RP-ийн эхлүүлсэн урсгал. Өгвөл гарын үсэг зурагдсан ACSP_V2 `flowType` ЯГ ИЖИЛ байх ёстой:
+   * desktop QR → "QR"; браузераас холбоосоор апп нээсэн → "Web2App"; өөр аппаас → "App2App";
+   * push → "Notification". "Web2App"/"App2App" үед `userChallengeVerifier` ЗААВАЛ.
+   *
+   * ⚠️ Апп нь бодит сувгийг eID Mongolia 2.2.3 (build 58)-аас мэдээлнэ. Түүнээс өмнөх build-ууд
+   * серверийн хүлээлтийг хуулдаг тул серверт min_version тавигдтал энэ шалгалт relay-ээс
+   * бүрэн хамгаалахгүй (гэхдээ хуучин апптай ч эвдрэхгүй — QR урсгалд "QR" ирнэ).
+   */
+  expectedFlowType?: FlowType;
+  /**
+   * Callback URL-ийн `userChallengeVerifier` параметр (same-device урсгалд апп RP руу буцаахдаа
+   * нэмдэг). Өгвөл `BASE64URL(SHA-256(UTF-8(verifier)))` нь гарын үсэг зурагдсан `userChallenge`-тэй
+   * таарах ёстой.
+   */
+  userChallengeVerifier?: string;
+}
 
 /**
  * RevocationChecker — иргэний cert revoke хийгдсэн эсэхийг шалгах hook (OCSP/CRL).
@@ -100,13 +123,23 @@ export class ResponseValidator {
    * Auth session-ийн хариуг бүрэн шалгаж, баталгаажсан иргэнийг буцаана.
    * @param acsp — session эхлүүлэхэд SDK-ийн буцаасан `acsp` контекст (RP хадгалсан).
    */
-  validateAuth(result: SessionResult, acsp: AcspContext): VerifiedIdentity {
+  validateAuth(result: SessionResult, acsp: AcspContext, opts: ValidateAuthOptions = {}): VerifiedIdentity {
     const leaf = this.precheck(result, "ACSP_V2");
     const { serverRandom, userChallenge, flowType, interactionTypeUsed } = result;
     if (!serverRandom || Buffer.from(serverRandom, "base64").length < 18) throw new ValidationError("serverRandom алга/богино");
     if (!userChallenge || !/^[A-Za-z0-9_-]{43}$/.test(userChallenge)) throw new ValidationError("userChallenge буруу хэлбэртэй");
     if (!flowType || !acsp.flowTypes.includes(flowType as AcspContext["flowTypes"][number])) {
       throw new ValidationError(`flowType ${flowType} нь санал болгосон урсгалд байхгүй`);
+    }
+    if (opts.expectedFlowType && flowType !== opts.expectedFlowType) {
+      throw new ValidationError(`flowType ${flowType} ≠ эхлүүлсэн урсгал ${opts.expectedFlowType} (relay байж болзошгүй)`);
+    }
+    const sameDevice = opts.expectedFlowType === "Web2App" || opts.expectedFlowType === "App2App";
+    if (sameDevice && !opts.userChallengeVerifier) {
+      throw new ValidationError(`${opts.expectedFlowType} урсгалд callback-ийн userChallengeVerifier заавал`);
+    }
+    if (opts.userChallengeVerifier !== undefined && userChallengeOf(opts.userChallengeVerifier) !== userChallenge) {
+      throw new ValidationError("userChallengeVerifier нь гарын үсэг зурагдсан userChallenge-тэй таарсангүй");
     }
     if (!interactionTypeUsed) throw new ValidationError("interactionTypeUsed алга");
     const { alg, hash } = this.algorithmOf(result, acsp.signatureAlgorithm, acsp.hashAlgorithm);
@@ -273,6 +306,11 @@ export class ResponseValidator {
 }
 
 /** Payload (auth) дээрх гарын үсэг — алгоритмаар салаалж node:crypto verify. */
+/** Smart-ID: userChallenge = BASE64URL(SHA-256(UTF-8(userChallengeVerifier))), padding-гүй. */
+export function userChallengeOf(verifier: string): string {
+  return createHash("sha256").update(verifier, "utf8").digest("base64url");
+}
+
 export function verifyPayloadSignature(payload: Buffer, sigB64: string, key: KeyObject, alg: string, hash: string): boolean {
   const sig = Buffer.from(sigB64, "base64");
   const h = nodeHash(hash);

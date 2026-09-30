@@ -1,7 +1,11 @@
 // SDK цөмийн тест. node --test (TS strip). Крипто round-trip, payload байт, mapping, error.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { constants, createHash, generateKeyPairSync, sign as cryptoSign, verify as cryptoVerify } from "node:crypto";
+import { constants, createHash, generateKeyPairSync, sign as cryptoSign, verify as cryptoVerify, X509Certificate } from "node:crypto";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 // Build хийсэн бодит артефактыг тестэлнэ (production truth). `npm test` нь эхлээд build хийнэ.
 import {
@@ -23,6 +27,9 @@ import {
   openOrShowQR,
   isMobileUserAgent,
   DeviceLinkError,
+  ResponseValidator,
+  ValidationError,
+  userChallengeOf,
 } from "../dist/index.js";
 import * as browser from "../dist/browser.js";
 
@@ -280,4 +287,115 @@ test("auth.deviceLinkAnonymous — deviceLinkBase ба vc (мөр) задлаг�
   assert.equal(s.vc, "04821");
   assert.equal(s.deviceLinkBase, DL.deviceLinkBase);
   assert.equal(deviceLink(s), deviceLink(DL));
+});
+
+// ── ResponseValidator.validateAuth — flowType/verifier (device-link relay хаалт) ──
+// Тестийн түр self-signed cert-ийг openssl-ээр үүсгэнэ (репод түлхүүр хадгалахгүй).
+const FIX = (() => {
+  const dir = mkdtempSync(join(tmpdir(), "eid-sdk-"));
+  try {
+    execFileSync("openssl", [
+      "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "2",
+      "-keyout", join(dir, "k.pem"), "-out", join(dir, "c.pem"), "-subj", "/C=MN/CN=TEST",
+    ], { stdio: "ignore" });
+    return { key: readFileSync(join(dir, "k.pem"), "utf8"), cert: new X509Certificate(readFileSync(join(dir, "c.pem"))) };
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+})();
+
+const VERIFIER = "dGVzdC12ZXJpZmllci0zMi1ieXRlcy14eHh4eHh4eHg";
+
+/** Бодит ACSP_V2 гарын үсэгтэй COMPLETE/OK хариу + RP-ийн acsp контекст. */
+function signedAuth(flowType: string, callback = "https://rp.test/cb") {
+  const acsp = {
+    rpChallenge: randomChallenge(),
+    relyingPartyName: "DEMO",
+    brokeredRpName: "",
+    interactions: SMART_ID_VECTOR.interactions,
+    initialCallbackUrl: callback,
+    flowTypes: callback ? ["QR", "App2App", "Web2App"] : ["QR"],
+    signatureAlgorithm: "rsassa-pss",
+    hashAlgorithm: "SHA-256",
+  } as const;
+  const userChallenge = userChallengeOf(VERIFIER);
+  const serverRandom = SMART_ID_VECTOR.serverRandom;
+  const payload = buildAcspV2Payload({
+    serverRandom, rpChallenge: acsp.rpChallenge, userChallenge, relyingPartyName: acsp.relyingPartyName,
+    brokeredRpName: "", interactions: acsp.interactions, interactionTypeUsed: "displayTextAndPIN",
+    initialCallbackUrl: callback, flowType,
+  });
+  const sig = cryptoSign("sha256", payload, { key: FIX.key, padding: constants.RSA_PKCS1_PSS_PADDING, saltLength: 32 });
+  const result = parseSessionResult({
+    state: "COMPLETE",
+    result: { endResult: "OK", documentNumber: "PNOMN-TEST" },
+    signatureProtocol: "ACSP_V2",
+    interactionTypeUsed: "displayTextAndPIN",
+    signature: {
+      value: sig.toString("base64"), serverRandom, userChallenge, flowType,
+      signatureAlgorithm: "rsassa-pss", signatureAlgorithmParameters: { hashAlgorithm: "SHA-256" },
+    },
+    cert: { value: FIX.cert.raw.toString("base64"), certificateLevel: "QUALIFIED" },
+  });
+  return { result, acsp: acsp as unknown as Parameters<ResponseValidator["validateAuth"]>[1] };
+}
+
+const V = new ResponseValidator({ allowUntrusted: true });
+
+test("userChallengeOf — BASE64URL(SHA-256(verifier)), 43 тэмдэгт", () => {
+  const uc = userChallengeOf(VERIFIER);
+  assert.match(uc, /^[A-Za-z0-9_-]{43}$/);
+  assert.equal(uc, createHash("sha256").update(VERIFIER).digest("base64url"));
+});
+
+test("validateAuth — хүчинтэй хариу (expectedFlowType-гүй — хуучин зан хэвээр)", () => {
+  const { result, acsp } = signedAuth("QR");
+  assert.equal(V.validateAuth(result, acsp).documentNumber, "PNOMN-TEST");
+});
+
+test("validateAuth — OK боловч гарын үсэггүй → татгалзана", () => {
+  const { result, acsp } = signedAuth("QR");
+  assert.throws(() => V.validateAuth({ ...result, signatureValueB64: null }, acsp), /гарын үсэг алга/);
+  assert.throws(() => V.validateAuth({ ...result, signatureValueB64: null }, acsp, { expectedFlowType: "QR" }), /гарын үсэг алга/);
+  assert.throws(() => V.validateAuth({ ...result, signatureValueB64: "" }, acsp), ValidationError);
+});
+
+test("validateAuth — expectedFlowType QR: QR зөвшөөрнө, Web2App (relay) татгалзана", () => {
+  const ok = signedAuth("QR");
+  assert.equal(V.validateAuth(ok.result, ok.acsp, { expectedFlowType: "QR" }).documentNumber, "PNOMN-TEST");
+  const relay = signedAuth("Web2App");
+  assert.throws(() => V.validateAuth(relay.result, relay.acsp, { expectedFlowType: "QR" }), /эхлүүлсэн урсгал QR/);
+});
+
+test("validateAuth — expectedFlowType Web2App: зөв verifier-тэй зөвшөөрнө", () => {
+  const { result, acsp } = signedAuth("Web2App");
+  const who = V.validateAuth(result, acsp, { expectedFlowType: "Web2App", userChallengeVerifier: VERIFIER });
+  assert.equal(who.documentNumber, "PNOMN-TEST");
+});
+
+test("validateAuth — Web2App/App2App: verifier алга эсвэл буруу бол татгалзана", () => {
+  for (const flow of ["Web2App", "App2App"] as const) {
+    const { result, acsp } = signedAuth(flow);
+    assert.throws(() => V.validateAuth(result, acsp, { expectedFlowType: flow }), /userChallengeVerifier заавал/);
+    assert.throws(() => V.validateAuth(result, acsp, { expectedFlowType: flow, userChallengeVerifier: "" }), /заавал/);
+    assert.throws(
+      () => V.validateAuth(result, acsp, { expectedFlowType: flow, userChallengeVerifier: VERIFIER + "x" }),
+      /userChallengeVerifier нь/,
+    );
+  }
+});
+
+test("validateAuth — expectedFlowType Web2App боловч гарын үсэгт QR/App2App → татгалзана", () => {
+  for (const flow of ["QR", "App2App"]) {
+    const { result, acsp } = signedAuth(flow);
+    assert.throws(
+      () => V.validateAuth(result, acsp, { expectedFlowType: "Web2App", userChallengeVerifier: VERIFIER }),
+      /эхлүүлсэн урсгал Web2App/,
+    );
+  }
+});
+
+test("validateAuth — хариуны flowType-ийг солиход гарын үсэг таарахгүй", () => {
+  const { result, acsp } = signedAuth("Web2App");
+  assert.throws(() => V.validateAuth({ ...result, flowType: "QR" }, acsp, { expectedFlowType: "QR" }), /ACSP_V2 payload-той таарсангүй/);
 });

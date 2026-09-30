@@ -10,10 +10,12 @@ export {
   type TrustConfig,
   type VerifiedIdentity,
   type VerifiedSignature,
+  type ValidateAuthOptions,
   type RevocationChecker,
   type RevocationStatus,
   verifyPayloadSignature,
   verifyPrehashedSignature,
+  userChallengeOf,
 } from "./validator.js";
 export {
   sha256Base64,

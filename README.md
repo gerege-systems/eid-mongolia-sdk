@@ -91,8 +91,27 @@ button.onclick = () => {
   const how = openOrShowQR(session, { showQR: (link) => renderQr(link) }); // "opened" | "qr"
   showVc(session.vc); // иргэний утсан дээрх кодтой тулгуулна (ПИН биш)
 };
-// дараа нь backend: eid.session.waitForResult(sessionId) → eid.validator.validateAuth(result, s.acsp)
+// дараа нь backend: eid.session.waitForResult(sessionId) → eid.validator.validateAuth(result, s.acsp, {...})
 ```
+
+**Эхлүүлсэн урсгалаа заавал тулга (relay хаалт).** RP аль урсгалыг эхлүүлснээ мэддэг — гарын үсэг зурагдсан
+`flowType` түүнтэй таарах ёстой, same-device үед callback-ийн `userChallengeVerifier` заавал:
+
+```ts
+// desktop дээр QR харуулсан
+eid.validator.validateAuth(result, s.acsp, { expectedFlowType: "QR" });
+
+// гар утасны браузераас апп нээсэн (callbackUrl-тай session) — апп буцахдаа
+// `?userChallengeVerifier=...`-ийг callback URL-д нэмдэг
+eid.validator.validateAuth(result, s.acsp, {
+  expectedFlowType: "Web2App", // өөр аппаас бол "App2App"
+  userChallengeVerifier: callbackQuery.get("userChallengeVerifier") ?? undefined,
+});
+```
+
+> eID Mongolia апп бодит сувгийг 2.2.3 (build 58)-аас мэдээлнэ. Өмнөх build-ууд серверийн хүлээлтийг хуулдаг
+> (callback-тай session → `App2App`, үгүй → `QR`) тул серверт min_version тавигдтал энэ шалгалт relay-ээс бүрэн
+> хамгаалахгүй — гэхдээ QR урсгалд хуучин апптай ч эвдрэхгүй.
 
 - Гар утас (iOS/Android, desktop UA илгээдэг iPadOS ч) бол `location.assign(link)` — Universal Link / App Link
   аппыг нээнэ; бусад үед `showQR(link)`. Илрүүлэгчийг `isMobile: boolean | () => boolean`-оор солино
@@ -113,7 +132,8 @@ OK ирж болзошгүй. Иймд `ResponseValidator`:
    (Root → National Issuing CA → Gerege Issuing CA → eID Mongolia Issuing CA → иргэн)
 3. Гэрчилгээ хүчинтэй хугацаанд + шаардсан `certificateLevel` (default `QUALIFIED`)
 4. Гарын үсгийг иргэний public key-ээр шалгана:
-   - **auth** → ACSP_V2 payload (`smart-id|ACSP_V2|serverRandom|rpChallenge|userChallenge|B64(rpName)|B64(brokeredRpName)|B64(SHA-256(interactions))|interactionTypeUsed|initialCallbackUrl|flowType`, hash = хүсэлтийн `hashAlgorithm`) дээр — `flowType`, `userChallenge`, `serverRandom` ба алгоритмын downgrade-ийг мөн шалгана
+   - **auth** → ACSP_V2 payload (`smart-id|ACSP_V2|serverRandom|rpChallenge|userChallenge|B64(rpName)|B64(brokeredRpName)|B64(SHA-256(interactions))|interactionTypeUsed|initialCallbackUrl|flowType`, hash = хүсэлтийн `hashAlgorithm`) дээр — `flowType`, `userChallenge`, `serverRandom` ба алгоритмын downgrade-ийг мөн шалгана;
+     `expectedFlowType` өгвөл `flowType` эхлүүлсэн урсгалтай ЯГ таарах, Web2App/App2App-д `userChallengeVerifier` заавал
    - **sign** → RP-ийн өгсөн digest дээр
 
 Аль нэг алхам бүтэлгүйтвэл `ValidationError` шиднэ — хариунд **итгэхгүй**.
