@@ -142,6 +142,12 @@ export interface SessionResult {
   serverRandom: string | null;
   userChallenge: string | null;
   flowType: string | null;
+  /**
+   * ACSP_V2 payload-д гарын үсэг зурагдсан `initialCallbackUrl` (хариуны `signature.initialCallbackUrl`,
+   * eID нэмэлт). Smart-ID: QR/Notification → `""`, Web2App/App2App → RP-ийн илгээсэн URL. null = хариунд
+   * талбар алга (хуучин CA). Validator үүнийг зөвхөн `""` эсвэл RP-ийн өөрийн callback байхад л хүлээн авна.
+   */
+  initialCallbackUrl?: string | null;
   signatureAlgorithmParameters: SignatureAlgorithmParameters | null;
   interactionTypeUsed: string | null;
   /**

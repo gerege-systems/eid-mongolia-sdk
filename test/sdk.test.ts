@@ -421,7 +421,13 @@ const FIX = (() => {
 const VERIFIER = "dGVzdC12ZXJpZmllci0zMi1ieXRlcy14eHh4eHh4eHg";
 
 /** Бодит ACSP_V2 гарын үсэгтэй COMPLETE/OK хариу + RP-ийн acsp контекст. */
-function signedAuth(flowType: string, callback = "https://rp.test/cb") {
+function signedAuth(
+  flowType: string,
+  callback = "https://rp.test/cb",
+  // signed — payload-д зурагдсан initialCallbackUrl (CA-ийн шийдсэн); inResponse — хариуны
+  // signature.initialCallbackUrl (undefined = талбар алга, хуучин CA).
+  cb: { signed?: string; inResponse?: string } = {},
+) {
   const acsp = {
     rpChallenge: randomChallenge(),
     relyingPartyName: "DEMO",
@@ -437,7 +443,7 @@ function signedAuth(flowType: string, callback = "https://rp.test/cb") {
   const payload = buildAcspV2Payload({
     serverRandom, rpChallenge: acsp.rpChallenge, userChallenge, relyingPartyName: acsp.relyingPartyName,
     brokeredRpName: "", interactions: acsp.interactions, interactionTypeUsed: "displayTextAndPIN",
-    initialCallbackUrl: callback, flowType,
+    initialCallbackUrl: cb.signed ?? callback, flowType,
   });
   const sig = cryptoSign("sha256", payload, { key: FIX.key, padding: constants.RSA_PKCS1_PSS_PADDING, saltLength: 32 });
   const result = parseSessionResult({
@@ -447,6 +453,7 @@ function signedAuth(flowType: string, callback = "https://rp.test/cb") {
     interactionTypeUsed: "displayTextAndPIN",
     signature: {
       value: sig.toString("base64"), serverRandom, userChallenge, flowType,
+      ...(cb.inResponse !== undefined ? { initialCallbackUrl: cb.inResponse } : {}),
       signatureAlgorithm: "rsassa-pss", signatureAlgorithmParameters: { hashAlgorithm: "SHA-256" },
     },
     cert: { value: FIX.cert.raw.toString("base64"), certificateLevel: "QUALIFIED" },
@@ -512,4 +519,77 @@ test("validateAuth — expectedFlowType Web2App боловч гарын үсэг
 test("validateAuth — хариуны flowType-ийг солиход гарын үсэг таарахгүй", () => {
   const { result, acsp } = signedAuth("Web2App");
   assert.throws(() => V.validateAuth({ ...result, flowType: "QR" }, acsp, { expectedFlowType: "QR" }), /ACSP_V2 payload-той таарсангүй/);
+});
+
+// ── ACSP_V2 initialCallbackUrl — CA урсгалаар шийднэ (ca-eidmongolia-mn f59d14ee), хариунаас сэргээнэ ──
+const CB = "https://rp.test/cb";
+
+test("parseSessionResult — signature.initialCallbackUrl: \"\" хадгалагдана, алга бол null", () => {
+  assert.equal(parseSessionResult({ signature: { initialCallbackUrl: "" } }).initialCallbackUrl, "");
+  assert.equal(parseSessionResult({ signature: { initialCallbackUrl: CB } }).initialCallbackUrl, CB);
+  assert.equal(parseSessionResult({ signature: {} }).initialCallbackUrl, null);
+});
+
+test("validateAuth — v3 QR (callback-тай session): зурагдсан \"\" хариунаас сэргээгдэнэ", () => {
+  const { result, acsp } = signedAuth("QR", CB, { signed: "", inResponse: "" });
+  assert.equal(V.validateAuth(result, acsp, { expectedFlowType: "QR" }).documentNumber, "PNOMN-TEST");
+});
+
+test("validateAuth — Web2App/App2App: зурагдсан утга = RP-ийн callback", () => {
+  for (const flow of ["Web2App", "App2App"] as const) {
+    const { result, acsp } = signedAuth(flow, CB, { signed: CB, inResponse: CB });
+    const who = V.validateAuth(result, acsp, { expectedFlowType: flow, userChallengeVerifier: VERIFIER });
+    assert.equal(who.documentNumber, "PNOMN-TEST");
+  }
+});
+
+test("validateAuth — push legacy (EID_DEVICE_LINK_LEGACY=true): Notification-д RP-ийн callback", () => {
+  const { result, acsp } = signedAuth("Notification", CB, { signed: CB, inResponse: CB });
+  const ctx = { ...acsp, flowTypes: ["Notification", "App2App", "Web2App"] } as typeof acsp;
+  assert.equal(V.validateAuth(result, ctx, { expectedFlowType: "Notification" }).documentNumber, "PNOMN-TEST");
+});
+
+test("validateAuth — push legacy унтарсны дараа: Notification-д \"\"", () => {
+  const { result, acsp } = signedAuth("Notification", CB, { signed: "", inResponse: "" });
+  const ctx = { ...acsp, flowTypes: ["Notification", "App2App", "Web2App"] } as typeof acsp;
+  assert.equal(V.validateAuth(result, ctx, { expectedFlowType: "Notification" }).documentNumber, "PNOMN-TEST");
+});
+
+test("validateAuth — legacy /dl QR: хариунд RP-ийн callback (хуучнаар)", () => {
+  const withField = signedAuth("QR", CB, { signed: CB, inResponse: CB });
+  assert.equal(V.validateAuth(withField.result, withField.acsp, { expectedFlowType: "QR" }).documentNumber, "PNOMN-TEST");
+});
+
+test("validateAuth — хариуны initialCallbackUrl-ийг өөр утгаар солиход татгалзана", () => {
+  const evil = "https://evil.test/cb";
+  // гарын үсэг evil дээр зурагдсан ч RP ийм callback илгээгээгүй → итгэхгүй
+  const a = signedAuth("QR", CB, { signed: evil, inResponse: evil });
+  assert.throws(() => V.validateAuth(a.result, a.acsp), /хоосон ч биш, илгээсэн callback ч биш/);
+  const b = signedAuth("Web2App", CB, { signed: CB, inResponse: CB + "?x=1" });
+  assert.throws(
+    () => V.validateAuth(b.result, b.acsp, { expectedFlowType: "Web2App", userChallengeVerifier: VERIFIER }),
+    /хоосон ч биш, илгээсэн callback ч биш/,
+  );
+  // callback-гүй session-д хариу ямар ч URL гэвэл татгалзана
+  const c = signedAuth("QR", "", { signed: CB, inResponse: CB });
+  assert.throws(() => V.validateAuth(c.result, c.acsp), /хоосон ч биш/);
+});
+
+test("validateAuth — Web2App/App2App-д хариуны \"\" татгалзана (callback заавал)", () => {
+  for (const flow of ["Web2App", "App2App"] as const) {
+    const { result, acsp } = signedAuth(flow, CB, { signed: "", inResponse: "" });
+    assert.throws(
+      () => V.validateAuth(result, acsp, { expectedFlowType: flow, userChallengeVerifier: VERIFIER }),
+      new RegExp(`${flow} урсгалд signature.initialCallbackUrl`),
+    );
+  }
+});
+
+test("validateAuth — талбар алга (хуучин CA): RP-ийн callback-аар сэргээнэ (өмнөх зан)", () => {
+  const legacy = signedAuth("QR", CB); // payload-д CB, хариунд талбаргүй
+  assert.equal(legacy.result.initialCallbackUrl, null);
+  assert.equal(V.validateAuth(legacy.result, legacy.acsp, { expectedFlowType: "QR" }).documentNumber, "PNOMN-TEST");
+  // хуучин CA + зурагдсан "" (боломжгүй хослол) → RP-ийн callback-аар сэргээж таарахгүй
+  const mismatch = signedAuth("QR", CB, { signed: "" });
+  assert.throws(() => V.validateAuth(mismatch.result, mismatch.acsp), /ACSP_V2 payload-той таарсангүй/);
 });
