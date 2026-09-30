@@ -21,13 +21,17 @@ import type { AcspContext, CertificateLevel, FlowType, SessionResult } from "./t
  */
 export interface ValidateAuthOptions {
   /**
-   * RP-ийн эхлүүлсэн урсгал. Өгвөл гарын үсэг зурагдсан ACSP_V2 `flowType` ЯГ ИЖИЛ байх ёстой:
-   * desktop QR → "QR"; браузераас холбоосоор апп нээсэн → "Web2App"; өөр аппаас → "App2App";
-   * push → "Notification". "Web2App"/"App2App" үед `userChallengeVerifier` ЗААВАЛ.
+   * RP-ийн ХАРУУЛСАН device link-ийн төрөл (эсвэл push). Өгвөл гарын үсэг зурагдсан ACSP_V2 `flowType`
+   * ЯГ ИЖИЛ байх ёстой: QR хуудас → "QR"; гар утасны браузер дахь товч → "Web2App"; RP-ийн апп дахь
+   * товч → "App2App"; push → "Notification". "Web2App"/"App2App" үед `userChallengeVerifier` ЗААВАЛ.
    *
-   * ⚠️ Апп нь бодит сувгийг eID Mongolia 2.2.3 (build 58)-аас мэдээлнэ. Түүнээс өмнөх build-ууд
-   * серверийн хүлээлтийг хуулдаг тул серверт min_version тавигдтал энэ шалгалт relay-ээс
-   * бүрэн хамгаалахгүй (гэхдээ хуучин апптай ч эвдрэхгүй — QR урсгалд "QR" ирнэ).
+   * v3 холбоосонд (`buildDeviceLink`) төрөл нь authCode-оор хамгаалагдсан — сервер түүнийг session-д
+   * бэхэлж, `flowType` = тэр төрөл. Нэг хуудсанд QR ба товч хоёуланг харуулсан бол: callback-аар
+   * (verifier-тэй) ирсэн үр дүнг "Web2App"/"App2App"-аар, poll-оор ирснийг "QR"-аар шалга — товчоор
+   * нээгдсэн session poll замаар OK болохгүй, callback-аар л дуусна.
+   *
+   * ⚠️ Legacy `/dl?sessionId&vc` холбоосонд төрөл хамгаалагдаагүй — build 59 + `min_version=59` хүртэл
+   * энэ шалгалт relay-ээс бүрэн хамгаалахгүй.
    */
   expectedFlowType?: FlowType;
   /**
