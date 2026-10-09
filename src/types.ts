@@ -156,6 +156,62 @@ export interface SessionResult {
    * RP энэ талбарыг л итгэж уншина (клиентийн сонголтод биш). docs/ORG_LOGIN.md.
    */
   onBehalfOf: OrgResult | null;
+  /**
+   * PAdES (`POST /pdf/sign/prepare`) session-ий `pdf` блок — PDF урсгал биш бол null (талбар алга = хуучин SDK-аар
+   * угсарсан объект). {@link PdfSessionBlock}.
+   */
+  pdf?: PdfSessionBlock | null;
+}
+
+/** PDF баримтын төлөв: PENDING → READY (эсвэл FAILED / EXPIRED). */
+export type PdfDocumentStatus = "PENDING" | "READY" | "FAILED" | "EXPIRED";
+
+/** PAdES гаралтын гарын үсэг зурагч. */
+export interface PdfSigner {
+  etsi: string;
+  certSerial: string;
+  /** Байгууллагын нэрийн өмнөөс бол байгууллагын ETSI (`NTRMN-…`) — баримтад бичигдсэн утга. */
+  onBehalfOf?: string;
+  /** CMS signer-attributes-v2-д бичигдсэн мэдүүлсэн үүрэг: «<албан тушаал>, <нэр> (NTRMN-…)». */
+  claimedRole?: string;
+}
+
+/** GET /session/{id}-ийн `pdf` объект (PAdES, CA угсарна). */
+export interface PdfSessionBlock {
+  docID: string;
+  documentStatus: PdfDocumentStatus | string;
+  /** FAILED үед — ж: `REPRESENTATION_REVOKED` (prepare-ээс хойш эрх хасагдсан, баримт үүсээгүй). */
+  errorCode?: string;
+  /** Гарын үсэгтэй PDF-ийн SHA-256 (hex) — татсан файлтай тулгана. */
+  outSha256?: string;
+  size?: number;
+  expiresAt?: string;
+  signatureLevel?: string;
+  signer?: PdfSigner;
+  validation?: { indication: string; ltv: boolean; signatures: number };
+}
+
+/** Иргэний төлөөлж чадах нэг байгууллага (GET /organization/representations/etsi/{personEtsi}). */
+export interface Representation {
+  /** `NTRMN-<бүртгэл>` — `onBehalfOf`-д өгөх утга. */
+  orgEtsi: string;
+  orgRegister: string;
+  orgName: string;
+  orgNameEn?: string;
+  /** Бүртгэлийн албан тушаал (ХУР-аас холбогдсонд `ceo` / `founder`, MANAGER-т ADMIN-ий бичсэн текст). */
+  role?: string;
+  rightType: "ADMIN" | "MANAGER" | string;
+  source: "REGISTRY" | "MANUAL" | string;
+  /** ISO 8601. */
+  validFrom: string;
+  /** ISO 8601; байхгүй = хугацаагүй. */
+  validTo?: string;
+}
+
+/** GET /organization/representations/etsi/{personEtsi} хариу. */
+export interface RepresentationsResponse {
+  personEtsi: string;
+  representations: Representation[];
 }
 
 /** Session-ий байгууллагын блок — байгууллага + тухайн иргэний эрх (бүртгэлээс real-time). */
