@@ -1,6 +1,8 @@
 // EidClient — SDK-ийн гол үүд. Бүх flow-г нэг газар цуглуулна:
 //   client.auth      — нэвтрэлт эхлүүлэх (push/QR)
 //   client.sign      — гарын үсэг эхлүүлэх (digest)
+//   client.pdf       — PDF гарын үсэг (PAdES, CA угсарна; onBehalfOf)
+//   client.organization — иргэний төлөөлөх байгууллагууд
 //   client.session   — үр дүн poll хийх (long-poll)
 //   client.validator — хариуг крипто-баталгаажуулах (cert chain + signature)
 //
@@ -19,6 +21,8 @@ import { Http } from "./http.js";
 import { AuthApi } from "./auth.js";
 import { SignApi } from "./sign.js";
 import { SessionApi } from "./session.js";
+import { PdfApi } from "./pdf.js";
+import { OrganizationApi } from "./organization.js";
 import { ResponseValidator, type TrustConfig } from "./validator.js";
 import type { CertificateLevel, RpCredentials } from "./types.js";
 
@@ -69,6 +73,8 @@ export function resolveBaseUrl(baseUrl: string | undefined): string {
 export class EidClient {
   readonly auth: AuthApi;
   readonly sign: SignApi;
+  readonly pdf: PdfApi;
+  readonly organization: OrganizationApi;
   readonly session: SessionApi;
   readonly validator: ResponseValidator;
 
@@ -87,6 +93,8 @@ export class EidClient {
 
     this.auth = new AuthApi(http, cfg.credentials, { certificateLevel: level });
     this.sign = new SignApi(http, cfg.credentials, { certificateLevel: level });
+    this.pdf = new PdfApi(http, cfg.credentials, { certificateLevel: level });
+    this.organization = new OrganizationApi(http);
     this.session = new SessionApi(http);
     this.validator = new ResponseValidator(cfg.trust ?? {});
   }

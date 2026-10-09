@@ -12,18 +12,58 @@ export class EidError extends Error {
 /** HTTP 401 — API secret буруу/байхгүй. Тохиргооны (RP secret) алдаа. */
 export class AuthenticationError extends EidError {}
 
-/** HTTP 403 — IP allowlist/mTLS зөвшөөрөөгүй. Танай серверийн IP бүртгэгдээгүй байж магадгүй. */
-export class ForbiddenError extends EidError {}
+/**
+ * HTTP 403 — IP allowlist/mTLS зөвшөөрөөгүй, RP-д эрх алга, эсвэл onBehalfOf-ийн төлөөлөл татгалзсан.
+ * Сервер `{"error","code"}` буцаасан бол `code` (ж: `REPRESENTATION_DENIED`) — салааллыг үүгээр хийнэ.
+ */
+export class ForbiddenError extends EidError {
+  constructor(
+    message: string,
+    /** Серверийн тогтвортой алдааны код (`{"code"}`), байхгүй бол undefined. */
+    public readonly code?: string,
+  ) {
+    super(message);
+  }
+}
 
 /** RP-API-аас ирсэн бусад HTTP алдаа (4xx/5xx). status ба хариуны биеийг агуулна. */
 export class ApiError extends EidError {
   constructor(
     public readonly status: number,
     public readonly body: string,
+    /** Серверийн тогтвортой алдааны код (`{"error","code"}`-ийн `code`), байхгүй бол undefined. */
+    public readonly code?: string,
   ) {
     super(`RP-API ${status}: ${body}`);
   }
 }
+
+/**
+ * Байгууллагын нэрийн өмнөөс (`onBehalfOf`) урсгалын татгалзлын кодууд — `ForbiddenError.code` /
+ * `ApiError.code`-д ирнэ. 403: REPRESENTATION_DENIED (идэвхтэй төлөөлөгч биш), REPRESENTATION_PENDING (PIN2-оор
+ * баталгаажуулаагүй), REPRESENTATION_EXPIRED (хугацааны гадна), ORG_NOT_ACTIVE, SIGNER_UNIDENTIFIED (anonymous
+ * session); 404: ORG_NOT_FOUND; PDF баримт татахад 403 REPRESENTATION_REVOKED (prepare-ээс хойш эрх хасагдсан —
+ * баримт үүсээгүй).
+ */
+export type OnBehalfErrorCode =
+  | "REPRESENTATION_DENIED"
+  | "REPRESENTATION_PENDING"
+  | "REPRESENTATION_EXPIRED"
+  | "ORG_NOT_ACTIVE"
+  | "SIGNER_UNIDENTIFIED"
+  | "ORG_NOT_FOUND"
+  | "REPRESENTATION_REVOKED";
+
+/** {@link OnBehalfErrorCode}-ийн бүх утга (runtime шалгалтад). */
+export const ON_BEHALF_ERROR_CODES: readonly OnBehalfErrorCode[] = [
+  "REPRESENTATION_DENIED",
+  "REPRESENTATION_PENDING",
+  "REPRESENTATION_EXPIRED",
+  "ORG_NOT_ACTIVE",
+  "SIGNER_UNIDENTIFIED",
+  "ORG_NOT_FOUND",
+  "REPRESENTATION_REVOKED",
+];
 
 /** Сүлжээ/timeout — upstream хариу өгсөнгүй. */
 export class NetworkError extends EidError {}

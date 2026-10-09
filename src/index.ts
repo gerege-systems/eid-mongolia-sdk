@@ -6,6 +6,14 @@ export { AuthApi, type AuthOptions, type AuthDefaults } from "./auth.js";
 export { SignApi, type SignOptions, type SignDefaults } from "./sign.js";
 export { SessionApi, parseSessionResult } from "./session.js";
 export {
+  PdfApi,
+  type PdfDefaults,
+  type PdfPrepareInput,
+  type PdfPrepareSession,
+  type PdfSignerRef,
+} from "./pdf.js";
+export { OrganizationApi } from "./organization.js";
+export {
   ResponseValidator,
   type TrustConfig,
   type VerifiedIdentity,
@@ -50,6 +58,8 @@ export {
   SessionFailedError,
   ValidationError,
   DeviceLinkError,
+  ON_BEHALF_ERROR_CODES,
+  type OnBehalfErrorCode,
 } from "./errors.js";
 export type {
   CertificateLevel,
@@ -66,4 +76,10 @@ export type {
   DeviceLinkSession,
   SessionResult,
   RpCredentials,
+  OrgResult,
+  PdfDocumentStatus,
+  PdfSigner,
+  PdfSessionBlock,
+  Representation,
+  RepresentationsResponse,
 } from "./types.js";

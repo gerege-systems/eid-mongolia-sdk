@@ -67,6 +67,51 @@ const sig = eid.validator.validateSign(result, digest); // digest-ийн эср�
 console.log(sig.signatureValueB64, sig.subject);
 ```
 
+## 3a. Байгууллагын нэрийн өмнөөс гарын үсэг (onBehalfOf)
+
+Иргэн **өөрийн PIN2 гэрчилгээгээр** зурна; тухайн мөчид байгууллагыг төлөөлөх эрхтэйг eID **өөрийн бүртгэлээр**
+шалгана (Эстонийн загвар). Энэ нь **хувь хүний квалификацтай гарын үсэг** — байгууллагын гэрчилгээ, тамга (e-Seal) биш.
+e-Seal нь зөвхөн хүнгүй, автомат системийн баримтад. Урьдчилсан нөхцөл: байгууллага eID-д `ACTIVE` (захирал
+аппаараа ХУР-аар холбоно), зурагч нь `ADMIN` эсвэл PIN2-оор баталгаажуулсан `MANAGER`, RP-д `SIGN` эрх.
+Дэлгэрэнгүй: [developer.eidmongolia.mn](https://developer.eidmongolia.mn/).
+
+```ts
+import { ForbiddenError, ApiError, ON_BEHALF_ERROR_CODES } from "@gerege-systems/eid-mongolia-sdk";
+
+// 1. Иргэн сүүлийн 24 цагт танай RP-ээр нэвтэрсэн байх ёстой.
+const { representations } = await eid.organization.getRepresentations("PNOMN-12345678");
+// → [{ orgEtsi: "NTRMN-6235972", orgName: "Гэрэгэ Системс ХХК", role: "ceo", rightType: "ADMIN", … }]
+
+// 2. PDF (PAdES, CA угсарна) — санал болгох урсгал.
+try {
+  const s = await eid.pdf.prepare({
+    pdf: pdfBytes, fileName: "Гэрээ №12.pdf",
+    signer: { etsi: "PNOMN-12345678" }, flow: "notification",
+    onBehalfOf: "NTRMN-6235972",
+  });
+  showToUser(s.vc);
+  const r = await eid.session.waitForResult(s.sessionId);
+  // MUST: endResult OK, pdf.documentStatus READY, pdf.signer.onBehalfOf = хүссэн байгууллага,
+  // татсан файлын SHA-256 = pdf.outSha256, validation.indication "valid", ltv true.
+  if (r.pdf?.documentStatus !== "READY" || r.pdf.signer?.onBehalfOf !== "NTRMN-6235972") throw new Error("…");
+  const signed = await eid.pdf.document(s.sessionId);
+  console.log(r.pdf.signer.claimedRole); // "Гүйцэтгэх захирал, Гэрэгэ Системс ХХК (NTRMN-6235972)"
+} catch (e) {
+  if ((e instanceof ForbiddenError || e instanceof ApiError) && e.code) {
+    // REPRESENTATION_DENIED | REPRESENTATION_PENDING | REPRESENTATION_EXPIRED | ORG_NOT_ACTIVE |
+    // SIGNER_UNIDENTIFIED (403) · ORG_NOT_FOUND (404) · REPRESENTATION_REVOKED (403, document татах үед)
+  }
+  throw e;
+}
+
+// Raw digest гарын үсэгт ч мөн: eid.sign.digestByEtsi(id, digest, interactions, { onBehalfOf: "NTRMN-6235972" })
+// — CMS/PDF-ийг та угсардаг тул мэдүүлсэн үүргийг (signer-attributes-v2) өөрөө нэмнэ.
+```
+
+Олон талт гэрээ: А байгууллагын гаралтыг өөрчлөлтгүй Б-ийн `prepare`-д (`docID`, өөр `onBehalfOf`) илгээнэ.
+Session-ий `onBehalfOf` блок (`role`/`rightType`) нь хариу угсрах үеийн бүртгэл; `pdf.signer.onBehalfOf`/`claimedRole`
+нь баримтад бичигдсэн утга.
+
 ## 4. QR ба ижил төхөөрөмж — device link v3
 
 Иргэн өөр төхөөрөмжийн дэлгэц дээрх **QR**-ийг утсаараа уншина, эсвэл RP-ийн сайт/аппыг eID апптай **ижил
@@ -172,10 +217,10 @@ OK ирж болзошгүй. Иймд `ResponseValidator`:
 | Алдаа | Утга |
 |---|---|
 | `AuthenticationError` | 401 — API secret буруу/байхгүй |
-| `ForbiddenError` | 403 — IP allowlist / mTLS зөвшөөрөөгүй |
+| `ForbiddenError` | 403 — IP allowlist / mTLS / RP-ийн эрх; onBehalfOf татгалзвал `.code` (`OnBehalfErrorCode`) |
 | `SessionFailedError` | endResult ≠ OK (TIMEOUT, USER_REFUSED…) — `.endResult`-оор салга |
 | `ValidationError` | cert chain/signature/level шалгалт бүтэлгүйтсэн |
-| `ApiError` | бусад HTTP алдаа (`.status`, `.body`) |
+| `ApiError` | бусад HTTP алдаа (`.status`, `.body`, серверийн `.code` — ж: 404 `ORG_NOT_FOUND`) |
 | `NetworkError` | timeout/сүлжээ |
 | `DeviceLinkError` | device-link холбоос угсрах боломжгүй (`deviceLinkBase` https биш, token/secret/lang хэлбэр, төрөлд хэрэгтэй талбар дутуу) |
 
