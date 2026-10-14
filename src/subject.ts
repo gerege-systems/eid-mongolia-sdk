@@ -156,6 +156,12 @@ export function parseSubject(cert: X509Certificate | Uint8Array | string): CertS
  * Гэмтсэн DER → {@link ValidationError}. (Node `X509Certificate` нь KeyUsage битүүд, SKI/AKI-г өгдөггүй.)
  */
 export function certExtension(der: Uint8Array, oid: string): Uint8Array | undefined {
+  return certExtensions(der).find((e) => e.oid === oid)?.value;
+}
+
+/** Гэрчилгээний бүх extension (`oid`, `critical`, `extnValue`-ийн агуулга). Гэмтсэн DER → {@link ValidationError}. */
+export function certExtensions(der: Uint8Array): { oid: string; critical: boolean; value: Uint8Array }[] {
+  const out: { oid: string; critical: boolean; value: Uint8Array }[] = [];
   const top = tlv(der, 0, der.length);
   const tbs = tlv(der, top.start, top.end);
   let f = tlv(der, tbs.start, tbs.end);
@@ -170,14 +176,19 @@ export function certExtension(der: Uint8Array, oid: string): Uint8Array | undefi
         const ext = tlv(der, ep, seq.end);
         const id = tlv(der, ext.start, ext.end);
         let v = tlv(der, id.end, ext.end);
-        if (v.tag === 0x01) v = tlv(der, v.end, ext.end); // critical BOOLEAN
+        let critical = false;
+        if (v.tag === 0x01) {
+          // critical BOOLEAN
+          critical = v.end > v.start && der[v.start] !== 0;
+          v = tlv(der, v.end, ext.end);
+        }
         if (v.tag !== 0x04) throw new ValidationError("extension: extnValue OCTET STRING биш");
-        if (oidOf(der, id) === oid) return der.subarray(v.start, v.end);
+        out.push({ oid: oidOf(der, id), critical, value: der.subarray(v.start, v.end) });
         ep = ext.end;
       }
-      return undefined;
+      return out;
     }
     pos = t.end;
   }
-  return undefined;
+  return out;
 }

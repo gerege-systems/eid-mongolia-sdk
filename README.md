@@ -254,7 +254,9 @@ try {
 Түр алдаа — `ApiError.retryable` үнэн, `retryAfterMs`-ийн (CA-ийн `Retry-After`, секунд эсвэл огноо) дараа давтана:
 prepare 429 `PDF_PREPARE_BUSY`, 503 `LTV_UNAVAILABLE` / `TSA_UNAVAILABLE`; document 503 `DOCUMENT_PENDING`,
 `TSA_UNAVAILABLE`, `LTV_UNAVAILABLE` (`RETRYABLE_ERROR_CODES`). `headers` — хариуны header. PDF дуудлагын хугацаа
-`pdfTimeoutMs` (анхдагч 80000).
+`pdfTimeoutMs` (анхдагч 80000). `pdf.document` санах ойд `pdfMaxBytes` (анхдагч `DEFAULT_PDF_MAX_BYTES` = 64 MiB)
+хүртэл уншина; хэтэрвэл `ResponseTooLargeError`. JSON хариу 4 MiB-ээс хэтэрвэл мөн `ResponseTooLargeError` (таслахгүй).
+`getRepresentations`-ийн `raw` — серверийн түүхий JSON.
 
 Олон талт гэрээ: А байгууллагын гаралтыг өөрчлөлтгүй Б-ийн `prepare`-д (`docID`, өөр `onBehalfOf`) илгээнэ.
 Session-ий `onBehalfOf` блок (`role`/`rightType`) нь хариу угсрах үеийн бүртгэл; `pdf.signer.onBehalfOf`/`claimedRole`
@@ -281,7 +283,15 @@ verifyTokenCertificates(res, csrAuth, csrSign); // гэрчилгээ бүр CSR
 const ch = await eid.token.authChallenge();
 const digest = tokenAuthDigest(ch.rpUUID, ch.challenge); // токен CKM_ECDSA → түүхий r||s
 const who = await eid.token.authVerify(ch.challengeId, authCertDer, rs);
+
+// токеноор PDF (PAdES, SIGN эрх) — session/утасгүй; байгууллагын токенд onBehalfOf = тухайн байгууллага
+const p = await eid.pdf.tokenPrepare({ pdf, fileName: "Гэрээ.pdf", signerEtsi, certificate: signCertDer });
+const rs = /* токен (PKCS#11): CKM_ECDSA(p.hashToSign) → түүхий r||s, 64 байт — p.expiresAt хүртэл */ new Uint8Array(64);
+const blk = await eid.pdf.tokenFinalize(p.signingId, rs); // READY; 503 DOCUMENT_PENDING → ижил rs-ийг дахин
+const signed = await eid.pdf.tokenDocument(p.signingId); // SHA-256 = blk.outSha256 тулга
 ```
+
+`/token/auth/*`, `/pdf/token/*` нь CA-д байгаа ч `/.well-known/eid`-д хараахан жагсаагдаагүй (гэрээний тест WARN).
 
 ## 4. QR ба ижил төхөөрөмж — device link v3
 
@@ -371,7 +381,12 @@ OK ирж болзошгүй. Иймд `ResponseValidator`:
 
 1. `state === COMPLETE && endResult === OK`
 2. Иргэний гэрчилгээг **trust anchor (Mongolian National Root CA)** хүртэл chain-аар баталгаажуулна
-   (Root → National Issuing CA → Gerege Issuing CA → eID Mongolia Issuing CA → иргэн)
+   (Root → National Issuing CA → Gerege Issuing CA → eID Mongolia Issuing CA → иргэн) — RFC 5280 замын шалгалт
+   (Go SDK-ийн `x509.Certificate.Verify`-тэй ижил дүрэм): issuer нэр + AKI/SKI + гарын үсэг, CA basicConstraints +
+   **pathLenConstraint** (04 нь `pathlen:0`), CA-ийн keyUsage keyCertSign, CA бүрийн хугацаа, **EKU** (auth →
+   clientAuth, sign → emailProtection — CA-ийн профайл; CA-д EKU байвал түүнд багтах), үл таних **critical
+   extension** → татгалзана. **Name constraints**-тэй CA гинжинд байвал fail-closed (CA-ийн бодит гинжинд алга).
+   `intermediatesPem`-д 02, 03, 04-ийг бүгдийг өгнө (хариунд гинж ирдэггүй). certificatePolicies-ийг шалгахгүй.
 3. Гэрчилгээ хүчинтэй хугацаанд + шаардсан `certificateLevel` (default `QUALIFIED`)
 4. Гарын үсгийг иргэний public key-ээр шалгана:
    - **auth** → ACSP_V2 payload (`smart-id|ACSP_V2|serverRandom|rpChallenge|userChallenge|B64(rpName)|B64(brokeredRpName)|B64(SHA-256(interactions))|interactionTypeUsed|initialCallbackUrl|flowType`, hash = хүсэлтийн `hashAlgorithm`) дээр — `flowType`, `userChallenge`, `serverRandom` ба алгоритмын downgrade-ийг мөн шалгана;
@@ -404,6 +419,7 @@ OK ирж болзошгүй. Иймд `ResponseValidator`:
 | `SessionFailedError` | endResult ≠ OK (TIMEOUT, USER_REFUSED…) — `.endResult`-оор салга |
 | `ValidationError` | cert chain/signature/level шалгалт бүтэлгүйтсэн |
 | `ApiError` | бусад HTTP алдаа (`.status`, `.body`, серверийн `.code`, `.retryAfterMs`, `.headers`, `.retryable` — ж: 404 `ORG_NOT_FOUND`) |
+| `ResponseTooLargeError` | хариу SDK-ийн хязгаараас их (JSON 4 MiB, PDF `pdfMaxBytes`) — `.op`, `.limit` |
 | `NetworkError` | timeout/сүлжээ (`.op` — таних тэмдэггүй зам, `.timeout`) |
 | `EidOidcError` | «eID-ээр нэвтрэх» (OIDC) — `.code`: `access_denied`, `login_required`, `state_mismatch`, `invalid_grant`, `invalid_id_token`, `server_error` … |
 | `DeviceLinkError` | device-link холбоос угсрах боломжгүй (`deviceLinkBase` https биш, token/secret/lang хэлбэр, төрөлд хэрэгтэй талбар дутуу) |

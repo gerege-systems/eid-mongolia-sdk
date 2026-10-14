@@ -1,7 +1,7 @@
 // HTTP давхарга — бүх RP-API дуудлагад Bearer secret хавсаргаж, timeout тавьж, HTTP статусыг
 // typed алдаа руу буулгана. mTLS (eIDAS qualified орчин)-д RP undici Dispatcher өгч болно.
 
-import { AuthenticationError, ForbiddenError, ApiError, NetworkError, maskPath, parseRetryAfter } from "./errors.js";
+import { AuthenticationError, ForbiddenError, ApiError, NetworkError, ResponseTooLargeError, maskPath, parseRetryAfter } from "./errors.js";
 
 export interface HttpConfig {
   /** RP-API-ийн бүтэн суурь URL. Ж: https://rp.eidmongolia.mn */
@@ -21,6 +21,8 @@ export interface HttpConfig {
 }
 
 const DEFAULT_TIMEOUT_MS = 15_000;
+/** JSON хариуны дээд хэмжээ — хэтэрвэл {@link ResponseTooLargeError} (таслахгүй). */
+export const MAX_JSON_BYTES = 4 << 20;
 
 export class Http {
   constructor(private readonly cfg: HttpConfig) {}
@@ -38,10 +40,10 @@ export class Http {
     return this.json("POST", path, form, undefined, timeoutMs);
   }
 
-  /** GET — хариуг байтаар (ж: гарын үсэгтэй PDF). */
-  async getBytes(path: string, timeoutMs?: number): Promise<Uint8Array> {
+  /** GET — хариуг байтаар (ж: гарын үсэгтэй PDF), `maxBytes` хүртэл; хэтэрвэл {@link ResponseTooLargeError}. */
+  async getBytes(path: string, timeoutMs?: number, maxBytes: number = 64 << 20): Promise<Uint8Array> {
     const res = await this.send("GET", path, undefined, undefined, timeoutMs);
-    return new Uint8Array(await res.arrayBuffer());
+    return readLimited(res, maxBytes, `GET ${maskPath(path)}`);
   }
 
   private async json(
@@ -52,7 +54,7 @@ export class Http {
     timeoutMs?: number,
   ): Promise<unknown> {
     const res = await this.send(method, path, body, contentType, timeoutMs);
-    const text = await res.text();
+    const text = new TextDecoder().decode(await readLimited(res, MAX_JSON_BYTES, `${method} ${maskPath(path)}`));
     return text ? (JSON.parse(text) as unknown) : {};
   }
 
@@ -108,6 +110,36 @@ export class Http {
     }
     throw new ApiError(res.status, text, code, { headers, retryAfterMs });
   }
+}
+
+/** Хариуны биеийг `limit` хүртэл уншина; Content-Length эсвэл бодит урт хэтэрвэл {@link ResponseTooLargeError}. */
+async function readLimited(res: Response, limit: number, op: string): Promise<Uint8Array> {
+  const declared = Number(res.headers.get("content-length") ?? NaN);
+  if (declared > limit) {
+    await res.body?.cancel().catch(() => undefined);
+    throw new ResponseTooLargeError(op, limit);
+  }
+  if (!res.body) return new Uint8Array(0);
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > limit) {
+      await reader.cancel().catch(() => undefined);
+      throw new ResponseTooLargeError(op, limit);
+    }
+    chunks.push(value);
+  }
+  const out = new Uint8Array(total);
+  let off = 0;
+  for (const c of chunks) {
+    out.set(c, off);
+    off += c.byteLength;
+  }
+  return out;
 }
 
 /** Серверийн алдааны JSON `{"error","code"}` — JSON биш (proxy) бол хоосон. */

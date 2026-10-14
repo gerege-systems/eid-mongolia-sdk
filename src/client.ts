@@ -23,7 +23,7 @@ import { Http } from "./http.js";
 import { AuthApi } from "./auth.js";
 import { SignApi } from "./sign.js";
 import { SessionApi } from "./session.js";
-import { PdfApi, DEFAULT_PDF_TIMEOUT_MS } from "./pdf.js";
+import { PdfApi, DEFAULT_PDF_MAX_BYTES, DEFAULT_PDF_TIMEOUT_MS } from "./pdf.js";
 import { OrganizationApi } from "./organization.js";
 import { PersonApi } from "./person.js";
 import { TokenApi } from "./token.js";
@@ -44,6 +44,11 @@ export interface ClientConfig {
   timeoutMs?: number;
   /** PAdES prepare / баримт татах дуудлагын хугацаа (мс). Анхдагч 80000 ({@link DEFAULT_PDF_TIMEOUT_MS}). */
   pdfTimeoutMs?: number;
+  /**
+   * `pdf.document` / `pdf.tokenDocument`-ийн санах ойд унших дээд хэмжээ (байт). Анхдагч 64 MiB
+   * ({@link DEFAULT_PDF_MAX_BYTES}); хэтэрвэл `ResponseTooLargeError`.
+   */
+  pdfMaxBytes?: number;
   /** undici Dispatcher (mTLS client cert). */
   dispatcher?: unknown;
   /** fetch орлуулагч (тест). */
@@ -101,7 +106,11 @@ export class EidClient {
 
     this.auth = new AuthApi(http, cfg.credentials, { certificateLevel: level });
     this.sign = new SignApi(http, cfg.credentials, { certificateLevel: level });
-    this.pdf = new PdfApi(http, cfg.credentials, { certificateLevel: level, timeoutMs: cfg.pdfTimeoutMs ?? DEFAULT_PDF_TIMEOUT_MS });
+    this.pdf = new PdfApi(http, cfg.credentials, {
+      certificateLevel: level,
+      timeoutMs: cfg.pdfTimeoutMs ?? DEFAULT_PDF_TIMEOUT_MS,
+      maxBytes: cfg.pdfMaxBytes && cfg.pdfMaxBytes > 0 ? cfg.pdfMaxBytes : DEFAULT_PDF_MAX_BYTES,
+    });
     this.organization = new OrganizationApi(http);
     this.person = new PersonApi(http);
     this.token = new TokenApi(http, cfg.credentials);

@@ -12,6 +12,6 @@ export class OrganizationApi {
   async getRepresentations(personEtsi: string): Promise<RepresentationsResponse> {
     const raw = (await this.http.get(routePath(RP_ROUTES.orgRepresentations, personEtsi))) as Record<string, unknown>;
     const list = Array.isArray(raw.representations) ? (raw.representations as Representation[]) : [];
-    return { personEtsi: String(raw.personEtsi ?? personEtsi), representations: list };
+    return { personEtsi: String(raw.personEtsi ?? personEtsi), representations: list, raw };
   }
 }

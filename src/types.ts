@@ -255,6 +255,8 @@ export interface Representation {
 export interface RepresentationsResponse {
   personEtsi: string;
   representations: Representation[];
+  /** Серверийн түүхий JSON (SDK задлаагүй шинэ талбарт). */
+  raw?: unknown;
 }
 
 /** Session-ий байгууллагын блок — байгууллага + тухайн иргэний эрх (бүртгэлээс real-time). */

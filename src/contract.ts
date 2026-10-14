@@ -30,12 +30,15 @@ export const RP_ROUTES = {
 } as const satisfies Record<string, RpRoute>;
 
 /**
- * CA-ийн гэрээнд (код + docs/TOKEN_AUTH.md) байгаа ч live `/.well-known/eid`-д хараахан жагсаагдаагүй замууд. Гэрээний
+ * CA-ийн гэрээнд (код + docs/TOKEN_AUTH.md, PADES_SIGNING.md §16.5) байгаа ч live `/.well-known/eid`-д хараахан жагсаагдаагүй замууд. Гэрээний
  * тест эдгээрийг WARN болгоно (fail биш); discovery-д нэмэгдмэгц {@link RP_ROUTES} руу шилжүүлнэ.
  */
 export const RP_ROUTES_UNDISCOVERED = {
   tokenAuthChallenge: { method: "POST", path: "/token/auth/challenge" },
   tokenAuthVerify: { method: "POST", path: "/token/auth/verify" },
+  pdfTokenPrepare: { method: "POST", path: "/pdf/token/prepare" },
+  pdfTokenFinalize: { method: "POST", path: "/pdf/token/{signingID}/finalize" },
+  pdfTokenDocument: { method: "GET", path: "/pdf/token/{signingID}/document" },
 } as const satisfies Record<string, RpRoute>;
 
 /** Template-ийн `{param}`-уудыг дарааллаар нь `encodeURIComponent` хийсэн `args`-аар орлуулна. */
