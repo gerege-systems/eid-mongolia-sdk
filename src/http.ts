@@ -1,7 +1,18 @@
 // HTTP давхарга — бүх RP-API дуудлагад Bearer secret хавсаргаж, timeout тавьж, HTTP статусыг
 // typed алдаа руу буулгана. mTLS (eIDAS qualified орчин)-д RP undici Dispatcher өгч болно.
 
-import { AuthenticationError, ForbiddenError, ApiError, NetworkError, ResponseTooLargeError, maskPath, parseRetryAfter } from "./errors.js";
+import {
+  AuthenticationError,
+  ForbiddenError,
+  ApiError,
+  NoSigningCertificateError,
+  CertChoiceInvalidError,
+  RequestInvalidError,
+  NetworkError,
+  ResponseTooLargeError,
+  maskPath,
+  parseRetryAfter,
+} from "./errors.js";
 
 export interface HttpConfig {
   /** RP-API-ийн бүтэн суурь URL. Ж: https://rp.eidmongolia.mn */
@@ -111,7 +122,15 @@ export class Http {
         { headers, retryAfterMs },
       );
     }
-    throw new ApiError(res.status, text, code, { headers, retryAfterMs });
+    const Typed =
+      code === "NO_SIGNING_CERTIFICATE"
+        ? NoSigningCertificateError
+        : code === "CERT_CHOICE_INVALID"
+          ? CertChoiceInvalidError
+          : code === "REQUEST_INVALID"
+            ? RequestInvalidError
+            : ApiError;
+    throw new Typed(res.status, text, code, { headers, retryAfterMs });
   }
 }
 

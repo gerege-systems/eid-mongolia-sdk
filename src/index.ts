@@ -110,6 +110,9 @@ export {
   AuthenticationError,
   ForbiddenError,
   ApiError,
+  NoSigningCertificateError,
+  CertChoiceInvalidError,
+  RequestInvalidError,
   NetworkError,
   SessionFailedError,
   ValidationError,
@@ -122,7 +125,7 @@ export {
   type RetryableErrorCode,
   type HttpErrorInit,
 } from "./errors.js";
-export { DEFAULT_SIGN_SESSION_TTL_MS, sessionExpiry } from "./types.js";
+export { DEFAULT_SIGN_SESSION_TTL_MS, sessionExpiry, startExpiry, parseExpiresAt } from "./types.js";
 export type {
   CertificateLevel,
   SignatureProtocol,

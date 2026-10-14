@@ -120,8 +120,9 @@ export interface SignContext {
 
 /**
  * CA-ийн SIGNATURE ба CERTIFICATE_CHOICE session-ий анхдагч хүчинтэй хугацаа (мс; `EID_SIGN_SESSION_TTL_SECONDS` = 600).
- * CA-ийн админ «Системийн тохиргоо»-нд 60–1800 секундэд өөрчилж болно; session start хариунд CA хугацааг буцаадаггүй
- * (зөвхөн `sessionID`) тул SDK үүнийг `ClientConfig.signSessionTtlMs`-ээр тооцоолно.
+ * CA-ийн админ «Системийн тохиргоо»-нд 60–1800 секундэд өөрчилж болно. CA 2026-10-14-өөс session start хариунд
+ * `expiresAt` (RFC 3339) буцаадаг — SDK түүнийг ашиглана; хуучин CA (талбаргүй) үед л `ClientConfig.signSessionTtlMs`-ээр
+ * тооцоолно ({@link startExpiry}).
  */
 export const DEFAULT_SIGN_SESSION_TTL_MS = 600_000;
 
@@ -132,6 +133,19 @@ export const DEFAULT_SIGN_SESSION_TTL_MS = 600_000;
  */
 export function sessionExpiry(sentAtMs: number, ttlMs?: number): number {
   return sentAtMs + (ttlMs && ttlMs > 0 ? ttlMs : DEFAULT_SIGN_SESSION_TTL_MS);
+}
+
+/** CA-ийн `expiresAt` (RFC 3339) → ms epoch; байхгүй / задрахгүй бол undefined. */
+export function parseExpiresAt(v: unknown): number | undefined {
+  if (typeof v !== "string" || !/^\d{4}-\d{2}-\d{2}T/.test(v)) return undefined;
+  const t = Date.parse(v);
+  return Number.isFinite(t) ? t : undefined;
+}
+
+/** Session start-ын дуусах мөч: CA-ийн `expiresAt` байвал түүнийг, үгүй бол {@link sessionExpiry} (тооцоолол). */
+export function startExpiry(raw: unknown, sentAtMs: number, ttlMs?: number): number {
+  const r = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+  return parseExpiresAt(r.expiresAt) ?? sessionExpiry(sentAtMs, ttlMs);
 }
 
 /**
@@ -166,7 +180,10 @@ export interface DeviceLinkSession {
   sign?: SignContext;
   /** Certificate-choice session-ий хүсэлтэд илгээсэн нэр (cert холбоосын authCode-д). */
   relyingPartyName?: string;
-  /** Sign / certificate-choice session-ий ТООЦООЛСОН дуусах мөч (ms epoch, {@link sessionExpiry}); auth-д undefined. */
+  /**
+   * Session дуусах мөч (ms epoch): CA-ийн start хариуны `expiresAt`; хуучин CA-д sign / certificate-choice-д тооцоолсон
+   * ({@link startExpiry}), auth-д undefined.
+   */
   expiresAt?: number;
 }
 
