@@ -5,6 +5,7 @@
 
 import { createHash } from "node:crypto";
 import { ValidationError } from "./errors.js";
+import { RP_ROUTES, routePath } from "./contract.js";
 import type { Http } from "./http.js";
 import type { CertificateLevel, PdfSessionBlock, RpCredentials } from "./types.js";
 
@@ -90,7 +91,7 @@ export class PdfApi {
     form.append("request", new Blob([JSON.stringify(request)], { type: "application/json" }));
     form.append("pdf", new Blob([input.pdf], { type: "application/pdf" }), input.fileName);
 
-    const r = rec(await this.http.postMultipart("/pdf/sign/prepare", form, 60_000));
+    const r = rec(await this.http.postMultipart(routePath(RP_ROUTES.pdfPrepare), form, 60_000));
     const receivedAt = Date.now();
     const vc = rec(r.vc).value;
     const dl = rec(r.deviceLink);
@@ -118,7 +119,7 @@ export class PdfApi {
    * session-ий `pdf.outSha256`-тай тулга. Эрх хасагдсан бол `ForbiddenError` `.code = "REPRESENTATION_REVOKED"`.
    */
   document(sessionId: string): Promise<Uint8Array> {
-    return this.http.getBytes(`/pdf/sign/${encodeURIComponent(sessionId)}/document`, 60_000);
+    return this.http.getBytes(routePath(RP_ROUTES.pdfDocument, sessionId), 60_000);
   }
 
   /**

@@ -2,6 +2,7 @@
 // хариу өгмөгц) буцдаг тул хэдхэн дуудлагаар үр дүн авна. waitForResult нь COMPLETE
 // болтол давтаж, эцсийн SessionResult-ыг буцаана.
 
+import { RP_ROUTES, routePath } from "./contract.js";
 import type { Http } from "./http.js";
 import type { OrgResult, PdfSessionBlock, SessionResult, SignatureAlgorithmParameters } from "./types.js";
 
@@ -105,7 +106,7 @@ export class SessionApi {
   /** Нэг удаагийн long-poll. serverPollMs хүртэл хүлээнэ. */
   async poll(sessionId: string, serverPollMs: number = SERVER_POLL_MS): Promise<SessionResult> {
     const raw = await this.http.get(
-      `/session/${encodeURIComponent(sessionId)}?timeoutMs=${serverPollMs}`,
+      `${routePath(RP_ROUTES.session, sessionId)}?timeoutMs=${serverPollMs}`,
       serverPollMs + 10_000, // HTTP timeout нь серверийн poll-оос урт
     );
     return parseSessionResult(raw);

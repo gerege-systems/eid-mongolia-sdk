@@ -2,6 +2,7 @@
 // QR/App2App (device-link) хоёр горим. Бүгд rpChallenge үүсгэж, хариуны ACSP_V2 signature-ийг
 // үүний эсрэг ResponseValidator-аар шалгана (replay/forgery хамгаалалт).
 
+import { RP_ROUTES, routePath } from "./contract.js";
 import type { Http } from "./http.js";
 import { interactionsToBase64, randomChallenge } from "./crypto.js";
 import type {
@@ -118,28 +119,28 @@ export class AuthApi {
   /** Push — РД/иргэний дугаар/ETSI-ээр (сервер төрлийг таьна). Иргэний утас руу мэдэгдэл очно. */
   async notificationByEtsi(id: string, interactions: Interaction[], opts?: AuthOptions): Promise<NotificationSession> {
     const { body, acsp } = this.baseBody(randomChallenge(), interactions, ["Notification"], opts);
-    const raw = await this.http.post(`/authentication/notification/etsi/${encodeURIComponent(id)}`, body);
+    const raw = await this.http.post(routePath(RP_ROUTES.authNotificationEtsi, id), body);
     return this.parseNotification(raw, acsp);
   }
 
   /** Push — баримтын дугаараар (тодорхой төхөөрөмж рүү). */
   async notificationByDocument(documentNumber: string, interactions: Interaction[], opts?: AuthOptions): Promise<NotificationSession> {
     const { body, acsp } = this.baseBody(randomChallenge(), interactions, ["Notification"], opts);
-    const raw = await this.http.post(`/authentication/notification/document/${encodeURIComponent(documentNumber)}`, body);
+    const raw = await this.http.post(routePath(RP_ROUTES.authNotificationDocument, documentNumber), body);
     return this.parseNotification(raw, acsp);
   }
 
   /** QR/App2App — нэр томьёололгүй (иргэн хэн болохыг урьдчилж мэдэхгүй). QR код үүсгэхэд. */
   async deviceLinkAnonymous(interactions: Interaction[], opts?: AuthOptions): Promise<DeviceLinkSession> {
     const { body, acsp } = this.baseBody(randomChallenge(), interactions, ["QR"], opts);
-    const raw = await this.http.post(`/authentication/device-link/anonymous`, body);
+    const raw = await this.http.post(routePath(RP_ROUTES.authDeviceLinkAnonymous), body);
     return this.parseDeviceLink(raw, acsp);
   }
 
   /** QR/App2App — тодорхой иргэн (РД/civil_id/ETSI). */
   async deviceLinkByEtsi(id: string, interactions: Interaction[], opts?: AuthOptions): Promise<DeviceLinkSession> {
     const { body, acsp } = this.baseBody(randomChallenge(), interactions, ["QR"], opts);
-    const raw = await this.http.post(`/authentication/device-link/etsi/${encodeURIComponent(id)}`, body);
+    const raw = await this.http.post(routePath(RP_ROUTES.authDeviceLinkEtsi, id), body);
     return this.parseDeviceLink(raw, acsp);
   }
 }
