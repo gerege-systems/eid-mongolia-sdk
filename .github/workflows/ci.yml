@@ -12,6 +12,35 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      # /pades: Go core → WASM (scripts/build-pades-wasm.sh-д бэхэлсэн Go SDK commit + Go хувилбар).
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 1.25.5
+          cache: false
       - run: npm ci
+      - run: npm run build:wasm
+      - name: wasm_exec.js нь бэхэлсэн Go-той таарна
+        run: git diff --exit-code src/pades/wasm_exec.js
       - run: npm run lint
       - run: npm test
+      - name: Багцын хэмжээ
+        run: npm pack --dry-run 2>&1 | tail -8
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist
+          retention-days: 3
+  pades-node18:
+    # /pades нь Node ≥18-д ажиллана (global crypto үгүй) — test job-ийн dist-ээр.
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 18
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+      - run: node test/pades-node18.mjs

@@ -3,19 +3,17 @@
 export { EidClient, DEFAULT_BASE_URL, resolveBaseUrl, type ClientConfig } from "./client.js";
 export { Http, type HttpConfig } from "./http.js";
 export { AuthApi, type AuthOptions, type AuthDefaults } from "./auth.js";
-export { SignApi, type SignOptions, type SignDefaults } from "./sign.js";
-export { SessionApi, parseSessionResult, personMatchesCertificate } from "./session.js";
 export {
-  PdfApi,
-  DEFAULT_PDF_TIMEOUT_MS,
-  DEFAULT_PDF_MAX_BYTES,
-  type PdfDefaults,
-  type PdfTokenPrepareInput,
-  type PdfTokenPrepareSession,
-  type PdfPrepareInput,
-  type PdfPrepareSession,
-  type PdfSignerRef,
-} from "./pdf.js";
+  SignApi,
+  type SignOptions,
+  type SignDefaults,
+  type PdfDigestInput,
+  type PdfDigestSession,
+  type PdfDigestSigner,
+  type RegisterSignatureInput,
+  type RegisterSignatureResult,
+} from "./sign.js";
+export { SessionApi, parseSessionResult, personMatchesCertificate } from "./session.js";
 export { OrganizationApi } from "./organization.js";
 export {
   PersonApi,
@@ -136,9 +134,6 @@ export type {
   SessionResult,
   RpCredentials,
   OrgResult,
-  PdfDocumentStatus,
-  PdfSigner,
-  PdfSessionBlock,
   Representation,
   RepresentationsResponse,
   PersonBlock,

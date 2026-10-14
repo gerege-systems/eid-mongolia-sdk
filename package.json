@@ -1,6 +1,6 @@
 {
   "name": "@gerege-systems/eid-mongolia-sdk",
-  "version": "0.13.0",
+  "version": "0.14.0",
   "description": "e-ID Mongolia Relying Party SDK — иргэнээр утсаар нь нэвтрэлт ба хууль ёсны цахим гарын үсэг (RP-API v3, Smart-ID нийцтэй).",
   "license": "MIT",
   "type": "module",
@@ -17,7 +17,13 @@
       "types": "./dist/browser.d.ts",
       "import": "./dist/browser.js",
       "require": "./dist/browser.cjs"
-    }
+    },
+    "./pades": {
+      "types": "./dist/pades.d.ts",
+      "import": "./dist/pades.js",
+      "require": "./dist/pades.cjs"
+    },
+    "./eid-pades.wasm": "./dist/eid-pades.wasm"
   },
   "files": [
     "dist",
@@ -28,10 +34,12 @@
     "node": ">=22"
   },
   "scripts": {
-    "build": "tsup src/index.ts src/browser.ts --format esm,cjs --dts --clean",
-    "test": "npm run build && node --test --experimental-strip-types test/sdk.test.ts test/oidc.test.ts test/portal-gaps.test.ts test/chain.test.ts",
+    "build": "tsup src/index.ts src/browser.ts src/pades.ts --format esm,cjs --dts --clean --shims && node scripts/copy-pades-wasm.mjs",
+    "test": "npm run build && node --test --experimental-strip-types test/sdk.test.ts test/oidc.test.ts test/portal-gaps.test.ts test/chain.test.ts test/pades-session.test.ts test/pades-wasm.test.ts",
     "test:contract": "npm run build && node --experimental-strip-types test/contract.test.ts",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "build:wasm": "bash scripts/build-pades-wasm.sh",
+    "prepublishOnly": "node scripts/copy-pades-wasm.mjs --require"
   },
   "keywords": [
     "eid",
@@ -42,7 +50,10 @@
     "authentication",
     "digital-signature",
     "pki",
-    "relying-party"
+    "relying-party",
+    "pades",
+    "pdf-signing",
+    "webassembly"
   ],
   "devDependencies": {
     "@types/node": "^20.0.0",

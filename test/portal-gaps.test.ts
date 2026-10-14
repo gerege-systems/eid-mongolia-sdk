@@ -11,7 +11,6 @@ import {
   ApiError,
   AuthenticationError,
   CITIZEN_ISSUING_CA_SKI,
-  DEFAULT_PDF_TIMEOUT_MS,
   EidClient,
   ForbiddenError,
   NetworkError,
@@ -164,7 +163,7 @@ test("session.poll — person + raw", async () => {
   assert.ok(r.raw);
 });
 
-// ── 2. Retry-After, headers, retryable, PDF timeout ──
+// ── 2. Retry-After, headers, retryable ──
 
 test("parseRetryAfter — секунд / HTTP-огноо / буруу", () => {
   const now = Date.UTC(2026, 9, 14, 12);
@@ -175,18 +174,17 @@ test("parseRetryAfter — секунд / HTTP-огноо / буруу", () => {
   assert.equal(parseRetryAfter(new Date(now - 60_000).toUTCString(), now), undefined);
 });
 
-test("ApiError — PDF 429/503 кодууд retryable + retryAfterMs + headers", async () => {
-  const pdfIn = { pdf: new Uint8Array([1]), fileName: "a.pdf", signer: { etsi: "PNOMN-1" } };
-  for (const [status, retry, code, doc] of [
-    [429, "5", "PDF_PREPARE_BUSY", false],
-    [503, "60", "LTV_UNAVAILABLE", false],
-    [503, "5", "DOCUMENT_PENDING", true],
-    [503, "30", "TSA_UNAVAILABLE", true],
-    [503, "60", "LTV_UNAVAILABLE", true],
+test("ApiError — 429/503 кодууд retryable + retryAfterMs + headers", async () => {
+  const call = (eid: EidClient) => eid.sign.digestByEtsi("PNOMN-1", sha256Base64("x"), []);
+  for (const [status, retry, code] of [
+    [429, "5", "RATE_LIMITED"],
+    [503, "60", "LTV_UNAVAILABLE"],
+    [503, "30", "TSA_UNAVAILABLE"],
+    [503, "5", "STATE_UNAVAILABLE"],
   ] as const) {
     const { eid } = client({ status, body: { error: "түр", code }, headers: { "Retry-After": retry, "X-Request-Id": "req-1" } });
     await assert.rejects(
-      () => (doc ? eid.pdf.document("s1") : eid.pdf.prepare(pdfIn)),
+      () => call(eid),
       (e: unknown) =>
         e instanceof ApiError && e.status === status && e.code === code && e.retryable && e.retryAfterMs === Number(retry) * 1000 &&
         e.headers?.get("X-Request-Id") === "req-1",
@@ -194,24 +192,14 @@ test("ApiError — PDF 429/503 кодууд retryable + retryAfterMs + headers",
   }
   assert.equal(RETRYABLE_ERROR_CODES.length, 7);
   const conflict = client({ status: 409, body: { error: "x", code: "DOC_ID_MISMATCH" } });
-  await assert.rejects(() => conflict.eid.pdf.prepare(pdfIn), (e: unknown) => e instanceof ApiError && !e.retryable);
+  await assert.rejects(() => call(conflict.eid), (e: unknown) => e instanceof ApiError && !e.retryable);
   const proxy = client({ status: 503, body: "<html>bad gateway</html>", headers: { "Retry-After": "10" } });
-  await assert.rejects(() => proxy.eid.pdf.prepare(pdfIn), (e: unknown) => e instanceof ApiError && e.retryable && e.code === undefined);
+  await assert.rejects(() => call(proxy.eid), (e: unknown) => e instanceof ApiError && e.retryable && e.code === undefined);
   const forbidden = client({ status: 403, body: { error: "x", code: "REPRESENTATION_DENIED" }, headers: { "Retry-After": "7", "X-Request-Id": "req-1" } });
   await assert.rejects(
-    () => forbidden.eid.pdf.prepare(pdfIn),
+    () => call(forbidden.eid),
     (e: unknown) => e instanceof ForbiddenError && e.retryAfterMs === 7000 && e.headers?.get("X-Request-Id") === "req-1",
   );
-});
-
-test("pdfTimeoutMs — анхдагч 80с, тохируулж болно", async () => {
-  assert.equal(DEFAULT_PDF_TIMEOUT_MS, 80_000);
-  const eid = new EidClient({
-    credentials: CREDS,
-    pdfTimeoutMs: 50,
-    fetchImpl: hangUntilAbort,
-  });
-  await assert.rejects(() => eid.pdf.document("s1"), (e: unknown) => e instanceof NetworkError && e.timeout === true);
 });
 
 // ── 3. fileName ──
@@ -455,9 +443,9 @@ test("AuthenticationError — CA-ийн code/body vs proxy 401", async () => {
   );
 });
 
-// ── 0.11.0: хариуны хэмжээ, representations raw, токены PAdES (Go SDK 0.1.3-тэй ижил) ──
+// ── 0.11.0: хариуны хэмжээ, representations raw (Go SDK 0.1.3-тэй ижил) ──
 
-test("хариуны хэмжээ — JSON > 4 MiB, pdfMaxBytes → ResponseTooLargeError (таслахгүй)", async () => {
+test("хариуны хэмжээ — JSON > 4 MiB → ResponseTooLargeError (таслахгүй)", async () => {
   const MAX = 4 << 20;
   const big = `{"personEtsi":"PNOMN-1","pad":"${"a".repeat(MAX)}"}`;
   const { eid } = client({ body: big });
@@ -470,12 +458,6 @@ test("хариуны хэмжээ — JSON > 4 MiB, pdfMaxBytes → ResponseTooL
   const declared = client(() => ({ body: "x", headers: { "content-length": String(MAX + 1) } }));
   await assert.rejects(() => declared.eid.organization.getRepresentations("PNOMN-1"), ResponseTooLargeError);
 
-  const pdf = "x".repeat(2048);
-  await assert.rejects(() => client({ body: pdf }, { pdfMaxBytes: 1024 }).eid.pdf.document("s"),
-    (e: unknown) => e instanceof ResponseTooLargeError && e.limit === 1024);
-  await assert.rejects(() => client({ body: pdf }, { pdfMaxBytes: 1024 }).eid.pdf.tokenDocument("s"), ResponseTooLargeError);
-  assert.equal((await client({ body: pdf }, { pdfMaxBytes: 2048 }).eid.pdf.document("s")).length, 2048);
-  assert.equal((await client({ body: pdf }).eid.pdf.document("s")).length, 2048); // анхдагч 64 MiB
 });
 
 test("getRepresentations — raw", async () => {
@@ -483,51 +465,6 @@ test("getRepresentations — raw", async () => {
   const r = await eid.organization.getRepresentations("PNOMN-1");
   assert.equal(r.representations.length, 1);
   assert.deepEqual((r.raw as Record<string, unknown>).future, { x: 1 });
-});
-
-test("pdf.tokenPrepare / tokenFinalize / tokenDocument (USB токены PAdES)", async () => {
-  const hashToSign = createHash("sha256").update("dtbs").digest();
-  let form: FormData | undefined;
-  const calls: { url: string; method: string; body?: string }[] = [];
-  const eid = new EidClient({
-    credentials: CREDS,
-    trust: { allowUntrusted: true },
-    fetchImpl: async (url, init) => {
-      const u = String(url);
-      calls.push({ url: u, method: String(init?.method), body: typeof init?.body === "string" ? init.body : undefined });
-      if (u.endsWith("/pdf/token/prepare")) {
-        form = init?.body as FormData;
-        return Response.json({ signingID: "11111111-1111-4111-8111-111111111111", docID: "d", hashToSign: hashToSign.toString("base64"),
-          hashAlgorithm: "SHA-256", signatureAlgorithm: "ecdsa-with-SHA256", signatureFormat: "RAW_RS", expiresAt: "2026-10-14T12:10:00+08:00" });
-      }
-      if (u.endsWith("/finalize")) return Response.json({ docID: "d", documentStatus: "READY", outSha256: "00".repeat(32), size: 3 });
-      if (u.endsWith("/document")) return new Response("PDF");
-      return new Response("", { status: 404 });
-    },
-  });
-  const cert = new Uint8Array(AUTH.cert.raw);
-  const s = await eid.pdf.tokenPrepare({ pdf: new TextEncoder().encode("%PDF-1.7"), fileName: "гэрээ.pdf", signerEtsi: "PNOMN-12345678",
-    certificate: cert, onBehalfOf: "NTRMN-1" });
-  assert.equal(s.signingId, "11111111-1111-4111-8111-111111111111");
-  assert.deepEqual(Buffer.from(s.hashToSign), hashToSign);
-  assert.equal(s.signatureFormat, "RAW_RS");
-  const req = JSON.parse(await (form!.get("request") as Blob).text()) as Record<string, unknown>;
-  assert.deepEqual(req, { relyingPartyUUID: CREDS.rpUUID, relyingPartyName: CREDS.rpName, signer: { etsi: "PNOMN-12345678" },
-    certificate: Buffer.from(cert).toString("base64"), fileName: "гэрээ.pdf", onBehalfOf: "NTRMN-1" });
-  assert.equal(await (form!.get("pdf") as Blob).text(), "%PDF-1.7");
-
-  const sig = new Uint8Array(64).fill(7);
-  const blk = await eid.pdf.tokenFinalize(s.signingId, sig);
-  assert.equal(blk.documentStatus, "READY");
-  const fin = calls.at(-1)!;
-  assert.match(fin.url, /\/pdf\/token\/11111111-1111-4111-8111-111111111111\/finalize$/);
-  assert.deepEqual(JSON.parse(fin.body!), { signature: Buffer.from(sig).toString("base64") });
-  await assert.rejects(() => eid.pdf.tokenFinalize(s.signingId, sig.subarray(0, 63)), /64 байт/);
-  assert.equal(new TextDecoder().decode(await eid.pdf.tokenDocument(s.signingId)), "PDF");
-  await assert.rejects(() => eid.pdf.tokenPrepare({ pdf: new Uint8Array([1]), fileName: "", signerEtsi: "", certificate: new Uint8Array() }));
-  const bad = client({ body: { signingID: "x", hashToSign: "AAAA" } });
-  await assert.rejects(() => bad.eid.pdf.tokenPrepare({ pdf: new Uint8Array([1]), fileName: "a.pdf", signerEtsi: "PNOMN-1", certificate: new Uint8Array([1]) }),
-    (e: unknown) => e instanceof ValidationError && /hashToSign/.test(e.message));
 });
 
 // ── 0.12.0: roleLabel (CA !339) + language → Accept-Language ──

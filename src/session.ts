@@ -6,7 +6,6 @@ import { RP_ROUTES, routePath } from "./contract.js";
 import type { Http } from "./http.js";
 import type {
   OrgResult,
-  PdfSessionBlock,
   PersonBlock,
   SessionResult,
   SignatureAlgorithmParameters,
@@ -50,7 +49,6 @@ export function parseSessionResult(raw: unknown): SessionResult {
     signatureAlgorithmParameters: parseSigParams(sig.signatureAlgorithmParameters),
     interactionTypeUsed: str(r.interactionTypeUsed),
     onBehalfOf: parseOrg(r.onBehalfOf),
-    pdf: parsePdf(r.pdf),
     person: parsePerson(r.person),
     tokenCertificate: parseTokenCert(r.tokenCertificate),
     raw,
@@ -93,30 +91,6 @@ export function personMatchesCertificate(
 ): boolean {
   const serial = typeof subject === "string" ? subject : subject?.serialNumber;
   return !!person?.civilId && !!serial && serial === `PNOMN-${person.civilId}`;
-}
-
-/** PAdES `pdf` блок. Байхгүй (PDF урсгал биш) бол null. */
-function parsePdf(raw: unknown): PdfSessionBlock | null {
-  const p = asRecord(raw);
-  const docID = str(p.docID);
-  if (!docID) return null;
-  const out: PdfSessionBlock = { docID, documentStatus: String(p.documentStatus ?? "") };
-  if (p.errorCode != null) out.errorCode = String(p.errorCode);
-  if (p.outSha256 != null) out.outSha256 = String(p.outSha256);
-  if (p.size != null) out.size = Number(p.size);
-  if (p.expiresAt != null) out.expiresAt = String(p.expiresAt);
-  if (p.signatureLevel != null) out.signatureLevel = String(p.signatureLevel);
-  const sg = asRecord(p.signer);
-  if (sg.etsi != null) {
-    out.signer = { etsi: String(sg.etsi), certSerial: String(sg.certSerial ?? "") };
-    if (sg.onBehalfOf) out.signer.onBehalfOf = String(sg.onBehalfOf);
-    if (sg.claimedRole) out.signer.claimedRole = String(sg.claimedRole);
-  }
-  const v = asRecord(p.validation);
-  if (v.indication != null) {
-    out.validation = { indication: String(v.indication), ltv: v.ltv === true, signatures: Number(v.signatures ?? 0) };
-  }
-  return out;
 }
 
 /** rsassa-pss параметр — hashAlgorithm л заавал; бусад нь мэдээлэл. */

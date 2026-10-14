@@ -16,8 +16,8 @@ export const RP_ROUTES = {
   authDeviceLinkEtsi: { method: "POST", path: "/authentication/device-link/etsi/{semanticsIdentifier}" },
   signNotificationEtsi: { method: "POST", path: "/signature/notification/etsi/{semanticsIdentifier}" },
   signNotificationDocument: { method: "POST", path: "/signature/notification/document/{documentNumber}" },
-  pdfPrepare: { method: "POST", path: "/pdf/sign/prepare" },
-  pdfDocument: { method: "GET", path: "/pdf/sign/{sessionID}/document" },
+  signDeviceLinkEtsi: { method: "POST", path: "/signature/device-link/etsi/{semanticsIdentifier}" },
+  signDeviceLinkDocument: { method: "POST", path: "/signature/device-link/document/{documentNumber}" },
   orgRepresentations: { method: "GET", path: "/organization/representations/etsi/{personEtsi}" },
   session: { method: "GET", path: "/session/{sessionId}" },
   personCertificates: { method: "GET", path: "/certificates/etsi/{personEtsi}" },
@@ -30,15 +30,13 @@ export const RP_ROUTES = {
 } as const satisfies Record<string, RpRoute>;
 
 /**
- * CA-ийн гэрээнд (код + docs/TOKEN_AUTH.md, PADES_SIGNING.md §16.5) байгаа ч live `/.well-known/eid`-д хараахан жагсаагдаагүй замууд. Гэрээний
+ * CA-ийн гэрээнд (код + docs/TOKEN_AUTH.md, PADES_CLIENT_SIDE.md §4.3) байгаа ч live `/.well-known/eid`-д хараахан жагсаагдаагүй замууд. Гэрээний
  * тест эдгээрийг WARN болгоно (fail биш); discovery-д нэмэгдмэгц {@link RP_ROUTES} руу шилжүүлнэ.
  */
 export const RP_ROUTES_UNDISCOVERED = {
   tokenAuthChallenge: { method: "POST", path: "/token/auth/challenge" },
   tokenAuthVerify: { method: "POST", path: "/token/auth/verify" },
-  pdfTokenPrepare: { method: "POST", path: "/pdf/token/prepare" },
-  pdfTokenFinalize: { method: "POST", path: "/pdf/token/{signingID}/finalize" },
-  pdfTokenDocument: { method: "GET", path: "/pdf/token/{signingID}/document" },
+  pdfSignatures: { method: "POST", path: "/pdf/signatures" },
 } as const satisfies Record<string, RpRoute>;
 
 /** Template-ийн `{param}`-уудыг дарааллаар нь `encodeURIComponent` хийсэн `args`-аар орлуулна. */

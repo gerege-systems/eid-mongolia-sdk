@@ -1,0 +1,96 @@
+{
+  "generator": "scripts/pades-vectors/main.go (pades-client/1)",
+  "prepare": [
+    {
+      "name": "quartz-page-onbehalf",
+      "input": "base-quartz.pdf",
+      "options": {
+        "claimedRole": "Гүйцэтгэх захирал, Гэрэгэ Системс ХХК (NTRMN-6235972)",
+        "docId": "3f2504e0-4f89-41d3-9a0c-0305e82c3301",
+        "fileName": "Гэрээ №12.pdf",
+        "lang": "mn",
+        "reason": "Гэрэгэ Системс ХХК-ийг төлөөлж",
+        "signerName": "Бат Болд",
+        "signingTime": "2026-10-14T12:00:00+08:00",
+        "verifyPage": true
+      },
+      "dtbs": "93ba8ee7c37ec38da1105bf8ef40ac96e53697abbdac41e9a52ae21572a73e89",
+      "digest": "2ee483d76a1a516b208b571d6417c154b54fee80394bed23ab782ef372f07d9d",
+      "docId": "3f2504e0-4f89-41d3-9a0c-0305e82c3301"
+    },
+    {
+      "name": "objstm-nopage",
+      "input": "base-objstm.pdf",
+      "options": {
+        "docId": "3f2504e0-4f89-41d3-9a0c-0305e82c3302",
+        "signingTime": "2026-10-14T12:00:00+08:00"
+      },
+      "dtbs": "998c3b8ea507e5eb24e1e27cba3f7cd9169d7891fd5724d1ffe8bd8738390177",
+      "digest": "0e09d488252735dcc665e74ea0817933fa4015b035bb0db911bd53ae1088b8bf",
+      "docId": "3f2504e0-4f89-41d3-9a0c-0305e82c3302"
+    },
+    {
+      "name": "not-pdf",
+      "input": "leaf.pem",
+      "options": {},
+      "error": "PDF_INVALID"
+    },
+    {
+      "name": "bad-docid",
+      "input": "base-quartz.pdf",
+      "options": {
+        "docId": "NOT-A-UUID"
+      },
+      "error": "REQUEST_INVALID"
+    }
+  ],
+  "verify": [
+    {
+      "name": "desktop-quartz-1-dss",
+      "input": "quartz-1-dss.pdf",
+      "time": "2026-10-15T00:00:00Z",
+      "report": {
+        "indication": "invalid",
+        "signatures": [
+          {
+            "indication": "invalid",
+            "problems": [
+              "malformed_signature"
+            ],
+            "signer_name": "TEST SIGNER",
+            "claimed_name": "BAYAR BAT",
+            "signer_name_source": "certificate",
+            "claimed_time": "2026-10-14T12:56:45Z",
+            "covers_whole_document": false,
+            "extended_by_signatures_only": true,
+            "later_signatures": 0,
+            "visible_later_signature": false,
+            "chain_trusted": true,
+            "chain": [
+              "TEST SIGNER",
+              "PAdES Test Root"
+            ],
+            "certificate": {
+              "common_name": "TEST SIGNER",
+              "subject": "CN=TEST SIGNER,C=MN",
+              "issuer": "CN=PAdES Test Root,C=MN",
+              "serial": "3C955AF700DF589D3C686F39FA7C54612624A8F3",
+              "not_before": "2026-10-14T12:56:42Z",
+              "not_after": "2026-10-16T12:56:42Z",
+              "usage": "sign",
+              "issued_by_eid": true,
+              "revocation": {
+                "status": "good"
+              }
+            },
+            "signature_level": "PAdES-BASELINE-B",
+            "ltv": {
+              "complete": true,
+              "missing": []
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

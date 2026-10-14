@@ -640,67 +640,6 @@ test("sign.digestByEtsi / auth — onBehalfOf body-д орно", async () => {
   assert.equal("onBehalfOf" in bodies[1], false);
 });
 
-test("pdf.prepare — multipart request JSON (onBehalfOf) + pdf; хариу задлагдана", async () => {
-  let seenUrl = "";
-  let form: FormData | undefined;
-  let ctype: string | undefined;
-  const eid = new EidClient({
-    credentials: CREDS,
-    fetchImpl: async (url, init) => {
-      seenUrl = String(url);
-      form = init?.body as FormData;
-      ctype = (init?.headers as Record<string, string>)["Content-Type"];
-      return new Response(
-        JSON.stringify({
-          sessionID: "sess-1", docID: "doc-1", vc: { type: "alphaNumeric5", value: "48210" },
-          deviceLink: { sessionToken: "t", sessionSecret: "sec", deviceLinkBase: "https://ca.eidmongolia.mn/dl", digest: "ZA==", interactions: "W10=" },
-        }),
-        { status: 200 },
-      );
-    },
-  });
-  const pdf = new TextEncoder().encode("%PDF-1.7 test");
-  const s = await eid.pdf.prepare({
-    pdf, fileName: "Гэрээ №12.pdf", signer: { etsi: "PNOMN-12345678" }, flow: "device-link", onBehalfOf: "NTRMN-6235972",
-  });
-  assert.equal(seenUrl, "https://rp.eidmongolia.mn/pdf/sign/prepare");
-  assert.equal(ctype, undefined); // boundary-г fetch тавина
-  assert.ok(form instanceof FormData);
-  const req = JSON.parse(await (form!.get("request") as Blob).text());
-  assert.deepEqual(req, {
-    relyingPartyUUID: "rp-uuid", relyingPartyName: "Гэрээний систем", certificateLevel: "QUALIFIED",
-    signer: { etsi: "PNOMN-12345678" }, flow: "device-link", fileName: "Гэрээ №12.pdf", onBehalfOf: "NTRMN-6235972",
-  });
-  assert.equal((form!.get("request") as Blob).type, "application/json");
-  const part = form!.get("pdf") as Blob;
-  assert.equal(part.type, "application/pdf");
-  assert.deepEqual(new Uint8Array(await part.arrayBuffer()), pdf);
-  assert.equal(s.sessionId, "sess-1");
-  assert.equal(s.docId, "doc-1");
-  assert.equal(s.vc, "48210");
-  assert.equal(s.deviceLink?.sessionSecret, "sec");
-  assert.ok(s.receivedAt > 0);
-});
-
-test("pdf.document — байт буцаана; REPRESENTATION_REVOKED → ForbiddenError.code", async () => {
-  const bytes = new Uint8Array([0x25, 0x50, 0x44, 0x46]);
-  let seen = "";
-  const ok = new EidClient({
-    credentials: CREDS,
-    fetchImpl: async (url) => {
-      seen = String(url);
-      return new Response(bytes, { status: 200, headers: { "Content-Type": "application/pdf" } });
-    },
-  });
-  assert.deepEqual(await ok.pdf.document("sess-1"), bytes);
-  assert.equal(seen, "https://rp.eidmongolia.mn/pdf/sign/sess-1/document");
-  const revoked = new EidClient({
-    credentials: CREDS,
-    fetchImpl: async () => new Response(JSON.stringify({ error: "эрх хасагдсан", code: "REPRESENTATION_REVOKED" }), { status: 403 }),
-  });
-  await assert.rejects(() => revoked.pdf.document("sess-1"), (e: unknown) => e instanceof ForbiddenError && e.code === "REPRESENTATION_REVOKED");
-});
-
 test("organization.getRepresentations — зам ба хариу", async () => {
   let seen = "";
   const eid = new EidClient({
@@ -722,29 +661,6 @@ test("organization.getRepresentations — зам ба хариу", async () => {
   assert.equal(r.representations.length, 1);
   assert.equal(r.representations[0].orgEtsi, "NTRMN-6235972");
   assert.equal(r.representations[0].rightType, "ADMIN");
-});
-
-test("parseSessionResult — pdf блок (signer.onBehalfOf / claimedRole, FAILED errorCode)", () => {
-  const r = parseSessionResult({
-    state: "COMPLETE", result: { endResult: "OK" },
-    onBehalfOf: { orgEtsi: "NTRMN-6235972", orgName: "Гэрэгэ Системс ХХК", role: "ceo", rightType: "ADMIN" },
-    pdf: {
-      docID: "doc-1", documentStatus: "READY", outSha256: "ab", size: 1234, signatureLevel: "PAdES-BASELINE-LT",
-      signer: { etsi: "PNOMN-12345678", certSerial: "01", onBehalfOf: "NTRMN-6235972",
-        claimedRole: "Гүйцэтгэх захирал, Гэрэгэ Системс ХХК (NTRMN-6235972)" },
-      validation: { indication: "valid", ltv: true, signatures: 1 },
-    },
-  });
-  assert.equal(r.pdf?.documentStatus, "READY");
-  assert.equal(r.pdf?.signer?.onBehalfOf, "NTRMN-6235972");
-  assert.equal(r.pdf?.signer?.claimedRole, "Гүйцэтгэх захирал, Гэрэгэ Системс ХХК (NTRMN-6235972)");
-  assert.deepEqual(r.pdf?.validation, { indication: "valid", ltv: true, signatures: 1 });
-  assert.equal(r.onBehalfOf?.rightType, "ADMIN");
-  const failed = parseSessionResult({ state: "COMPLETE", result: { endResult: "OK" },
-    pdf: { docID: "doc-1", documentStatus: "FAILED", errorCode: "REPRESENTATION_REVOKED" } });
-  assert.equal(failed.pdf?.errorCode, "REPRESENTATION_REVOKED");
-  assert.equal(failed.pdf?.signer, undefined);
-  assert.equal(parseSessionResult({ state: "RUNNING" }).pdf, null);
 });
 
 // ── demo-гийн дутагдлууд (0.9.0) ──
@@ -866,37 +782,8 @@ test("validateSign — expectedFlowType: таарвал OK, зөрвөл/алг�
   assert.throws(() => V.validateSign(signed("QR"), createHash("sha512").update("x").digest("base64"), { hashAlgorithm: "SHA-512", expectedFlowType: "QR" }), ValidationError);
 });
 
-const pdfClient = (body: unknown) =>
-  new EidClient({ credentials: CREDS, fetchImpl: async () => new Response(JSON.stringify(body), { status: 200 }) });
-const PDF_IN = { pdf: new TextEncoder().encode("%PDF"), fileName: "a.pdf", signer: { etsi: "PNOMN-1" } } as const;
-
-test("pdf.prepare — digest (DTBS): push-д дээд түвшний digest; device-link-д deviceLink.digest; хуучин CA → undefined", async () => {
-  const push = await pdfClient({ sessionID: "s", docID: "d", vc: { value: "12345" }, digest: "REVOREI=" }).pdf.prepare(PDF_IN);
-  assert.equal(push.digest, "REVOREI=");
-  assert.equal(push.deviceLink, null);
-  const dl = await pdfClient({
-    sessionID: "s", docID: "d", vc: { value: "12345" },
-    deviceLink: { sessionToken: "t", sessionSecret: "x", deviceLinkBase: "https://ca.eidmongolia.mn/dl", digest: "ZA==", interactions: "W10=" },
-  }).pdf.prepare({ ...PDF_IN, flow: "device-link" });
-  assert.equal(dl.digest, "ZA==");
-  const old = await pdfClient({ sessionID: "s", docID: "d", vc: { value: "12345" } }).pdf.prepare(PDF_IN);
-  assert.equal(old.digest, undefined);
-  assert.equal("digest" in old, false);
-});
-
-test("pdf.documentVerified — outSha256 таарвал байт; зөрвөл / READY биш / hash алга → ValidationError", async () => {
-  const bytes = new TextEncoder().encode("%PDF-1.7 signed");
-  const sha = createHash("sha256").update(bytes).digest("hex");
-  const eid = new EidClient({ credentials: CREDS, fetchImpl: async () => new Response(bytes, { status: 200 }) });
-  assert.deepEqual(await eid.pdf.documentVerified("s", { docID: "d", documentStatus: "READY", outSha256: sha }), bytes);
-  assert.deepEqual(await eid.pdf.documentVerified("s", sha.toUpperCase()), bytes);
-  await assert.rejects(() => eid.pdf.documentVerified("s", { docID: "d", documentStatus: "READY", outSha256: "0".repeat(64) }), ValidationError);
-  await assert.rejects(() => eid.pdf.documentVerified("s", { docID: "d", documentStatus: "PENDING", outSha256: sha }), ValidationError);
-  await assert.rejects(() => eid.pdf.documentVerified("s", { docID: "d", documentStatus: "READY" }), ValidationError);
-});
-
 test("routePath — {param}-ийг encodeURIComponent-аар бөглөнө; тоо зөрвөл шиднэ", () => {
-  assert.equal(routePath(RP_ROUTES.pdfDocument, "a/b c"), "/pdf/sign/a%2Fb%20c/document");
+  assert.equal(routePath(RP_ROUTES.session, "a/b c"), "/session/a%2Fb%20c");
   assert.equal(routePath(RP_ROUTES.authDeviceLinkAnonymous), "/authentication/device-link/anonymous");
   assert.throws(() => routePath(RP_ROUTES.session));
   assert.throws(() => routePath(RP_ROUTES.session, "x", "y"));
