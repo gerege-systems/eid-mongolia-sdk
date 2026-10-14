@@ -30,8 +30,7 @@ export interface ValidateAuthOptions {
    * (verifier-тэй) ирсэн үр дүнг "Web2App"/"App2App"-аар, poll-оор ирснийг "QR"-аар шалга — товчоор
    * нээгдсэн session poll замаар OK болохгүй, callback-аар л дуусна.
    *
-   * ⚠️ Legacy `/dl?sessionId&vc` холбоосонд төрөл хамгаалагдаагүй — build 59 + `min_version=59` хүртэл
-   * энэ шалгалт relay-ээс бүрэн хамгаалахгүй.
+   * Legacy `/dl?sessionId&vc` холбоос 2026-10-07-нд серверээс хасагдсан — төрөл үргэлж authCode-оор хамгаалагдана.
    */
   expectedFlowType?: FlowType;
   /**
@@ -311,7 +310,7 @@ export class ResponseValidator {
 
 /**
  * ACSP_V2 payload-ийн `initialCallbackUrl` — CA урсгалаар шийднэ (Smart-ID: QR/Notification → `""`,
- * Web2App/App2App → RP-ийн callback; шилжилтийн үед legacy `/dl?sessionId` ба push-д RP-ийн callback).
+ * Web2App/App2App → RP-ийн callback).
  * Хариуны утгыг (`signature.initialCallbackUrl`) ашиглана, ГЭХДЭЭ зөвхөн `""` эсвэл RP-ийн session start-д
  * илгээсэн callback-тай байт-ижил бол — дурын утгад итгэхгүй. Web2App/App2App-д заавал RP-ийн callback.
  * Талбар алга (хуучин CA) → RP-ийн callback (өмнөх зан).

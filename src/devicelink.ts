@@ -1,4 +1,4 @@
-// LEGACY (v3-ийн өмнөх) — шинэ код `buildDeviceLink` (devicelinkv3.ts, backend) ашиглана.
+// LEGACY (v3-ийн өмнөх, сервер 2026-10-07-нд хассан) — `buildDeviceLink` (devicelinkv3.ts, backend) ашиглана.
 // Ижил төхөөрөмж (App2App / Web2App) — device-link session-оос иргэний утсан дээрх eID аппыг
 // нээх холбоос. CA-ийн гэрээ: `{deviceLinkBase}?sessionId=<uuid>&vc=<5 орон>` (deviceLinkBase нь
 // ж: https://ca.eidmongolia.mn/dl — Universal Link / App Link; апп суугаагүй бол /dl хуудас
@@ -22,9 +22,8 @@ const VC_RE = /^[0-9]{5}$/;
  * QR-д эсвэл «eID аппаар нээх» товчинд тавина.
  *
  * @deprecated Legacy статик холбоос — холбоосын төрөл (QR/Web2App) хамгаалагдаагүй, relay-д нээлттэй.
- * eID Mongolia 2.2.3 (build 59) гармагц сервер унтраана (`EID_DEVICE_LINK_LEGACY=false`). Шинэ код
- * backend-д {@link buildDeviceLink} (v3) ашиглана; build 59-өөс өмнөх апп v3 холбоосыг танихгүй тул
- * RP v3 рүү шилжих нь тохиргооны унтраалгаар (анхдагч legacy) хийгдэнэ.
+ * Сервер 2026-10-07-нд хассан: ийм холбоосоор нээгдсэн session-д утасны үйлдлийг `DEVICE_LINK_REQUIRED`-аар
+ * татгалзана. Backend-д {@link buildDeviceLink} (v3) ашиглана.
  *
  * @throws {DeviceLinkError} deviceLinkBase байхгүй / http(s) биш, sessionId UUID биш, vc 5 орон биш.
  */
@@ -83,6 +82,8 @@ export interface OpenOrShowQROptions {
  * Link-ийг алгасаж /dl хуудсыг нээдэг; тэр хуудас «Аппаар нээх» товч ба store холбоосыг санал болгоно.
  *
  * @throws {DeviceLinkError} холбоос угсрах боломжгүй бол ({@link deviceLink}).
+ * @deprecated Legacy {@link deviceLink} холбоос дээр тулгуурладаг — сервер 2026-10-07-нд хассан тул ажиллахгүй.
+ * QR-ийг backend-ийн `buildDeviceLink` (v3)-ээр, утсан дээр Web2App холбоосыг энгийн `<a href>`-ээр харуулна.
  */
 export function openOrShowQR(session: DeviceLinkInput, opts: OpenOrShowQROptions): "opened" | "qr" {
   const link = deviceLink(session);
