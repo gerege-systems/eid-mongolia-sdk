@@ -289,7 +289,7 @@ export function buildRegisterBody(input: RegisterSignatureInput): Record<string,
 }
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/** CA-ийн өөрийн PAdES session-тэй ижил утасны текст (server/internal/service/memory/pades.go). */
+/** Утасны текстийн угтвар — CA verify хуудас файлын нэрийг үүнээс гаргана (server/internal/service/memory/websign.go `fileNameFromSession`). */
 const PDF_DISPLAY_TEXT = "Баримтад гарын үсэг зурах: ";
 const PDF_MAX_FILE_NAME = 120;
 
@@ -417,7 +417,7 @@ export class SignApi {
 
   /**
    * Клиент талын PAdES (`@gerege-systems/eid-mongolia-sdk/pades`): `prepare()`-ийн DTBS-д иргэнээр гарын үсэг зуруулна.
-   * PDF CA руу ОЧИХГҮЙ — зөвхөн 32 байт. CA-ийн өөрийн PAdES session-тэй ижил: `RAW_DIGEST_SIGNATURE`,
+   * PDF CA руу ОЧИХГҮЙ — зөвхөн 32 байт. Session: `RAW_DIGEST_SIGNATURE`,
    * `sha256WithRSAEncryption` (CMS-д PKCS#1 v1.5; legacy ECDSA иргэнд сервер `ecdsa-with-SHA256`), `displayTextAndPIN`
    * «Баримтад гарын үсэг зурах: <fileName>» (60 тэмдэгтэд тайрна).
    *
@@ -474,9 +474,11 @@ export class SignApi {
   /**
    * `POST /pdf/signatures` — `pades.complete()`-ийн дараа CMS-ийг CA-д бүртгэнэ (`/verify/{docID}`, иргэний түүх). PDF
    * илгээгдэхгүй. SIGN эрх. CA CMS-ийг шалгана: 04-ийн SIGN cert, session digest = SHA-256(signedAttrs), claimedRole ↔
-   * төлөөлөл. Алдаа: 403 `REPRESENTATION_REVOKED`, 409 `CLAIMED_ROLE_MISMATCH` / `REGISTRY_CONFLICT` /
-   * `DOC_ID_CONFLICT` / `PDF_FOREIGN_SIGNATURE` (`ApiError.code`). Бүртгэлгүй файл ч Adobe/EU DSS-д хүчинтэй — зөвхөн
-   * `/verify` «бүртгэлгүй» гэнэ.
+   * төлөөлөл. Алдаа (`ApiError.code`; CA `pades_register.go`): 400 `REQUEST_INVALID` / `CMS_INVALID` /
+   * `SIGNATURE_INVALID` / `TIMESTAMP_INVALID`; 403/404 onBehalfOf-ийн код (`REPRESENTATION_REVOKED` г.м.); 404
+   * `DOC_NOT_FOUND`; 409 `SIGNER_MISMATCH` / `SIGNER_CERT_INVALID` / `CLAIMED_ROLE_MISMATCH` / `DOC_ID_CONFLICT` /
+   * `REGISTRY_CONFLICT` / `PRIOR_MISMATCH` / `SESSION_MISMATCH` / `SESSION_NOT_COMPLETE` / `SESSION_FAILED`; 413
+   * `REQUEST_TOO_LARGE`; 429 `RATE_LIMITED`. Бүртгэлгүй файл ч Adobe/EU DSS-д хүчинтэй — зөвхөн `/verify` «бүртгэлгүй» гэнэ.
    */
   async registerSignature(input: RegisterSignatureInput): Promise<RegisterSignatureResult> {
     const body = buildRegisterBody(input);

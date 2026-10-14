@@ -178,8 +178,7 @@ test("ApiError — 429/503 кодууд retryable + retryAfterMs + headers", asy
   const call = (eid: EidClient) => eid.sign.digestByEtsi("PNOMN-1", sha256Base64("x"), []);
   for (const [status, retry, code] of [
     [429, "5", "RATE_LIMITED"],
-    [503, "60", "LTV_UNAVAILABLE"],
-    [503, "30", "TSA_UNAVAILABLE"],
+    [503, "5", "ISSUANCE_PENDING"],
     [503, "5", "STATE_UNAVAILABLE"],
   ] as const) {
     const { eid } = client({ status, body: { error: "түр", code }, headers: { "Retry-After": retry, "X-Request-Id": "req-1" } });
@@ -190,7 +189,7 @@ test("ApiError — 429/503 кодууд retryable + retryAfterMs + headers", asy
         e.headers?.get("X-Request-Id") === "req-1",
     );
   }
-  assert.equal(RETRYABLE_ERROR_CODES.length, 7);
+  assert.equal(RETRYABLE_ERROR_CODES.length, 3);
   const conflict = client({ status: 409, body: { error: "x", code: "DOC_ID_MISMATCH" } });
   await assert.rejects(() => call(conflict.eid), (e: unknown) => e instanceof ApiError && !e.retryable);
   const proxy = client({ status: 503, body: "<html>bad gateway</html>", headers: { "Retry-After": "10" } });

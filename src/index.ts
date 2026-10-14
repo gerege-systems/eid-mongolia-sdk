@@ -1,4 +1,4 @@
-// @eid-mongolia/sdk — нийтийн гадаргуу.
+// @gerege-systems/eid-mongolia-sdk — нийтийн гадаргуу.
 
 export { EidClient, DEFAULT_BASE_URL, resolveBaseUrl, type ClientConfig } from "./client.js";
 export { Http, type HttpConfig } from "./http.js";

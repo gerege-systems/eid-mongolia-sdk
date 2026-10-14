@@ -30,16 +30,16 @@ export const RP_ROUTES = {
   tokenCertificate: { method: "POST", path: "/token/certificate" },
   tokenCertificateResult: { method: "GET", path: "/token/certificate/{sessionID}" },
   pdfSignatures: { method: "POST", path: "/pdf/signatures" },
-} as const satisfies Record<string, RpRoute>;
-
-/**
- * CA-ийн гэрээнд (код + docs/TOKEN_AUTH.md, PADES_CLIENT_SIDE.md §4.3) байгаа ч live `/.well-known/eid`-д хараахан жагсаагдаагүй замууд. Гэрээний
- * тест эдгээрийг WARN болгоно (fail биш); discovery-д нэмэгдмэгц {@link RP_ROUTES} руу шилжүүлнэ.
- */
-export const RP_ROUTES_UNDISCOVERED = {
   tokenAuthChallenge: { method: "POST", path: "/token/auth/challenge" },
   tokenAuthVerify: { method: "POST", path: "/token/auth/verify" },
 } as const satisfies Record<string, RpRoute>;
+
+/**
+ * CA-ийн гэрээнд (код + docs) байгаа ч live `/.well-known/eid`-д хараахан жагсаагдаагүй замууд. Гэрээний тест эдгээрийг
+ * WARN болгоно (fail биш); discovery-д нэмэгдмэгц {@link RP_ROUTES} руу шилжүүлнэ. Одоогоор хоосон — `/token/auth/*`
+ * discovery-ийн `endpoints.token.auth_challenge` / `auth_verify`-д орсон тул {@link RP_ROUTES}-д.
+ */
+export const RP_ROUTES_UNDISCOVERED: Readonly<Record<string, RpRoute>> = {};
 
 /**
  * `POST /pdf/signatures`-ийн биеийн талбарууд — CA `server/internal/dto/pdf.go` `PDFSignatureRegisterRequest`-ийн JSON

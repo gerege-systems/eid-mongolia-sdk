@@ -64,7 +64,7 @@ export class ApiError extends EidError {
   readonly headers?: Headers;
   /**
    * Retry-After (мс, секунд эсвэл HTTP-огноо задалсан); байхгүй/буруу бол undefined. CA түр алдаанд (429
-   * PDF_PREPARE_BUSY / RATE_LIMITED, 503 DOCUMENT_PENDING / TSA_UNAVAILABLE / LTV_UNAVAILABLE г.м.) тавина.
+   * RATE_LIMITED, 503 STATE_UNAVAILABLE / ISSUANCE_PENDING г.м.) тавина.
    */
   readonly retryAfterMs?: number;
   constructor(
@@ -91,7 +91,7 @@ export class ApiError extends EidError {
 
 /**
  * 409 `NO_SIGNING_CERTIFICATE` — иргэнд (баримтад) идэвхтэй төхөөрөмж / SIGN credential / хүчинтэй гарын үсгийн
- * гэрчилгээ алга: sign ба certificate-choice session start, `/pdf/sign/prepare`. Session үүсээгүй. Танихгүй
+ * гэрчилгээ алга: sign ба certificate-choice session start. Session үүсээгүй. Танихгүй
  * лавлагаанд ч ижил хариу (бүртгэл задлахгүй) — хэрэглэгчид «eID гарын үсгийн гэрчилгээгүй» гэж харуулна.
  */
 export class NoSigningCertificateError extends ApiError {}
@@ -107,25 +107,17 @@ export class CertChoiceInvalidError extends ApiError {}
 export class RequestInvalidError extends ApiError {}
 
 /**
- * CA-ийн түр (давтаж болох) алдааны кодууд — `ApiError.code`. PDF_PREPARE_BUSY (429 prepare, Retry-After 5),
- * DOCUMENT_PENDING (503 document, 5), TSA_UNAVAILABLE (503, 30), LTV_UNAVAILABLE (503, 60), RATE_LIMITED (429 токен),
- * STATE_UNAVAILABLE (503 токен), ISSUANCE_PENDING (503 токены үр дүн, 5).
+ * CA-ийн түр (давтаж болох) алдааны кодууд — `ApiError.code`. RATE_LIMITED (429 `/pdf/signatures`, `/token/auth/*`),
+ * STATE_UNAVAILABLE (503 session start, токен, бүртгэл; Retry-After 5), ISSUANCE_PENDING (503 токены үр дүн, 5).
+ * TSA_UNAVAILABLE / LTV_UNAVAILABLE нь CA-ийн биш — клиент талын `PadesError.code` (`/pades`, өөрийн `retryable`).
  */
 export type RetryableErrorCode =
-  | "PDF_PREPARE_BUSY"
-  | "DOCUMENT_PENDING"
-  | "TSA_UNAVAILABLE"
-  | "LTV_UNAVAILABLE"
   | "RATE_LIMITED"
   | "STATE_UNAVAILABLE"
   | "ISSUANCE_PENDING";
 
 /** {@link RetryableErrorCode}-ийн бүх утга. */
 export const RETRYABLE_ERROR_CODES: readonly RetryableErrorCode[] = [
-  "PDF_PREPARE_BUSY",
-  "DOCUMENT_PENDING",
-  "TSA_UNAVAILABLE",
-  "LTV_UNAVAILABLE",
   "RATE_LIMITED",
   "STATE_UNAVAILABLE",
   "ISSUANCE_PENDING",
@@ -147,8 +139,8 @@ export function parseRetryAfter(value: string | null | undefined, now: number = 
  * Байгууллагын нэрийн өмнөөс (`onBehalfOf`) урсгалын татгалзлын кодууд — `ForbiddenError.code` /
  * `ApiError.code`-д ирнэ. 403: REPRESENTATION_DENIED (идэвхтэй төлөөлөгч биш), REPRESENTATION_PENDING (PIN2-оор
  * баталгаажуулаагүй), REPRESENTATION_EXPIRED (хугацааны гадна), ORG_NOT_ACTIVE, SIGNER_UNIDENTIFIED (anonymous
- * session); 404: ORG_NOT_FOUND; PDF баримт татахад 403 REPRESENTATION_REVOKED (prepare-ээс хойш эрх хасагдсан —
- * баримт үүсээгүй).
+ * session); 404: ORG_NOT_FOUND; 403 REPRESENTATION_REVOKED — `POST /pdf/signatures` (session-оос хойш төлөөлөл
+ * хасагдсан, бүртгэгдээгүй) ба токены гэрчилгээ олголт (TOKEN_ISSUE).
  */
 export type OnBehalfErrorCode =
   | "REPRESENTATION_DENIED"
@@ -187,7 +179,7 @@ export class NetworkError extends EidError {
 }
 
 /**
- * Хариуны бие SDK-ийн хязгаараас их (JSON 4 MiB, PDF `pdfMaxBytes`) — бие таслагдаж задлагдахгүй. `op` — method +
+ * Хариуны бие SDK-ийн хязгаараас их (JSON 4 MiB) — бие таслагдаж задлагдахгүй. `op` — method +
  * таних тэмдэггүй зам.
  */
 export class ResponseTooLargeError extends EidError {
