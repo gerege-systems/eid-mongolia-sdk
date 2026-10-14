@@ -294,23 +294,25 @@ const who = await eid.token.authVerify(ch.challengeId, authCertDer, rs);
 
 ## 3d. PDF гарын үсэг (PAdES, клиент тал) — `@gerege-systems/eid-mongolia-sdk/pades`
 
-**PDF eID-ийн сервер рүү ОЧИХГҮЙ** (Smart-ID / DigiDoc загвар). Баримтыг таны тал (браузер эсвэл Node) Go core-ийн
-WebAssembly-аар угсарна; CA зөвхөн 32 байт DTBS-д гарын үсгийн session (ердийн `RAW_DIGEST_SIGNATURE`) ба CMS-ийн
-бүртгэлийг хийнэ. Гаралт: PAdES-BASELINE-LT (цагийн тэмдэг tsa.timeserver.mn, OCSP/CRL DSS-д), Adobe / EU DSS-д
-«LTV enabled», баталгаажуулах (QR) хуудастай. Бүх платформд (Go, iOS, Android, Windows) нэг core — гаралт байт-ижил.
+**PDF eID-ийн сервер рүү ОЧИХГҮЙ** (Smart-ID / DigiDoc загвар). Баримтыг таны тал (браузер эсвэл Node) НАТИВ
+TypeScript-ээр (WASM-гүй, Web Crypto) угсарна; CA зөвхөн 32 байт DTBS-д гарын үсгийн session (ердийн
+`RAW_DIGEST_SIGNATURE`) ба CMS-ийн бүртгэлийг хийнэ. Гаралт: PAdES-BASELINE-LT (цагийн тэмдэг tsa.timeserver.mn, OCSP/CRL
+DSS-д), Adobe / EU DSS-д «LTV enabled», баталгаажуулах (QR) хуудастай (mn анхдагч / en). Go reference
+(`eid-mongolia-sdk-go/pades`, профайл `pades-client/1`)-тэй **байт-ижил** — conformance golden-оор CI-д шалгагдана.
 
 | Функц | Хаана | Тайлбар |
 |---|---|---|
-| `prepare(pdf, { signerCert, claimedRole?, verifyPage?, fileName?, docId?, … })` | браузер / Node | `{ dtbs, digest, docId, state }` — сүлжээгүй |
+| `prepare(pdf, { signerCert, claimedRole?, verifyPage?, fileName?, lang?, docId?, … })` | браузер / Node | `{ dtbs, digest, docId, state }` — сүлжээгүй |
 | `eid.signPdfDigest({ dtbs, fileName, signer, flow?, onBehalfOf? })` | RP backend | DTBS-д гарын үсгийн session (push эсвэл device-link) |
 | `complete(state, signature)` | браузер / Node | TSA + OCSP/CRL → `{ pdf, cms, docId, outSha256, inSha256, hasPage, pageSha256, … }` |
 | `eid.registerSignature({ docID, sessionId, cms, revIndex, sigRevSha256, … })` | RP backend | `POST /pdf/signatures` — `/verify/{docID}` бүртгэл |
-| `verify(pdf)` | браузер / Node | гарын үсгүүдийн тайлан (CA-ийн нийтийн шалгагчийн хэлбэр) |
 
-Үндсэн entry WASM-ыг агуулахгүй (PDF ашиглахгүй RP-д bundle томрохгүй); `/pades` WASM-аа (~24 MB, gzip ~8 MB) анхны
-дуудлагад залхуугаар ачаална. Node ≥ 18, орчин үеийн хөтөч. Браузерийн CSP: `script-src 'wasm-unsafe-eval'`,
-`connect-src https://tsa.timeserver.mn https://ocsp.eidmongolia.mn https://crl.eidmongolia.mn`. Bundler (Vite / webpack 5)
-`new URL("./eid-pades.wasm", import.meta.url)`-ийг asset болгон хуулна; өөр байрлалаас бол `loadPades({ wasm: url })`.
+`/pades` хөтчийн bundle ~125 KB gzip (Noto Sans фонт asset-тэй, CI-д ≤ 300 KB); үндсэн entry үүнийг агуулахгүй. Node ≥ 18,
+орчин үеийн хөтөч. Браузерийн CSP: `connect-src https://tsa.timeserver.mn https://ocsp.eidmongolia.mn
+https://crl.eidmongolia.mn`. Хөтөчид гэрчилгээний `http://` AIA/CDP-г зөвхөн эдгээр хостод `https://` болгоно; үндэсний
+CA-ийн CRL (`esign.gov.mn`) нь `crl.eidmongolia.mn` толин хуулбараас (бүх платформд). Шалгагч (`verify`) энд
+**байхгүй** — бүрэн криптограф шалгалт Go backend SDK-д; `prepare` нь өмнөх гарын үсгийг «хөнгөн» шалгуураар (бүтэц,
+CMS гарын үсэг, eID олгогч, timestamp, DSS) л шалгана.
 
 **Зурагчийн гэрчилгээ.** `prepare` иргэний SIGN гэрчилгээг (`signingCertificateV2`) шаарддаг тул session-оос ӨМНӨ
 хэрэгтэй — одоогоор `eid.person.certificates(etsi)` (`PKI_READ`; `type: "SIGN"`, `status: "VALID"`, `keyMedium: "MOBILE"`
@@ -332,7 +334,7 @@ await idb.put("pades-state", p.state);                                          
 const s = await api("/sign/pdf/start", { dtbs: b64(p.dtbs), documentNumber, fileName: "Гэрээ №12.pdf" });
 showToUser(s.vc);                                                                // эсвэл backend-ийн QR (§4)
 const { signature } = await api(`/sign/pdf/${s.sessionId}/result`);              // backend poll + validateSign
-const done = await complete(p.state, signature);                                 // TSA + LTV + self-validation
+const done = await complete(p.state, signature);                                 // TSA + OCSP/CRL + DSS
 await api(`/sign/pdf/${s.sessionId}/register`, {
   docID: done.docId, cms: b64(done.cms), outSha256: done.outSha256, inSha256: done.inSha256,
   hasPage: done.hasPage, pageSha256: done.pageSha256,
@@ -387,8 +389,9 @@ writeFileSync("signed.pdf", done.pdf);
 `PadesError.code` (тогтвортой, бүх платформд ижил): `PDF_INVALID`, `PDF_ENCRYPTED`, `PDF_LOCKED` (DocMDP P=1),
 `PDF_TOO_LARGE`, `PDF_TOO_MANY_SIGNATURES`, `PDF_PRIOR_SIGNATURE_INVALID`, `PDF_FOREIGN_SIGNATURE`, `SIGNER_INVALID`,
 `REQUEST_INVALID`, `SIGNATURE_INVALID` (state хэвээр — дахин зуруулж болно), `TSA_UNAVAILABLE`, `LTV_UNAVAILABLE`
-(`retryable`), `SELF_VALIDATION_FAILED`, `PLACEHOLDER_OVERFLOW`, `STATE_INVALID`, `WASM_UNAVAILABLE`, `INTERNAL`.
-`state` нь бэлтгэсэн PDF-ийг агуулна — PDF-тэй ижил нууцлалтай хадгал.
+(`retryable`), `SELF_VALIDATION_FAILED`, `PLACEHOLDER_OVERFLOW`, `STATE_INVALID`, `INTERNAL`.
+`state` нь бэлтгэсэн PDF-ийг агуулна — PDF-тэй ижил нууцлалтай хадгал. Формат нь Go SDK-тай ижил (хөтөчид `prepare`,
+Go backend-д `complete` хийж болно).
 
 0.14.0-д `eid.pdf` (`prepare`, `document`, `documentVerified`, `tokenPrepare`, `tokenFinalize`, `tokenDocument`) ба
 `pdfTimeoutMs` / `pdfMaxBytes` устсан — PDF upload endpoint-ууд CA-д байхгүй болно.
@@ -539,13 +542,16 @@ const eid = new EidClient({
 
 ```bash
 npm install
-npm run build:wasm  # Go core → wasm/eid-pades.wasm (Go 1.25.5; scripts/build-pades-wasm.sh-д бэхэлсэн Go SDK commit)
-npm run lint        # tsc --noEmit
-npm test            # build + node --test (WASM байхгүй бол golden тест skip)
+npm run lint          # tsc --noEmit
+npm test              # build + node --test (pades golden — Go reference-тэй байт-ижил)
+npm run golden:check  # test/fixtures/pades/golden + src/pades/assets ↔ бэхэлсэн Go commit
+npm run size:pades    # /pades хөтчийн bundle gzip ≤ 300 KB
 ```
 
-`/pades`-ийн golden vector (`test/fixtures/pades/vectors.json`) НАТИВ Go core-оор гарна: `npm run build:wasm -- --vectors`.
-WASM-ын гаралт түүнтэй байт-ижил байх ёстой (тестийн PKI — бодит гэрчилгээ биш).
+`/pades`-ийн conformance fixture (golden: оролт, тестийн PKI-ийн гэрчилгээ, TSA/OCSP/CRL-ийн тогтмол хариу, хүлээгдэх
+sha256) ба фонт/гинжийн asset-ийг Go reference-ээс `node scripts/sync-pades-golden.mjs` хуулна (`GO_SDK_COMMIT` —
+tag `pades-golden-vN`); CI `--check`-ээр бэхэлсэн commit-тэй тулгана. Профайл: Go репогийн `pades/PROFILE.md`,
+`PAGE_SPEC.md`, `PRECHECKS.md`, `WIRE.md`.
 
 ### Гэрээний шалгалт
 
