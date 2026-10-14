@@ -383,6 +383,9 @@ test("withReturnHint: iOS/Android хөтөч, танихгүй бол хэвээ
 // ── G1: регистрийн oracle — decoy + доод хугацаа ──
 
 const keysOf = (o: object) => Object.keys(o).sort();
+// mock.timers({apis: [..., "Date"]}) — Node ≥ 20.4 (18-д хуучин API, Date-гүй).
+const [NODE_MAJOR, NODE_MINOR] = process.versions.node.split(".").map(Number) as [number, number];
+const MOCK_DATE = NODE_MAJOR > 20 || (NODE_MAJOR === 20 && NODE_MINOR >= 4);
 const settle = () => new Promise<void>((r) => setImmediate(r));
 
 test("push decoy: eID татгалзсан дугаар бодит push-тэй ижил хэлбэр; status PENDING (eID-ээс асуухгүй) → EXPIRED", async () => {
@@ -425,7 +428,7 @@ test("push decoy: eID татгалзсан дугаар бодит push-тэй �
   assert.ok(!JSON.stringify(events).includes("12345678") && !JSON.stringify(events).includes("87654321"));
 });
 
-test("push floor: бодит ба decoy хоёулаа ≥ 1 с (хуурмаг цаг); qr-д хамаарахгүй; pushFloorMs: 0 унтраана", { skip: !mock.timers && "mock.timers — Node ≥ 20.4" }, async () => {
+test("push floor: бодит ба decoy хоёулаа ≥ 1 с (хуурмаг цаг); qr-д хамаарахгүй; pushFloorMs: 0 унтраана", { skip: !MOCK_DATE && "mock.timers (Date) — Node ≥ 20.4" }, async () => {
   mock.timers.enable({ apis: ["setTimeout", "Date"] });
   try {
     for (const refuse of [undefined, "json400", "500"] as const) {
