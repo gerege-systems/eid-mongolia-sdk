@@ -16,6 +16,7 @@ import {
   ForbiddenError,
   NetworkError,
   RETRYABLE_ERROR_CODES,
+  ResponseTooLargeError,
   ResponseValidator,
   ValidationError,
   buildAcspV2Payload,
@@ -363,7 +364,8 @@ test("validator — checkKeyUsage: auth → clientAuth, sign → nonRepudiation"
   strict.validateAuth(a.result, a.acsp);
   const wrong = signedAuth(SIGN.key, SIGN.cert);
   assert.throws(() => strict.validateAuth(wrong.result, wrong.acsp), (e: unknown) => e instanceof ValidationError && /clientAuth/.test(e.message));
-  trusted().validateAuth(wrong.result, wrong.acsp); // анхдагч — шалгахгүй
+  // checkKeyUsage=false ч EKU-г гинжийн шалгалт (auth → clientAuth) үргэлж шалгана (0.11.0-аас).
+  assert.throws(() => trusted().validateAuth(wrong.result, wrong.acsp), (e: unknown) => e instanceof ValidationError && /ExtKeyUsage/.test(e.message));
   const s = signedDigest(SIGN.key, SIGN.cert);
   strict.validateSign(s.result, s.digest);
   const sAuth = signedDigest(AUTH.key, AUTH.cert);
@@ -451,4 +453,79 @@ test("AuthenticationError — CA-ийн code/body vs proxy 401", async () => {
     () => proxy.eid.session.poll("x", 1000),
     (e: unknown) => e instanceof AuthenticationError && e.code === undefined && e.serverMessage === undefined && /html/.test(e.body ?? ""),
   );
+});
+
+// ── 0.11.0: хариуны хэмжээ, representations raw, токены PAdES (Go SDK 0.1.3-тэй ижил) ──
+
+test("хариуны хэмжээ — JSON > 4 MiB, pdfMaxBytes → ResponseTooLargeError (таслахгүй)", async () => {
+  const MAX = 4 << 20;
+  const big = `{"personEtsi":"PNOMN-1","pad":"${"a".repeat(MAX)}"}`;
+  const { eid } = client({ body: big });
+  await assert.rejects(() => eid.organization.getRepresentations("PNOMN-1"),
+    (e: unknown) => e instanceof ResponseTooLargeError && e.limit === MAX && !e.message.includes("PNOMN-1"));
+  const head = `{"personEtsi":"PNOMN-1","pad":""}`;
+  const exact = `{"personEtsi":"PNOMN-1","pad":"${"a".repeat(MAX - head.length)}"}`;
+  await client({ body: exact }).eid.organization.getRepresentations("PNOMN-1");
+  // Content-Length-аар эрт татгалзана.
+  const declared = client(() => ({ body: "x", headers: { "content-length": String(MAX + 1) } }));
+  await assert.rejects(() => declared.eid.organization.getRepresentations("PNOMN-1"), ResponseTooLargeError);
+
+  const pdf = "x".repeat(2048);
+  await assert.rejects(() => client({ body: pdf }, { pdfMaxBytes: 1024 }).eid.pdf.document("s"),
+    (e: unknown) => e instanceof ResponseTooLargeError && e.limit === 1024);
+  await assert.rejects(() => client({ body: pdf }, { pdfMaxBytes: 1024 }).eid.pdf.tokenDocument("s"), ResponseTooLargeError);
+  assert.equal((await client({ body: pdf }, { pdfMaxBytes: 2048 }).eid.pdf.document("s")).length, 2048);
+  assert.equal((await client({ body: pdf }).eid.pdf.document("s")).length, 2048); // анхдагч 64 MiB
+});
+
+test("getRepresentations — raw", async () => {
+  const { eid } = client({ body: { personEtsi: "PNOMN-1", representations: [{ orgEtsi: "NTRMN-1" }], future: { x: 1 } } });
+  const r = await eid.organization.getRepresentations("PNOMN-1");
+  assert.equal(r.representations.length, 1);
+  assert.deepEqual((r.raw as Record<string, unknown>).future, { x: 1 });
+});
+
+test("pdf.tokenPrepare / tokenFinalize / tokenDocument (USB токены PAdES)", async () => {
+  const hashToSign = createHash("sha256").update("dtbs").digest();
+  let form: FormData | undefined;
+  const calls: { url: string; method: string; body?: string }[] = [];
+  const eid = new EidClient({
+    credentials: CREDS,
+    trust: { allowUntrusted: true },
+    fetchImpl: async (url, init) => {
+      const u = String(url);
+      calls.push({ url: u, method: String(init?.method), body: typeof init?.body === "string" ? init.body : undefined });
+      if (u.endsWith("/pdf/token/prepare")) {
+        form = init?.body as FormData;
+        return Response.json({ signingID: "11111111-1111-4111-8111-111111111111", docID: "d", hashToSign: hashToSign.toString("base64"),
+          hashAlgorithm: "SHA-256", signatureAlgorithm: "ecdsa-with-SHA256", signatureFormat: "RAW_RS", expiresAt: "2026-10-14T12:10:00+08:00" });
+      }
+      if (u.endsWith("/finalize")) return Response.json({ docID: "d", documentStatus: "READY", outSha256: "00".repeat(32), size: 3 });
+      if (u.endsWith("/document")) return new Response("PDF");
+      return new Response("", { status: 404 });
+    },
+  });
+  const cert = new Uint8Array(AUTH.cert.raw);
+  const s = await eid.pdf.tokenPrepare({ pdf: new TextEncoder().encode("%PDF-1.7"), fileName: "гэрээ.pdf", signerEtsi: "PNOMN-12345678",
+    certificate: cert, onBehalfOf: "NTRMN-1" });
+  assert.equal(s.signingId, "11111111-1111-4111-8111-111111111111");
+  assert.deepEqual(Buffer.from(s.hashToSign), hashToSign);
+  assert.equal(s.signatureFormat, "RAW_RS");
+  const req = JSON.parse(await (form!.get("request") as Blob).text()) as Record<string, unknown>;
+  assert.deepEqual(req, { relyingPartyUUID: CREDS.rpUUID, relyingPartyName: CREDS.rpName, signer: { etsi: "PNOMN-12345678" },
+    certificate: Buffer.from(cert).toString("base64"), fileName: "гэрээ.pdf", onBehalfOf: "NTRMN-1" });
+  assert.equal(await (form!.get("pdf") as Blob).text(), "%PDF-1.7");
+
+  const sig = new Uint8Array(64).fill(7);
+  const blk = await eid.pdf.tokenFinalize(s.signingId, sig);
+  assert.equal(blk.documentStatus, "READY");
+  const fin = calls.at(-1)!;
+  assert.match(fin.url, /\/pdf\/token\/11111111-1111-4111-8111-111111111111\/finalize$/);
+  assert.deepEqual(JSON.parse(fin.body!), { signature: Buffer.from(sig).toString("base64") });
+  await assert.rejects(() => eid.pdf.tokenFinalize(s.signingId, sig.subarray(0, 63)), /64 байт/);
+  assert.equal(new TextDecoder().decode(await eid.pdf.tokenDocument(s.signingId)), "PDF");
+  await assert.rejects(() => eid.pdf.tokenPrepare({ pdf: new Uint8Array([1]), fileName: "", signerEtsi: "", certificate: new Uint8Array() }));
+  const bad = client({ body: { signingID: "x", hashToSign: "AAAA" } });
+  await assert.rejects(() => bad.eid.pdf.tokenPrepare({ pdf: new Uint8Array([1]), fileName: "a.pdf", signerEtsi: "PNOMN-1", certificate: new Uint8Array([1]) }),
+    (e: unknown) => e instanceof ValidationError && /hashToSign/.test(e.message));
 });

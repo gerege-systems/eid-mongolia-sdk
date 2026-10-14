@@ -13,7 +13,7 @@
 import { X509Certificate, constants, createHash, publicDecrypt, verify, type KeyObject } from "node:crypto";
 import { buildAcspV2Payload, hashLen, nodeHash } from "./crypto.js";
 import { SessionFailedError, ValidationError } from "./errors.js";
-import { certExtension, oidOf, parseSubject, tlv, type CertSubject } from "./subject.js";
+import { certExtension, certExtensions, oidOf, parseSubject, tlv, type CertSubject } from "./subject.js";
 import type { AcspContext, CertificateLevel, FlowType, SessionResult } from "./types.js";
 
 /**
@@ -333,7 +333,7 @@ export class ResponseValidator {
         );
       }
     } else {
-      this.verifyChain(leaf);
+      this.verifyChain(leaf, protocol === "ACSP_V2" ? EKU_CLIENT_AUTH : EKU_EMAIL_PROTECTION);
     }
     this.checkIssuer(leaf);
     return leaf;
@@ -383,23 +383,40 @@ export class ResponseValidator {
     if (got < need) throw new ValidationError(`Гэрчилгээний түвшин хүрэлцэхгүй: ${level} < ${this.requiredLevel}`);
   }
 
-  /** leaf-ээс эхлэн issuer-ийг intermediates/anchors дотроос олж, anchor хүртэл chain зангидна. */
-  private verifyChain(leaf: X509Certificate): void {
-    let current = leaf;
-    const pool = [...this.intermediates, ...this.anchors];
-    for (let depth = 0; depth < 8; depth++) {
-      // current-ийг trust anchor аль нэг шууд гаргасан уу? (M5: issuer нь CA байх ёстой)
-      for (const anchor of this.anchors) {
-        if (isCa(anchor) && current.checkIssued(anchor) && current.verify(anchor.publicKey)) return;
+  /**
+   * RFC 5280 замын шалгалт (Go SDK-ийн `x509.Certificate.Verify`-тэй ижил дүрэм): leaf-ээс trust anchor хүртэлх
+   * замыг intermediates/anchors-оос (backtracking-тай) угсарна. Issuer бүр: subject = child.issuer, AKI/SKI таарах,
+   * гарын үсэг, CA (basicConstraints CA:TRUE), KeyUsage тавьсан бол keyCertSign, **pathLenConstraint** (доорх
+   * завсрын CA-ийн тоо), хүчинтэй хугацаа, EKU тавьсан бол `usage` / anyExtendedKeyUsage агуулах. Leaf болон CA
+   * бүрийн үл таних **critical extension** → татгалзана. **Name constraints**-ийг SDK үнэлдэггүй — гинжинд байвал
+   * fail-closed (CA-ийн бодит гинж 01–04-т алга). Цаг = now, leaf-ийн хүчинтэй хугацаанд хавчсан (`clockSkewMs`-ийн
+   * хүрээнд; leaf-ийн хугацааг checkValidity шалгасан). certificatePolicies шалгахгүй (Go-той ижил).
+   */
+  private verifyChain(leaf: X509Certificate, usage: string): void {
+    const now = Math.min(Math.max(Date.now(), Date.parse(leaf.validFrom)), Date.parse(leaf.validTo));
+    const leafReason = criticalReason(leaf) ?? ekuReason(leaf, usage);
+    if (leafReason) throw new ValidationError(`Гэрчилгээний гинж хүчингүй: ${leafReason}`);
+    let reason: string | undefined;
+    const extend = (cur: X509Certificate, cas: X509Certificate[]): boolean => {
+      if (cas.length >= 8) return false;
+      for (const [cand, isAnchor] of [
+        ...this.anchors.map((c) => [c, true] as const),
+        ...this.intermediates.map((c) => [c, false] as const),
+      ]) {
+        if (cas.includes(cand) || !signedBy(cur, cand)) continue;
+        const bad = caReason(cand, cas.length, now, usage);
+        if (bad) {
+          reason ??= bad;
+          continue;
+        }
+        if (isAnchor || extend(cand, [...cas, cand])) return true;
       }
-      // эс бөгөөс intermediate/anchor дундаас issuer-ийг олж нэг шат дээшил (зөвхөн CA cert)
-      const issuer = pool.find(
-        (c) => isCa(c) && current.checkIssued(c) && current.verify(c.publicKey),
-      );
-      if (!issuer) break;
-      current = issuer;
-    }
-    throw new ValidationError("Гэрчилгээний итгэлцлийн гинж trust anchor (Root CA) хүрсэнгүй");
+      return false;
+    };
+    if (extend(leaf, [])) return;
+    throw new ValidationError(
+      reason ? `Гэрчилгээний гинж хүчингүй: ${reason}` : "Гэрчилгээний итгэлцлийн гинж trust anchor (Root CA) хүрсэнгүй",
+    );
   }
 
   /** leaf-ийн шууд issuer-ийг trust pool-оос буцаана (revocation шалгагчид issuer хэрэгтэй). */
@@ -649,4 +666,83 @@ function authorityKeyId(cert: X509Certificate): string | undefined {
 /** isCa — cert нь CA мөн эсэх (basicConstraints CA:TRUE). Node X509Certificate.ca getter. */
 function isCa(cert: X509Certificate): boolean {
   return cert.ca === true;
+}
+
+// ── гинжийн шалгалт (RFC 5280, Go crypto/x509-тэй ижил) ──
+
+const EKU_ANY = "2.5.29.37.0";
+const EKU_CLIENT_AUTH = "1.3.6.1.5.5.7.3.2";
+const EKU_EMAIL_PROTECTION = "1.3.6.1.5.5.7.3.4";
+const OID_NAME_CONSTRAINTS = "2.5.29.30";
+/** SDK-ийн ойлгодог critical extension-ууд (Go crypto/x509-ийн задалдагтай ижил); бусад critical → татгалзана. */
+const HANDLED_CRITICAL = new Set([
+  "2.5.29.14", // subjectKeyIdentifier
+  "2.5.29.15", // keyUsage
+  "2.5.29.17", // subjectAltName
+  "2.5.29.19", // basicConstraints
+  "2.5.29.30", // nameConstraints (CA-д — caReason fail-closed)
+  "2.5.29.31", // cRLDistributionPoints
+  "2.5.29.32", // certificatePolicies
+  "2.5.29.35", // authorityKeyIdentifier
+  "2.5.29.37", // extKeyUsage
+  "1.3.6.1.5.5.7.1.1", // authorityInfoAccess
+]);
+
+/** child-ийг cand гаргасан эсэх: issuer нэр = subject, AKI/SKI (хоёулаа байвал) таарах, гарын үсэг. */
+function signedBy(child: X509Certificate, cand: X509Certificate): boolean {
+  if (child.issuer !== cand.subject) return false;
+  const aki = authorityKeyId(child);
+  const ski = subjectKeyId(cand);
+  if (aki && ski && aki !== ski) return false;
+  try {
+    return child.verify(cand.publicKey);
+  } catch {
+    return false;
+  }
+}
+
+/** Үл таних critical extension байвал шалтгаан. */
+function criticalReason(cert: X509Certificate): string | undefined {
+  return certExtensions(cert.raw).some((e) => e.critical && !HANDLED_CRITICAL.has(e.oid)) ? "үл таних critical extension" : undefined;
+}
+
+/** EKU тавьсан бол `usage` эсвэл anyExtendedKeyUsage агуулах ёстой (EKU-гүй = дурын). */
+function ekuReason(cert: X509Certificate, usage: string): string | undefined {
+  const eku = extKeyUsage(cert);
+  return eku.length && !eku.includes(usage) && !eku.includes(EKU_ANY)
+    ? "гэрчилгээний ExtKeyUsage энэ үйлдэлд тохирохгүй (гинжийн EKU)"
+    : undefined;
+}
+
+/** issuer CA-ийн шалгалт; below = энэ CA-аас доорх завсрын CA-ийн тоо (leaf-ийг тооцохгүй). */
+function caReason(ca: X509Certificate, below: number, now: number, usage: string): string | undefined {
+  if (!isCa(ca)) return "завсрын гэрчилгээ CA биш эсвэл keyCertSign эрхгүй";
+  if (certExtension(ca.raw, "2.5.29.15") && !(keyUsageBits(ca) & 0x04)) return "CA-ийн KeyUsage-д keyCertSign алга";
+  const from = Date.parse(ca.validFrom);
+  const to = Date.parse(ca.validTo);
+  if (Number.isNaN(from) || Number.isNaN(to) || now < from || now > to) {
+    return "гинжийн гэрчилгээний хугацаа дууссан эсвэл хүчинтэй болоогүй";
+  }
+  const pathLen = basicConstraintsPathLen(ca);
+  if (pathLen !== undefined && below > pathLen) return "pathLenConstraint зөрчсөн (завсрын CA хэт олон)";
+  if (certExtension(ca.raw, OID_NAME_CONSTRAINTS)) return "CA-д name constraints байна (SDK үнэлдэггүй — fail-closed)";
+  return criticalReason(ca) ?? ekuReason(ca, usage);
+}
+
+/** basicConstraints-ийн pathLenConstraint; алга бол undefined. */
+function basicConstraintsPathLen(cert: X509Certificate): number | undefined {
+  const v = certExtension(cert.raw, "2.5.29.19");
+  if (!v) return undefined;
+  const seq = tlv(v, 0, v.length);
+  for (let p = seq.start; p < seq.end; ) {
+    const t = tlv(v, p, seq.end);
+    if (t.tag === 0x02) {
+      if (t.end - t.start > 4 || (v[t.start]! & 0x80) !== 0) throw new ValidationError("basicConstraints: pathLen буруу");
+      let n = 0;
+      for (let i = t.start; i < t.end; i++) n = n * 256 + v[i]!;
+      return n;
+    }
+    p = t.end;
+  }
+  return undefined;
 }

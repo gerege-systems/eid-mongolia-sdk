@@ -169,6 +169,19 @@ export class NetworkError extends EidError {
   }
 }
 
+/**
+ * Хариуны бие SDK-ийн хязгаараас их (JSON 4 MiB, PDF `pdfMaxBytes`) — бие таслагдаж задлагдахгүй. `op` — method +
+ * таних тэмдэггүй зам.
+ */
+export class ResponseTooLargeError extends EidError {
+  constructor(
+    readonly op: string,
+    readonly limit: number,
+  ) {
+    super(`${op}: хариу ${limit} байтаас их`);
+  }
+}
+
 /** Алдаа/логт орох зам: `/etsi/{…}`, `/document/{…}` → `…`, query хасагдана. */
 export function maskPath(path: string): string {
   return path.split(/[?#]/)[0]!.replace(/\/(etsi|document)\/[^/?#\s]+/g, "/$1/…");

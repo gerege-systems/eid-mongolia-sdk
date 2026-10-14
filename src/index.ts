@@ -8,7 +8,10 @@ export { SessionApi, parseSessionResult, personMatchesCertificate } from "./sess
 export {
   PdfApi,
   DEFAULT_PDF_TIMEOUT_MS,
+  DEFAULT_PDF_MAX_BYTES,
   type PdfDefaults,
+  type PdfTokenPrepareInput,
+  type PdfTokenPrepareSession,
   type PdfPrepareInput,
   type PdfPrepareSession,
   type PdfSignerRef,
@@ -109,6 +112,7 @@ export {
   SessionFailedError,
   ValidationError,
   DeviceLinkError,
+  ResponseTooLargeError,
   ON_BEHALF_ERROR_CODES,
   RETRYABLE_ERROR_CODES,
   parseRetryAfter,
