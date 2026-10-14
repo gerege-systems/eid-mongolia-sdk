@@ -22,6 +22,11 @@
       "types": "./dist/pades.d.ts",
       "import": "./dist/pades.js",
       "require": "./dist/pades.cjs"
+    },
+    "./button": {
+      "types": "./dist/button.d.ts",
+      "import": "./dist/button.js",
+      "require": "./dist/button.cjs"
     }
   },
   "files": [
@@ -33,10 +38,10 @@
     "node": ">=22"
   },
   "scripts": {
-    "build": "tsup src/index.ts src/browser.ts src/pades.ts --format esm,cjs --dts --clean",
-    "test": "npm run build && node --test --experimental-strip-types test/sdk.test.ts test/oidc.test.ts test/portal-gaps.test.ts test/chain.test.ts test/pades-session.test.ts test/pades-golden.test.ts test/pades-unit.test.ts",
+    "build": "tsup src/index.ts src/browser.ts src/pades.ts --format esm,cjs --dts --clean && tsup src/button.ts --format esm,cjs --dts --tsconfig tsconfig.button.json",
+    "test": "npm run build && node --test --experimental-strip-types test/sdk.test.ts test/portal-gaps.test.ts test/chain.test.ts test/qr.test.ts test/login.test.ts test/button.test.ts test/pades-session.test.ts test/pades-golden.test.ts test/pades-unit.test.ts",
     "test:contract": "npm run build && node --experimental-strip-types test/contract.test.ts",
-    "lint": "tsc --noEmit",
+    "lint": "tsc --noEmit && tsc --noEmit -p tsconfig.button.json",
     "golden:check": "node scripts/sync-pades-golden.mjs --check",
     "size:pades": "node scripts/pades-bundle-size.mjs"
   },
@@ -54,7 +59,10 @@
     "pdf-signing"
   ],
   "devDependencies": {
+    "@types/jsdom": "^21.1.7",
     "@types/node": "^20.0.0",
+    "jsdom": "^26.1.0",
+    "jsqr": "^1.4.0",
     "tsup": "^8.0.0",
     "typescript": "^5.4.0"
   },
