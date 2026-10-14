@@ -107,6 +107,10 @@ test("pades golden — Go reference-тэй байт-ижил (prepare + complete
     assert.equal(r.hasPage, e.hasPage === true, `${c.name}: hasPage`);
     assert.equal(r.pageSha256, e.pageSha256 ?? "", `${c.name}: pageSha256`);
     assert.deepEqual(r.priorCmsSha256, e.priorCmsSha256 ?? [], `${c.name}: priorCmsSha256`);
+    // Өмнөх гарын үсгийн revision = тэр гарын үсгийн sigRevSha256 (CA горим A-ийн sig_rev_sha256-тай ижил тодорхойлолт:
+    // doc[0 : ByteRange[2]+ByteRange[3]]) — горим A-ийн өмнөх мөрийг бүртгэлд заахад.
+    const ref = String(c.input).startsWith("case:") ? M.cases.find((x) => x.name === String(c.input).slice(5)) : undefined;
+    assert.deepEqual(r.priorRevisionSha256, ref ? [ref.expect.sigRevSha256] : [], `${c.name}: priorRevisionSha256`);
     assert.equal(r.inSha256, e.inputSha256);
     assert.equal(r.docId, e.docId);
     outputs.set(c.name, r.pdf);

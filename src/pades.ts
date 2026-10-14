@@ -161,6 +161,11 @@ export interface PadesCompleted {
   sigRevSha256: string;
   /** Өмнөх гарын үсгүүдийн CMS-ийн SHA-256 (hex), баримтын дарааллаар. */
   priorCmsSha256: string[];
+  /**
+   * Өмнөх гарын үсгүүдийн revision-ий SHA-256 (hex) — `sha256(doc[0 : ByteRange[2]+ByteRange[3]])`, `priorCmsSha256`-тай
+   * ижил дарааллаар. CA горим A-ийн (CA угсарсан) мөрийг үүгээр таньдаг (`priorRevisionSha256`).
+   */
+  priorRevisionSha256: string[];
   /** Зурагчийн гэрчилгээ (DER). */
   signerCert: Uint8Array;
 }
@@ -422,11 +427,15 @@ export async function complete(state: Uint8Array | ArrayBuffer, signature: Uint8
     throw new PadesError("SELF_VALIDATION_FAILED", "DSS revision бичиж чадсангүй", { cause: e });
   }
   if (out.length > MAX_OUTPUT_BYTES) throw new PadesError("PDF_TOO_LARGE", "гаралт 10 MiB-аас их");
-  // Өмнөх гарын үсгүүдийн CMS (Go: Extract(out)-ийн сүүлийнхээс бусад) — бүртгэлд.
+  // Өмнөх гарын үсгүүдийн CMS ба revision (Go: Extract(out)-ийн сүүлийнхээс бусад) — бүртгэлд.
   const prior: string[] = [];
+  const priorRev: string[] = [];
   try {
     const list = signatureCMSList(signed);
-    for (const c of list.slice(0, -1)) prior.push(c ? toHex(await sha256(c)) : "");
+    for (const s of list.slice(0, -1)) {
+      prior.push(s.cms ? toHex(await sha256(s.cms)) : "");
+      priorRev.push(s.end !== undefined ? toHex(await sha256(signed.subarray(0, s.end))) : "");
+    }
   } catch (e) {
     throw new PadesError("SELF_VALIDATION_FAILED", "гаралтыг задалж чадсангүй", { cause: e });
   }
@@ -441,6 +450,7 @@ export async function complete(state: Uint8Array | ArrayBuffer, signature: Uint8
     revIndex: st.revIndex,
     sigRevSha256: toHex(await sha256(signed)),
     priorCmsSha256: prior,
+    priorRevisionSha256: priorRev,
     signerCert: cert.raw,
   };
 }

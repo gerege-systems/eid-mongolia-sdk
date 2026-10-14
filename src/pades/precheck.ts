@@ -182,24 +182,43 @@ export function docIdFromPage(doc: Uint8Array): string {
 }
 
 
+/** Баримтын нэг гарын үсэг — {@link signatureCMSList}. */
+export interface SignatureEntry {
+  /** CMS DER (тэг дүүргэлтгүй, ASN.1 уртаар); задрахгүй бол undefined (Go: CMSSHA256 хоосон). */
+  cms: Uint8Array | undefined;
+  /**
+   * ByteRange[2] + ByteRange[3] — гарын үсгийн revision-ий төгсгөл (Go validate SignedEnd); ByteRange буруу/файлаас
+   * хэтэрсэн бол undefined. `sha256(doc[0:end])` = CA горим A-ийн `sig_rev_sha256` (`priorRevisionSha256`).
+   */
+  end: number | undefined;
+}
+
 /**
- * Баримтын гарын үсгүүдийн CMS DER (тэг дүүргэлтгүй, ASN.1 уртаар) — Go validate.Extract-ийн дараалал (xref/объектын
- * дугаараар, /Type нь алга эсвэл /Sig). CMS задрахгүй бол "" (Go: CMSSHA256 хоосон).
+ * Баримтын гарын үсгүүд (CMS + revision-ий төгсгөл) — Go validate.Extract-ийн дараалал (xref/объектын дугаараар,
+ * /Type нь алга эсвэл /Sig).
  */
-export function signatureCMSList(doc: Uint8Array): (Uint8Array | undefined)[] {
+export function signatureCMSList(doc: Uint8Array): SignatureEntry[] {
   const r = new Reader(doc);
-  const out: (Uint8Array | undefined)[] = [];
+  const out: SignatureEntry[] = [];
   for (const x of r.xref) {
     const v = r.resolve(x.ptr, new PRef(x.ptr.id, x.ptr.gen));
     if (v.kind() !== "dict" || v.key("Contents").isNull() || v.key("ByteRange").isNull()) continue;
     const t = v.key("Type").name();
     if (t !== "" && t !== "Sig") continue;
+    let cms: Uint8Array | undefined;
     try {
       const n = readNode(v.key("Contents").rawString(), 0);
-      out.push(n.tag === TAG.SEQUENCE ? n.raw : undefined);
+      cms = n.tag === TAG.SEQUENCE ? n.raw : undefined;
     } catch {
-      out.push(undefined);
+      cms = undefined;
     }
+    let end: number | undefined;
+    const br = v.key("ByteRange");
+    if (br.len() === 4 && br.index(2).kind() === "int" && br.index(3).kind() === "int") {
+      const e = br.index(2).int64() + br.index(3).int64();
+      if (e > 0 && e <= doc.length) end = e;
+    }
+    out.push({ cms, end });
   }
   return out;
 }

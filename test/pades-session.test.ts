@@ -162,6 +162,7 @@ test("registerSignature — POST /pdf/signatures бие ба хариу; алд�
   assert.equal(r.revIndex, 1);
   assert.equal(r.registeredAt, "2026-10-14T12:00:00+08:00");
   assert.equal(r.verifyUrl, `https://ca.eidmongolia.mn/verify/${docID}`);
+  assert.equal(r.created, true);
 
   // токен (sessionID-гүй) 2 дахь гарын үсэг
   await eid.registerSignature({ docID, cms, outSha256: sha("o2"), sigRevSha256: sha("r2"), inSha256: sha("i2"), fileName: "a.pdf",
@@ -180,6 +181,68 @@ test("registerSignature — POST /pdf/signatures бие ба хариу; алд�
   }
   const conflict = client(() => ({ status: 409, body: { error: "x", code: "CLAIMED_ROLE_MISMATCH" } }));
   await assert.rejects(() => conflict.eid.registerSignature(base), (e: unknown) => e instanceof ApiError && e.code === "CLAIMED_ROLE_MISMATCH");
+});
+
+test("registerSignature — 200 давталт: created false", async () => {
+  const docID = "11111111-1111-4111-8111-111111111111";
+  const sha = (s: string) => createHash("sha256").update(s).digest("hex");
+  const { eid } = client(() => ({ status: 200, body: { docID, revIndex: 1, registeredAt: "x", verifyUrl: "v" } }));
+  const r = await eid.registerSignature({ docID, sessionID: "s1", cms: new Uint8Array([0x30, 1]), outSha256: sha("o"),
+    inSha256: sha("i"), fileName: "a.pdf", pageSha256: sha("p"), revIndex: 1, sigRevSha256: sha("r") });
+  assert.equal(r.created, false);
+});
+
+test("registerSignature — горим A-ийн өмнөх мөр: PRIOR_MISMATCH → revision-оор тааруулна (priorSignatures)", async () => {
+  const docID = "11111111-1111-4111-8111-111111111111";
+  const sha = (s: string) => createHash("sha256").update(s).digest("hex");
+  const done = { docId: docID, revIndex: 3, cms: new Uint8Array([0x30, 1]), inSha256: sha("i"), hasPage: false, pageSha256: "",
+    sigRevSha256: sha("r"), outSha256: sha("o"), priorCmsSha256: [sha("c1"), sha("c2")], priorRevisionSha256: [sha("v1"), sha("v2")] };
+  const reg = registrationFromCompleted(done, { fileName: "a.pdf", sessionID: "s1" });
+  assert.deepEqual(reg.priorSignatures, [{ cmsSha256: sha("c1"), revisionSha256: sha("v1") }, { cmsSha256: sha("c2"), revisionSha256: sha("v2") }]);
+  assert.equal("priorSignatures" in buildRegisterBody(reg), false, "CA руу илгээхгүй");
+
+  // CA: эхний мөр горим A (revision v1), хоёр дахь нь клиент (CMS c2).
+  const want = JSON.stringify({ cms: [sha("c2")], rev: [sha("v1")] });
+  const { eid, calls } = client(() => {
+    const b = calls[calls.length - 1]!.body;
+    const got = JSON.stringify({ cms: b.priorCmsSha256 ?? [], rev: b.priorRevisionSha256 ?? [] });
+    return got === want
+      ? { status: 201, body: { docID, revIndex: 3, registeredAt: "x", verifyUrl: "v" } }
+      : { status: 409, body: { error: "x", code: "PRIOR_MISMATCH" } };
+  });
+  const r = await eid.registerSignature(reg);
+  assert.equal(r.created, true);
+  assert.equal(calls.length, 2, "бүгд CMS → эхний 1 revision");
+  assert.deepEqual(calls[0]!.body.priorCmsSha256, [sha("c1"), sha("c2")]);
+
+  // Хоёр дахь нь горим A (эхний k-д үгүй) — n ≤ 4 тул бүх хослол.
+  calls.length = 0;
+  const want2 = JSON.stringify({ cms: [sha("c1")], rev: [sha("v2")] });
+  const c2 = client(() => {
+    const b = c2.calls[c2.calls.length - 1]!.body;
+    const got = JSON.stringify({ cms: b.priorCmsSha256 ?? [], rev: b.priorRevisionSha256 ?? [] });
+    return got === want2
+      ? { status: 200, body: { docID, revIndex: 3, registeredAt: "x", verifyUrl: "v" } }
+      : { status: 409, body: { error: "x", code: "PRIOR_MISMATCH" } };
+  });
+  assert.equal((await c2.eid.registerSignature(reg)).created, false);
+  assert.equal(c2.calls.length, 4, "бүгд CMS, эхний 1, эхний 2, дараа нь {2}");
+
+  // Хэзээ ч таарахгүй → анхны PRIOR_MISMATCH; өөр алдаа → шууд.
+  const never = client(() => ({ status: 409, body: { error: "x", code: "PRIOR_MISMATCH" } }));
+  await assert.rejects(() => never.eid.registerSignature(reg), (e: unknown) => e instanceof ApiError && e.code === "PRIOR_MISMATCH");
+  assert.equal(never.calls.length, 4);
+  const other = client(() => ({ status: 409, body: { error: "x", code: "REGISTRY_CONFLICT" } }));
+  await assert.rejects(() => other.eid.registerSignature(reg), (e: unknown) => e instanceof ApiError && e.code === "REGISTRY_CONFLICT");
+  assert.equal(other.calls.length, 1);
+
+  // Дуудагч гараар ангилсан (priorRevisionSha256) → оролдохгүй.
+  const manual = registrationFromCompleted({ ...done, revIndex: 2, priorCmsSha256: [], priorRevisionSha256: [sha("v1")] },
+    { fileName: "a.pdf", sessionID: "s1", priorRevisionSha256: [sha("v1")] });
+  assert.equal(manual.priorSignatures, undefined);
+  const once = client(() => ({ status: 409, body: { error: "x", code: "PRIOR_MISMATCH" } }));
+  await assert.rejects(() => once.eid.registerSignature(manual), ApiError);
+  assert.equal(once.calls.length, 1);
 });
 
 test("getRepresentations — claimedRole дамжина", async () => {
