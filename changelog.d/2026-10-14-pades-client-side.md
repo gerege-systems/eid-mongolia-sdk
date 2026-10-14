@@ -19,8 +19,7 @@
 - **Backend:** `eid.signPdfDigest` / `sign.pdfDigest({dtbs, fileName, signer, flow, onBehalfOf})` — CA-ийн одоогийн
   `/signature/{notification|device-link}/{etsi|document}` session (`RAW_DIGEST_SIGNATURE`, `sha256WithRSAEncryption`,
   «Баримтад гарын үсэг зурах: <fileName>»). `eid.registerSignature` / `sign.registerSignature` → `POST /pdf/signatures`
-  (docID, sessionID, cms, medium, revIndex, priorCmsSha256, sigRevSha256, outSha256, inSha256, pageSha256, hasPage,
-  fileName, onBehalfOf) (CA docs/PADES_CLIENT_SIDE.md §4.3; discovery-д хараахан алга → гэрээний тест WARN).
+  (бие нь CA `dto.PDFSignatureRegisterRequest`-тэй яг ижил — `changelog.d/2026-10-14-pades-register-dto-engines.md`).
   `Representation.claimedRole`. `RP_ROUTES.signDeviceLinkEtsi` / `signDeviceLinkDocument`.
 - Conformance: `scripts/sync-pades-golden.mjs` Go reference-ийн golden-ийг (tag `pades-golden-v2`, `6437f14`) ба фонт/гинжийн
   asset-ийг хуулна; CI `npm run golden:check` (бэхэлсэн commit-тэй байт-ижил), `npm run size:pades` (≤ 300 KB gzip),

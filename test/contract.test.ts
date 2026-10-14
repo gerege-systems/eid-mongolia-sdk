@@ -5,7 +5,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { DEFAULT_BASE_URL } from "../dist/index.js";
-import { RP_ROUTES, RP_ROUTES_UNDISCOVERED } from "../src/contract.ts";
+import { PDF_SIGNATURE_REGISTER_FIELDS, RP_ROUTES, RP_ROUTES_UNDISCOVERED } from "../src/contract.ts";
 
 const EID_DISCOVERY = "https://rp.eidmongolia.mn/.well-known/eid";
 
@@ -80,4 +80,18 @@ test("RP-API: SDK-ийн зам бүр /.well-known/eid-д бий", async () => 
   warn("discovery-д байгаа ч SDK хамраагүй", uncovered);
 
   assert.deepEqual(missing, [], "SDK зам discovery-д алга");
+});
+
+test("PAdES клиент тал: pdfSigning.clientSide.register ба /pdf/signatures-ийн талбарууд CA-тай ижил", async () => {
+  const d = await getJson(EID_DISCOVERY);
+  const base = String(d.rp_api_base);
+  const ps = (d.pdfSigning ?? {}) as { clientSide?: Record<string, unknown> };
+  assert.ok(ps.clientSide, "pdfSigning.clientSide алга");
+  assert.equal(ps.clientSide.register, base + RP_ROUTES.pdfSignatures.path, "pdfSigning.clientSide.register");
+  const desc = String(((d.endpoints ?? {}) as { pdf?: Record<string, unknown> }).pdf?.signatures ?? "");
+  assert.ok(desc.startsWith(`POST ${base}/pdf/signatures`), `endpoints.pdf.signatures: ${desc}`);
+  const m = /\{([^}]*)\}/.exec(desc);
+  assert.ok(m, "endpoints.pdf.signatures-д {талбарууд} алга");
+  const live = m[1]!.split(",").map((x) => x.trim().replace(/\?$/, "")).filter(Boolean).sort();
+  assert.deepEqual(live, [...PDF_SIGNATURE_REGISTER_FIELDS].sort(), "SDK-ийн бие ↔ CA dto.PDFSignatureRegisterRequest");
 });

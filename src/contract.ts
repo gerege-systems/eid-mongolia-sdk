@@ -29,6 +29,7 @@ export const RP_ROUTES = {
   personChildren: { method: "GET", path: "/person/children/etsi/{personEtsi}" },
   tokenCertificate: { method: "POST", path: "/token/certificate" },
   tokenCertificateResult: { method: "GET", path: "/token/certificate/{sessionID}" },
+  pdfSignatures: { method: "POST", path: "/pdf/signatures" },
 } as const satisfies Record<string, RpRoute>;
 
 /**
@@ -38,8 +39,29 @@ export const RP_ROUTES = {
 export const RP_ROUTES_UNDISCOVERED = {
   tokenAuthChallenge: { method: "POST", path: "/token/auth/challenge" },
   tokenAuthVerify: { method: "POST", path: "/token/auth/verify" },
-  pdfSignatures: { method: "POST", path: "/pdf/signatures" },
 } as const satisfies Record<string, RpRoute>;
+
+/**
+ * `POST /pdf/signatures`-ийн биеийн талбарууд — CA `server/internal/dto/pdf.go` `PDFSignatureRegisterRequest`-ийн JSON
+ * tag (CA main d948fdd4, !355). CA `DisallowUnknownFields` тул SDK зөвхөн эдгээрийг илгээнэ. Live discovery-ийн
+ * `endpoints.pdf.signatures` тайлбартай гэрээний тест тулгана.
+ */
+export const PDF_SIGNATURE_REGISTER_FIELDS = [
+  "docID",
+  "revIndex",
+  "medium",
+  "sessionID",
+  "cms",
+  "fileName",
+  "inSha256",
+  "pageSha256",
+  "sigRevSha256",
+  "outSha256",
+  "priorCmsSha256",
+  "priorRevisionSha256",
+  "onBehalfOf",
+  "signerEtsi",
+] as const;
 
 /** Template-ийн `{param}`-уудыг дарааллаар нь `encodeURIComponent` хийсэн `args`-аар орлуулна. */
 export function routePath(route: RpRoute, ...args: string[]): string {

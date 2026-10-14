@@ -28,17 +28,29 @@ jobs:
           name: dist
           path: dist
           retention-days: 3
-  pades-node18:
-    # /pades нь Node ≥ 18-д ажиллана (global crypto үгүй) — test job-ийн dist-ээр, golden-ийн 2 тохиолдол бүтэн.
+  node-compat:
+    # Бүх багц (үндсэн entry, /browser, /button, /pades) — package.json engines (Node ≥ 18): `npm test`-ийн тестүүдийг
+    # type stripping-гүй хувилбараар (scripts/test-compat.mjs) test job-ийн dist дээр + /pades ESM/CJS smoke.
     needs: test
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [18, 20, 22]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 18
+          node-version: 22
+          cache: npm
+      - run: npm ci
       - uses: actions/download-artifact@v4
         with:
           name: dist
           path: dist
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - run: node --version
+      - run: node scripts/test-compat.mjs
       - run: node test/pades-node18.mjs

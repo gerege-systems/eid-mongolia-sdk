@@ -16,7 +16,8 @@ RP-API v3, Smart-ID нийцтэй. Бүрэн баримт: <https://developer.
 npm install @gerege-systems/eid-mongolia-sdk
 ```
 
-Node.js ≥ 22 (global `fetch`, `node:crypto`).
+Node.js ≥ 18 (global `fetch`, `node:crypto`) — бүх entry (`.`, `/browser`, `/button`, `/pades`), CI-д Node 18 / 20 / 22-оор шалгагдана.
+`/pades` мөн орчин үеийн хөтөчид (Web Crypto) ажиллана.
 
 ## 1. RP бүртгүүлэх
 
@@ -373,7 +374,7 @@ const ch = await eid.token.authChallenge();
 const digest = tokenAuthDigest(ch.rpUUID, ch.challenge); // токен CKM_ECDSA → түүхий r||s
 const who = await eid.token.authVerify(ch.challengeId, authCertDer, rs);
 
-// токеноор PDF: §3d — prepare() → токен CKM_ECDSA(dtbs) → r||s → complete() → registerSignature() (sessionId-гүй)
+// токеноор PDF: §3d — prepare() → токен CKM_ECDSA(dtbs) → r||s → complete() → registerSignature() (sessionID-гүй, medium "token")
 ```
 
 `/token/auth/*` нь CA-д байгаа ч `/.well-known/eid`-д хараахан жагсаагдаагүй (гэрээний тест WARN).
@@ -391,9 +392,9 @@ DSS-д), Adobe / EU DSS-д «LTV enabled», баталгаажуулах (QR) х
 | `prepare(pdf, { signerCert, claimedRole?, verifyPage?, fileName?, lang?, docId?, … })` | браузер / Node | `{ dtbs, digest, docId, state }` — сүлжээгүй |
 | `eid.signPdfDigest({ dtbs, fileName, signer, flow?, onBehalfOf? })` | RP backend | DTBS-д гарын үсгийн session (push эсвэл device-link) |
 | `complete(state, signature)` | браузер / Node | TSA + OCSP/CRL → `{ pdf, cms, docId, outSha256, inSha256, hasPage, pageSha256, … }` |
-| `eid.registerSignature({ docID, sessionId, cms, revIndex, sigRevSha256, … })` | RP backend | `POST /pdf/signatures` — `/verify/{docID}` бүртгэл |
+| `eid.registerSignature(registrationFromCompleted(done, { fileName, sessionID }))` | RP backend | `POST /pdf/signatures` — `/verify/{docID}` бүртгэл |
 
-`/pades` хөтчийн bundle ~125 KB gzip (Noto Sans фонт asset-тэй, CI-д ≤ 300 KB); үндсэн entry үүнийг агуулахгүй. Node ≥ 18,
+`/pades` хөтчийн bundle ~125 KB gzip (Noto Sans фонт asset-тэй, CI-д ≤ 300 KB); үндсэн entry үүнийг агуулахгүй. `/pades` (ба бүх багц) **Node ≥ 18** (CI: 18 / 20 / 22),
 орчин үеийн хөтөч. Браузерийн CSP: `connect-src https://tsa.timeserver.mn https://ocsp.eidmongolia.mn
 https://crl.eidmongolia.mn`. Хөтөчид гэрчилгээний `http://` AIA/CDP-г зөвхөн эдгээр хостод `https://` болгоно; үндэсний
 CA-ийн CRL (`esign.gov.mn`) нь `crl.eidmongolia.mn` толин хуулбараас (бүх платформд). Шалгагч (`verify`) энд
@@ -421,11 +422,8 @@ const s = await api("/sign/pdf/start", { dtbs: b64(p.dtbs), documentNumber, file
 showToUser(s.vc);                                                                // эсвэл backend-ийн QR (§4)
 const { signature } = await api(`/sign/pdf/${s.sessionId}/result`);              // backend poll + validateSign
 const done = await complete(p.state, signature);                                 // TSA + OCSP/CRL + DSS
-await api(`/sign/pdf/${s.sessionId}/register`, {
-  docID: done.docId, cms: b64(done.cms), outSha256: done.outSha256, inSha256: done.inSha256,
-  hasPage: done.hasPage, pageSha256: done.pageSha256,
-  revIndex: done.revIndex, sigRevSha256: done.sigRevSha256, priorCmsSha256: done.priorCmsSha256,
-});
+const { pdf, signerCert: _c, ...meta } = done;                                     // PDF backend рүү очихгүй
+await api(`/sign/pdf/${s.sessionId}/register`, { ...meta, cms: b64(done.cms) });
 download(done.pdf, "Гэрээ №12.pdf");
 
 // ── RP backend (Node) ─────────────────────────────────────────────────────────────────────
@@ -441,14 +439,16 @@ const r = await eid.session.waitForResult(sessionId);
 const sig = eid.validator.validateSign(r, store.get(sessionId).digest, { expectedFlowType: "Notification" });
 reply({ signature: sig.signatureValueB64 });
 // /sign/pdf/:id/register — CA CMS-ийг өөрөө шалгана (session digest = SHA-256(signedAttrs), cert, claimedRole)
-const reg = await eid.registerSignature({ ...req.body, cms: fromB64(req.body.cms), sessionId,
-  fileName: store.get(sessionId).fileName, onBehalfOf: "NTRMN-6235972" });
+// registrationFromCompleted: CA dto-той яг ижил бие (hasPage илгээхгүй, pageSha256 зөвхөн хуудастай үед); cms base64 ч болно.
+const reg = await eid.registerSignature(registrationFromCompleted(req.body, {
+  fileName: store.get(sessionId).fileName, sessionID: sessionId, onBehalfOf: "NTRMN-6235972" }));
 reply({ verifyUrl: reg.verifyUrl });
 ```
 
 ### Зөвхөн Node (backend бүгдийг хийнэ)
 
 ```ts
+import { registrationFromCompleted } from "@gerege-systems/eid-mongolia-sdk";
 import { prepare, complete, PadesError } from "@gerege-systems/eid-mongolia-sdk/pades";
 
 const p = await prepare(pdfBytes, { signerCert, verifyPage: true, fileName: "Гэрээ №12.pdf" });
@@ -466,9 +466,7 @@ for (let i = 0; ; i++) {
     throw e;
   }
 }
-await eid.registerSignature({ docID: done.docId, sessionId: s.sessionId, cms: done.cms, outSha256: done.outSha256,
-  inSha256: done.inSha256, fileName: "Гэрээ №12.pdf", hasPage: done.hasPage, pageSha256: done.pageSha256,
-  revIndex: done.revIndex, sigRevSha256: done.sigRevSha256, priorCmsSha256: done.priorCmsSha256 });
+await eid.registerSignature(registrationFromCompleted(done, { fileName: "Гэрээ №12.pdf", sessionID: s.sessionId }));
 writeFileSync("signed.pdf", done.pdf);
 ```
 

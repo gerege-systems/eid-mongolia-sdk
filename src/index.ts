@@ -14,7 +14,11 @@ export {
   type PdfDigestSigner,
   type RegisterSignatureInput,
   type RegisterSignatureResult,
+  type CompletedForRegistration,
+  registrationFromCompleted,
+  buildRegisterBody,
 } from "./sign.js";
+export { PDF_SIGNATURE_REGISTER_FIELDS } from "./contract.js";
 export { SessionApi, parseSessionResult, personMatchesCertificate } from "./session.js";
 export { OrganizationApi } from "./organization.js";
 export {
