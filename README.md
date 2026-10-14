@@ -140,9 +140,22 @@ app.use("/auth/eid", express.json(), async (req, res) => {
 </script>
 ```
 
-эсвэл `mountEidLoginButton(el, { startUrl, statusUrl, lang: "en", theme: "auto", successUrl, onSuccess, onError })`.
-Атрибут: `lang` (`mn` | `en`), `mode` (`auto` анхдагч — утас → Web2App, бусад → QR цонх; `qr`; `app`),
-`theme` (`auto` анхдагч | `light` | `dark`), `success-url`.
+эсвэл `mountEidLoginButton(el, { startUrl, statusUrl, lang: "en", theme: "auto", successUrl, label, icon, variant, onSuccess, onError })`.
+
+| Атрибут (`mount…` сонголт) | Утга | Анхдагч |
+|---|---|---|
+| `start-url` (`startUrl`), `status-url` (`statusUrl`) | backend endpoint | — (заавал) |
+| `lang` | `mn` \| `en` | `mn` |
+| `mode` | `auto` (утас → Web2App, бусад → QR цонх) \| `qr` \| `app` | `auto` |
+| `theme` | `auto` \| `light` \| `dark` | `auto` |
+| `success-url` (`successUrl`) | backend redirect өгөөгүй үед шилжих URL | — |
+| `label` | товчны текст; `""` → зөвхөн лого | i18n: «eID-ээр нэвтрэх» / «Log in with eID» |
+| `icon` | `eid` (eID лого) \| `none` (логогүй) | `eid` |
+| `variant` | `default` (лого + текст) \| `icon` (зөвхөн лого, 44×44) | `default` |
+| `aria-label` | товчны хүртээмжийн нэр (дэлгэц уншигч) | зөвхөн-лого үед `label` эсвэл i18n текст |
+
+`label`, `icon`, `variant`, `aria-label`, `lang` өөрчлөгдөхөд товч шууд шинэчлэгдэнэ. `icon="none"` ба текстгүй
+(`variant="icon"` эсвэл `label=""`) хослол нь хоосон товч болохгүй — анхдагч текст харагдаж, console-д нэг удаа анхааруулна.
 Үйл явдал: `eid-login-success`, `eid-login-error` (`detail.error`: `USER_REFUSED…`, `VALIDATION`, `EXPIRED` …).
 Гадны хамааралгүй (QR encoder дотроо), цонх нь focus trap, Esc, `aria-live` төлөвтэй.
 
@@ -160,7 +173,9 @@ Dark-ийн дараалал: `--eid-<нэр>-dark` → `--eid-<нэр>` → dar
   --eid-accent-dark: var(--brand-400);    /* зөвхөн dark-д (өгөхгүй бол --eid-accent) */
   --eid-radius: 6px; --eid-radius-lg: 8px;
 }
-eid-login-button::part(button) { width: 100%; }  /* part: button, backdrop, dialog */
+eid-login-button::part(button) { width: 100%; }  /* part: button, icon, label, backdrop, dialog */
+eid-login-button::part(label) { font-weight: 600; }
+eid-login-button::part(icon) { width: 24px; height: 24px; }
 ```
 
 | Хувьсагч (`-dark` хувилбартай) | Юунд | Light анхдагч | Dark анхдагч |

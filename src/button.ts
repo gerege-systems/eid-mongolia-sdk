@@ -117,6 +117,12 @@ export interface EidLoginButtonOptions {
   theme?: "auto" | "light" | "dark";
   /** Амжилтын дараа (backend redirect өгөөгүй бол) шилжих URL. */
   successUrl?: string;
+  /** Товчны текст (анхдагч: i18n «eID-ээр нэвтрэх» / «Log in with eID»). `""` → зөвхөн лого (`variant: "icon"`-той ижил). */
+  label?: string;
+  /** eid (анхдагч — eID лого) | none (логогүй). */
+  icon?: "eid" | "none";
+  /** default (лого + текст) | icon (зөвхөн лого, дөрвөлжин; текст нь aria-label болно). */
+  variant?: "default" | "icon";
   onSuccess?: (s: EidLoginStatus) => void;
   onError?: (error: string) => void;
 }
@@ -177,6 +183,7 @@ h2, p, ol { margin: 0; }
 .btn-sm { width: auto; min-height: 36px; padding: 0 14px; font-size: 0.8125rem; }
 .trigger { width: auto; }
 .trigger img { width: 20px; height: 20px; border-radius: 4px; }
+.trigger.icon-only { width: 44px; height: 44px; padding: 0; }
 .backdrop { position: fixed; inset: 0; z-index: 2147483000; background: hsl(222 47% 11% / 0.5); display: flex; align-items: center;
   justify-content: center; padding: 16px; overflow-y: auto; }
 .dialog { position: relative; width: 100%; max-width: 26rem; max-height: calc(100dvh - 32px); overflow-y: auto; background: var(--_eid-bg);
@@ -275,9 +282,10 @@ function chevron(): SVGSVGElement {
 
 const Base: typeof HTMLElement = typeof HTMLElement === "undefined" ? (class {} as unknown as typeof HTMLElement) : HTMLElement;
 
-/** `<eid-login-button>` — атрибут: start-url, status-url, lang (mn|en), mode (auto|qr|app), theme (auto|light|dark), success-url. */
+/** `<eid-login-button>` — атрибут: start-url, status-url, lang (mn|en), mode (auto|qr|app), theme (auto|light|dark), success-url,
+ *  label (товчны текст), icon (eid|none), variant (default|icon), aria-label. */
 export class EidLoginButton extends Base {
-  static readonly observedAttributes = ["lang", "theme"];
+  static readonly observedAttributes = ["lang", "theme", "label", "icon", "variant", "aria-label"];
   /** Тест/дотоод: гар утас эсэхийг дарж бичих. */
   isMobile: () => boolean = () => isMobileUserAgent();
   /** Тест/дотоод: шилжилт (location.assign). */
@@ -298,6 +306,7 @@ export class EidLoginButton extends Base {
   private themeObs: MutationObserver | null = null;
   private mq: MediaQueryList | null = null;
   private readonly onScheme = () => this.applyTheme();
+  private warned = false;
 
   private get t() {
     return T[this.getAttribute("lang") === "en" ? "en" : "mn"];
@@ -313,7 +322,7 @@ export class EidLoginButton extends Base {
       style.textContent = CSS;
       this.darkStyle = el("style", { "data-eid-theme": "dark" });
       this.trigger = el("button", { type: "button", class: "btn btn-outline trigger", part: "button", "aria-haspopup": "dialog" });
-      this.trigger.append(el("img", { src: EID_LOGO_DATA_URI, alt: "", width: "20", height: "20" }), el("span", {}, this.t.button));
+      this.renderTrigger();
       this.trigger.addEventListener("click", () => this.start());
       this.root.append(style, this.darkStyle, this.trigger);
     }
@@ -326,8 +335,30 @@ export class EidLoginButton extends Base {
       if (this.root) this.applyTheme();
       return;
     }
-    const label = this.trigger?.querySelector("span");
-    if (label) label.textContent = this.t.button;
+    if (this.trigger) this.renderTrigger();
+  }
+
+  /** Trigger-ийн агуулга: label / icon / variant / aria-label-аас. Хоосон товч хэзээ ч үүсгэхгүй. */
+  private renderTrigger(): void {
+    const label = this.getAttribute("label");
+    const hasIcon = this.getAttribute("icon") !== "none";
+    let iconOnly = this.getAttribute("variant") === "icon" || label === "";
+    const text = label || this.t.button;
+    if (iconOnly && !hasIcon) {
+      iconOnly = false;
+      if (!this.warned) {
+        this.warned = true;
+        console.warn('<eid-login-button>: icon="none" ба текстгүй (variant="icon" эсвэл label="") — анхдагч текстийг харуулав.');
+      }
+    }
+    const nodes: Node[] = [];
+    if (hasIcon) nodes.push(el("img", { src: EID_LOGO_DATA_URI, alt: "", width: "20", height: "20", part: "icon" }));
+    if (!iconOnly) nodes.push(el("span", { part: "label" }, text));
+    this.trigger.replaceChildren(...nodes);
+    this.trigger.classList.toggle("icon-only", iconOnly);
+    const aria = this.getAttribute("aria-label") || (iconOnly ? text : null);
+    if (aria) this.trigger.setAttribute("aria-label", aria);
+    else this.trigger.removeAttribute("aria-label");
   }
 
   disconnectedCallback(): void {
@@ -742,6 +773,9 @@ export function mountEidLoginButton(target: Element, opts: EidLoginButtonOptions
   if (opts.mode) b.setAttribute("mode", opts.mode);
   if (opts.theme) b.setAttribute("theme", opts.theme);
   if (opts.successUrl) b.setAttribute("success-url", opts.successUrl);
+  if (opts.label != null) b.setAttribute("label", opts.label);
+  if (opts.icon) b.setAttribute("icon", opts.icon);
+  if (opts.variant) b.setAttribute("variant", opts.variant);
   if (opts.onSuccess) b.addEventListener("eid-login-success", (e) => opts.onSuccess!((e as CustomEvent<EidLoginStatus>).detail));
   if (opts.onError) b.addEventListener("eid-login-error", (e) => opts.onError!((e as CustomEvent<{ error: string }>).detail.error));
   target.append(b);
