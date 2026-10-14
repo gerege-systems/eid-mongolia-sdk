@@ -78,14 +78,7 @@ export {
   interactionsToBase64,
   type AcspV2Params,
 } from "./crypto.js";
-export {
-  deviceLink,
-  openOrShowQR,
-  isMobileUserAgent,
-  type DeviceLinkInput,
-  type NavigatorLike,
-  type OpenOrShowQROptions,
-} from "./devicelink.js";
+export { isMobileUserAgent, type NavigatorLike } from "./devicelink.js";
 export {
   buildDeviceLink,
   deviceLinkInput,

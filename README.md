@@ -6,8 +6,8 @@ RP-API v3, Smart-ID нийцтэй. Бүрэн баримт: <https://developer.
 
 > ⚠️ SDK **backend**-д ажиллана: бүх дуудлага API secret (`rp_sk_…`)-ээр баталгаажна, secret-ийг браузер/гар утсанд
 > хэзээ ч задлахгүй. Браузерт зөвхөн таны backend-ийн өгсөн холбоос/QR/товч харагдана — «eID-ээр нэвтрэх» товч
-> (`/button`) ч таны backend-ийг л дуудна (§1a). `@gerege-systems/eid-mongolia-sdk/browser`-ийн legacy device-link
-> туслахууд 2026-10-07-оос ажиллахгүй (§4). Үл хамаарах: `@gerege-systems/eid-mongolia-sdk/pades` (клиент талын PDF
+> (`/button`) ч таны backend-ийг л дуудна (§1a). `@gerege-systems/eid-mongolia-sdk/browser` нь зөвхөн
+> `isMobileUserAgent` ба алдааны классуудыг гаргана (legacy `deviceLink`/`openOrShowQR` 0.16.0-д хасагдсан, §4). Үл хамаарах: `@gerege-systems/eid-mongolia-sdk/pades` (клиент талын PDF
 > гарын үсэг, secret-гүй) хөтөч болон Node-д ажиллана (§3d).
 
 ## Суулгах
@@ -313,7 +313,6 @@ UTF8String/PrintableString/BMPString. `parseSubject` нь зөвхөн задл�
 
 > **Ижил утсан дээр push хэрэглэхгүй.** Push (`notificationBy*`)-ийн хүсэлт eID аппад мэдэгдэл / «хүлээгдэж буй»
 > жагсаалтаар ирдэг; Smart-ID ба eID-д Notification төрлийн device link **байхгүй** (CA `docs/DEVICE_LINK_V3.md` §3).
-> Хуучин `/dl?sessionId&vc` холбоос (`deviceLink`) push session-д ч юу ч өгөхгүй (сервер `DEVICE_LINK_REQUIRED`).
 > Иргэн RP-ийг eID апптай ижил утсан дээр нээсэн бол push-ийн оронд **device-link Web2App** урсгал хэрэглэ
 > (`auth.deviceLink*` / `signPdfDigest({ flow: "device-link" })` + `buildDeviceLink(…, "Web2App")`, §4) — товч аппыг шууд
 > нээж, callback-аар буцна. Push-д «eID аппаа нээнэ үү» гэсэн текст л хангалттай.
@@ -655,10 +654,9 @@ eid.validator.validateAuth(result, s.acsp, {
 QR ба товч хоёуланг харуулсан хуудсанд: callback-аар ирсэн үр дүнг `Web2App`/`App2App`-аар, poll-оор ирснийг
 `QR`-аар шалга (товчоор нээгдсэн session зөвхөн callback-аар дуусна).
 
-> ⚠️ **Legacy холбоос хасагдсан (2026-10-07).** Статик `deviceLink(session)` (`{deviceLinkBase}?sessionId=…&vc=…`)
-> болон `/browser` entry-ийн `openOrShowQR`-ээр нээгдсэн session-д сервер утасны үйлдлийг `DEVICE_LINK_REQUIRED`-аар
-> татгалзана — зөвхөн v3 (`buildDeviceLink`) ажиллана. v3 (`flowType`, `userChallengeVerifier`) iOS 2.2.3 (59) /
-> Android 60-аас дэмжигдэнэ; сервер албадах доод хувилбар 2026-10-15-ны байдлаар iOS ≥ 2.2.7, Android ≥ 83
+> ⚠️ **Legacy холбоос хасагдсан.** Статик `{deviceLinkBase}?sessionId=…&vc=…` холбоосыг сервер 2026-10-07-нд,
+> түүнийг угсардаг `deviceLink` / `openOrShowQR`-ийг SDK 0.16.0-д хассан — зөвхөн v3 (`buildDeviceLink`) ажиллана.
+> v3 (`flowType`, `userChallengeVerifier`) iOS 2.2.3 (59) / Android 60-аас дэмжигдэнэ; сервер албадах доод хувилбар 2026-10-15-ны байдлаар iOS ≥ 2.2.7, Android ≥ 83
 > (`/mobile/app-config`, §«eID аппын доод хувилбар»).
 
 ## Аюулгүй байдал — яагаад `validator` заавал
