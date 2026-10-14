@@ -6,6 +6,7 @@ import { fromHex, latin1, toHex } from "../bytes.js";
 import { Incremental } from "./incremental.js";
 import { PdfError, Value } from "./reader.js";
 import { escapeName, hexString, serialize } from "./serialize.js";
+import { AppearanceError, appearanceObjects, nthPage, pageGeometry, visibleRect, visibleWidget, type Visible } from "../page/appearance.js";
 
 /** CMS-ийн дээд хэмжээ (хэмжсэн 14 KiB) × 2 — /Contents-ийн binary багтаамж. */
 export const MEASURED_MAX_CMS = 14 << 10;
@@ -33,7 +34,11 @@ export function pdfDate(t: Date): string {
   return `(D:${p(z.getUTCFullYear(), 4)}${p(z.getUTCMonth() + 1)}${p(z.getUTCDate())}${p(z.getUTCHours())}${p(z.getUTCMinutes())}${p(z.getUTCSeconds())}+08'00')`;
 }
 
-export async function prepareSignature(base: Uint8Array, signingTime: Date, signerName: string, reason: string): Promise<PreparedSig> {
+/**
+ * vis өгсөн бол харагдах widget (APPEARANCE_SPEC.md): /Rect нь vis.page хуудсан дээр, /F 4, /AP /N form XObject (+ 2 фонт),
+ * widget тэр хуудасны /Annots-д. vis.name нь /Name-тэй ижил (бичигдэх ёстой — эс бөгөөс AppearanceError).
+ */
+export async function prepareSignature(base: Uint8Array, signingTime: Date, signerName: string, reason: string, vis?: Visible): Promise<PreparedSig> {
   const inc = new Incremental(base);
   const root = inc.root();
   const acro = root.key("AcroForm");
@@ -52,6 +57,7 @@ export async function prepareSignature(base: Uint8Array, signingTime: Date, sign
   const sigID = inc.reserve();
   const fieldID = inc.reserve();
   const catID = inc.reserve();
+  const apIDs = vis ? Array.from({ length: 11 }, () => inc.reserve()) : [];
 
   let sig = `<<\n /Type /Sig\n /Filter /Adobe.PPKLite\n /SubFilter /${SUB_FILTER}\n /ByteRange `;
   const brAt = sig.length;
@@ -68,11 +74,24 @@ export async function prepareSignature(base: Uint8Array, signingTime: Date, sign
   // Body нь "<<"-аар эхэлдэг тул trimSpace байрлалыг өөрчлөхгүй.
   const sigStart = inc.writeObject(sigID, sig);
 
-  let fld = "<<\n  /Type /Annot\n  /Subtype /Widget\n  /Rect [0 0 0 0]\n";
-  const page = firstPage(root.key("Pages"), 0);
-  if (page) fld += `  /P ${page.ptr.id} ${page.ptr.gen} R\n`;
-  fld += `  /F 132\n  /FT /Sig\n  /T (${fieldName})\n  /V ${sigID} 0 R\n>>`;
-  inc.writeObject(fieldID, fld);
+  let page: Value | undefined;
+  if (!vis) {
+    // Үл харагдах (digitorus createVisualSignature, invisible): эхний хуудас.
+    let fld = "<<\n  /Type /Annot\n  /Subtype /Widget\n  /Rect [0 0 0 0]\n";
+    page = firstPage(root.key("Pages"), 0);
+    if (page) fld += `  /P ${page.ptr.id} ${page.ptr.gen} R\n`;
+    fld += `  /F 132\n  /FT /Sig\n  /T (${fieldName})\n  /V ${sigID} 0 R\n>>`;
+    inc.writeObject(fieldID, fld);
+  } else {
+    if (n === "" || goTrimSpace(signerName) !== vis.name) throw new AppearanceError("/Name бичигдэхгүй нэр");
+    page = nthPage(root.key("Pages"), vis.page);
+    if (!page) throw new AppearanceError(`хуудас ${vis.page} алга`);
+    const { box, rot } = pageGeometry(page);
+    const rect = visibleRect(box, rot, vis.x, vis.y, vis.w, vis.h);
+    const bodies = appearanceObjects({ w: vis.w, h: vis.h, rotate: rot, name: vis.name, role: vis.role, lang: vis.lang, date: vis.date, url: vis.url }, apIDs);
+    inc.writeObject(fieldID, visibleWidget(fieldName, rect, page.ptr.id, page.ptr.gen, sigID, apIDs[0]!));
+    bodies.forEach((b, i) => inc.writeObject(apIDs[i]!, b));
+  }
   if (page) addWidgetToPage(inc, page, fieldID);
 
   let cat = "<<\n  /Type /Catalog\n";

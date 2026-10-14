@@ -18,6 +18,7 @@ import { assembleCMS, signedAttributes, CLAIMED_ROLE_MAX_RUNES } from "./pades/c
 import { randomBytes, sha256 } from "./pades/crypto.js";
 import { DEFAULT_TSA_URL, Fetcher, isBrowser, type FetchFn } from "./pades/fetch.js";
 import { LTVError, collectLTVWithWait, timestampToken } from "./pades/ltv.js";
+import { AppearanceError, pageCount, round100, type Visible } from "./pades/page/appearance.js";
 import { appendVerifyPage } from "./pades/page/page.js";
 import { appendDSS } from "./pades/pdf/dss.js";
 import { embedCMS, PlaceholderOverflowError, prepareSignature, signatureContents } from "./pades/pdf/signature.js";
@@ -109,6 +110,24 @@ export interface PadesPrepareOptions {
   lang?: "mn" | "en";
   /** Баримтын нэр — `verifyPage` үед заавал (≤ 120 тэмдэгт). */
   fileName?: string;
+  /** Харагдах гарын үсэг (APPEARANCE_SPEC.md); байхгүй бол үл харагдах (анхдагч, өмнөхтэй байт-ижил). */
+  appearance?: PadesAppearance;
+}
+
+/**
+ * Харагдах гарын үсгийн байршил (Go `pades.Appearance`, APPEARANCE_SPEC.md §1). Координат нь pt, тухайн хуудасны CropBox
+ * (байхгүй бол MediaBox)-ийн /Rotate-ийн ДАРААХ (дэлгэцэнд харагдах) зүүн доод булангаас; x баруун тийш, y дээш. Утга бүр
+ * 0.01 pt хүртэл тойрогдоно. Өндөр ≥ 45 pt (QR), эс бөгөөс REQUEST_INVALID.
+ */
+export interface PadesAppearance {
+  /** Оролтын баримтын хуудас, 1-ээс; 0/байхгүй = оролтын сүүлийн хуудас (энэ prepare-ийн нэмэх verify хуудас тооцогдохгүй). */
+  page?: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  /** `mn` | `en`; байхгүй бол `lang` (тэр нь байхгүй бол mn). */
+  lang?: "mn" | "en";
 }
 
 export interface PadesPrepared {
@@ -282,6 +301,7 @@ export async function prepare(pdf: Uint8Array | ArrayBuffer, opts: PadesPrepareO
   if (opts.lang !== undefined && (opts.lang as string) !== "" && opts.lang !== "mn" && opts.lang !== "en") {
     throw new PadesError("REQUEST_INVALID", "lang: mn | en");
   }
+  checkAppearance(opts);
   const now = opts.signingTime ?? new Date();
   if (Number.isNaN(now.getTime())) throw new PadesError("REQUEST_INVALID", "signingTime буруу Date");
   // Go: секундээс доош хэсэг /M-д орохгүй (формат секундээр).
@@ -329,10 +349,12 @@ export async function prepare(pdf: Uint8Array | ArrayBuffer, opts: PadesPrepareO
     pageHex = toHex(await sha256(base));
   }
   const name = goTrim(opts.signerName ?? "") === "" ? signerDisplayName(cert) : (opts.signerName ?? "");
+  const vis = opts.appearance ? visibleSpec(doc, opts, name, now, docId, pc.revIndex) : undefined;
   let prep: Awaited<ReturnType<typeof prepareSignature>>;
   try {
-    prep = await prepareSignature(base, now, name, opts.reason ?? "");
+    prep = await prepareSignature(base, now, name, opts.reason ?? "", vis);
   } catch (e) {
+    if (e instanceof AppearanceError) throw new PadesError("REQUEST_INVALID", `appearance: ${e.message}`, { cause: e });
     throw new PadesError("PDF_INVALID", "PDF-д гарын үсгийн revision бичиж чадсангүй", { cause: e });
   }
   if (prep.pdf.length + (256 << 10) > MAX_OUTPUT_BYTES) throw new PadesError("PDF_TOO_LARGE", "гарын үсэгтэй гаралт 10 MB-аас хэтэрнэ");
@@ -359,6 +381,49 @@ export async function prepare(pdf: Uint8Array | ArrayBuffer, opts: PadesPrepareO
     pdf: prep.pdf,
   });
   return { dtbs: await sha256(attrs), digest: prep.digest, docId, state };
+}
+
+/** Appearance-ийн PDF-ээс үл хамаарах шалгалт (Go checkAppearance, APPEARANCE_SPEC.md §1). */
+function checkAppearance(o: PadesPrepareOptions): void {
+  const a = o.appearance;
+  if (a === undefined) return;
+  const bad = (msg: string): PadesError => new PadesError("REQUEST_INVALID", `appearance: ${msg}`);
+  for (const v of [a.x, a.y, a.width, a.height]) {
+    if (typeof v !== "number" || !Number.isFinite(v) || v < 0 || v > 14400) throw bad("x, y, width, height нь 0…14400 pt");
+  }
+  const page = a.page ?? 0;
+  if (!Number.isInteger(page) || page < 0) throw bad("page ≥ 0");
+  if (a.lang !== undefined && (a.lang as string) !== "" && a.lang !== "mn" && a.lang !== "en") throw bad("lang: mn | en");
+  const role = o.claimedRole ?? "";
+  if (role !== "" && /[\p{Cc}\p{Cf}\p{Cs}]/u.test(role)) throw bad("claimedRole-д удирдах тэмдэгт");
+}
+
+/** Go visibleSpec: хуудас (0 → оролтын сүүлийн), h100, хэл, огноо (+08), verify URL. */
+function visibleSpec(doc: Uint8Array, o: PadesPrepareOptions, name: string, now: Date, docId: string, revIndex: number): Visible {
+  const a = o.appearance!;
+  if (docId === "") throw new PadesError("REQUEST_INVALID", "appearance: docId заавал (баримтад verify хуудас алга)");
+  let n: number;
+  try {
+    n = pageCount(doc);
+  } catch (e) {
+    throw new PadesError("PDF_INVALID", "PDF задарсангүй", { cause: e });
+  }
+  const page = a.page || n;
+  if (page > n) throw new PadesError("REQUEST_INVALID", `appearance: page ${page} > хуудасны тоо ${n}`);
+  const z = new Date(now.getTime() + 8 * 3600_000);
+  const p2 = (v: number): string => String(v).padStart(2, "0");
+  return {
+    page,
+    x: round100(a.x),
+    y: round100(a.y),
+    w: round100(a.width),
+    h: round100(a.height),
+    name: goTrim(name),
+    role: o.claimedRole ?? "",
+    lang: a.lang || o.lang || "mn",
+    date: `${String(z.getUTCFullYear()).padStart(4, "0")}-${p2(z.getUTCMonth() + 1)}-${p2(z.getUTCDate())} ${p2(z.getUTCHours())}:${p2(z.getUTCMinutes())} (+08)`,
+    url: `${VERIFY_URL_PREFIX}${docId}/${revIndex}`,
+  };
 }
 
 /**

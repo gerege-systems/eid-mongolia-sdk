@@ -100,6 +100,41 @@ test("complete — SIGNATURE_INVALID / STATE_INVALID / TSA_UNAVAILABLE / LTV_UNA
   await assert.rejects(() => pades.prepare(broken, base), code("PDF_PRIOR_SIGNATURE_INVALID"));
 });
 
+test("prepare — appearance: байршил/хэмжээ буруу, багтахгүй бол REQUEST_INVALID (APPEARANCE_SPEC.md §1, §3)", async () => {
+  const pdf = read(CASE.input); // 612 × 792, 1 хуудас
+  const ok: pades.PadesAppearance = { x: 36, y: 36, width: 220, height: 64 };
+  const bad: [string, Partial<pades.PadesPrepareOptions>][] = [
+    ["хуудас алга", { appearance: { ...ok, page: 2 } }],
+    ["сөрөг page", { appearance: { ...ok, page: -1 } }],
+    ["бутархай page", { appearance: { ...ok, page: 1.5 } }],
+    ["хуудаснаас гарна", { appearance: { ...ok, x: 500 } }],
+    ["дээш гарна", { appearance: { ...ok, y: 760 } }],
+    ["нам (QR < 1 pt)", { appearance: { ...ok, height: 44 } }],
+    ["нарийн (бичвэр)", { appearance: { ...ok, width: 90 } }],
+    ["тэг өргөн", { appearance: { ...ok, width: 0 } }],
+    ["NaN", { appearance: { ...ok, x: NaN } }],
+    ["14400-аас их", { appearance: { ...ok, height: 14401 } }],
+    ["хэл", { appearance: { ...ok, lang: "de" as "en" } }],
+    ["/Name бичигдэхгүй", { appearance: ok, signerName: "a stream b" }],
+    ["role удирдах тэмдэгт", { appearance: ok, claimedRole: "a\u200eb" }],
+  ];
+  for (const [name, o] of bad) {
+    await assert.rejects(() => pades.prepare(pdf, { ...base, ...o }), code("REQUEST_INVALID"), name);
+  }
+  // Хамгийн бага (45 pt өндөр) хүлээн авна; харагдах нь үл харагдахаас өөр DTBS.
+  const p45 = await pades.prepare(pdf, { ...base, appearance: { ...ok, height: 45 } });
+  const inv = await pades.prepare(pdf, base);
+  assert.notDeepEqual(p45.dtbs, inv.dtbs);
+
+  // Гарын үсэгтэй, хуудасгүй, docId-гүй баримтад харагдах → REQUEST_INVALID (verify URL-д docId заавал).
+  const np = M.cases.find((c) => c.name === "quartz-pdf13-nopage")!;
+  const prep = await pades.prepare(pdf, { ...base, docId: np.prepare.docId as string, verifyPage: false, fileName: undefined });
+  const done = await pades.complete(prep.state, Buffer.from(np.expect.signature!, "hex"), { ...completeOpts(), nonce: nonce(np.name) });
+  assert.equal(done.outSha256, np.expect.outSha256);
+  await assert.rejects(() => pades.prepare(done.pdf, { ...base, docId: undefined, verifyPage: false, appearance: ok }), code("REQUEST_INVALID"));
+  await pades.prepare(done.pdf, { ...base, docId: np.prepare.docId as string, verifyPage: false, appearance: ok });
+});
+
 test("complete — хөтөч: http → https зөвхөн allowlist-д, бусдыг татахгүй", async () => {
   const p = await pades.prepare(read(CASE.input), { ...base, fileName: CASE.prepare.fileName as string, lang: "mn" });
   const sig = Buffer.from(CASE.expect.signature!, "hex");

@@ -17,7 +17,7 @@ const hex = (b: Uint8Array) => Buffer.from(b).toString("hex");
 interface Case {
   name: string;
   input: string;
-  prepare: { reason?: string; claimedRole?: string; docId?: string; verifyPage?: boolean; fileName?: string; lang?: "mn" | "en" };
+  prepare: { reason?: string; claimedRole?: string; docId?: string; verifyPage?: boolean; fileName?: string; lang?: "mn" | "en"; appearance?: pades.PadesAppearance };
   expect: Record<string, unknown> & { error?: string };
 }
 interface Manifest {
@@ -65,6 +65,7 @@ test("pades golden — Go reference-тэй байт-ижил (prepare + complete
       verifyPage: c.prepare.verifyPage,
       fileName: c.prepare.fileName,
       lang: c.prepare.lang,
+      appearance: c.prepare.appearance,
     };
     if (c.expect.error) {
       await assert.rejects(
@@ -117,5 +118,6 @@ test("pades golden — Go reference-тэй байт-ижил (prepare + complete
     n++;
   }
   assert.equal(n, M.cases.length);
-  assert.ok(n >= 11, "golden case цөөн");
+  assert.ok(n >= 16, "golden case цөөн");
+  assert.ok(M.cases.filter((c) => c.prepare.appearance).length >= 5, "харагдах golden case цөөн");
 });
