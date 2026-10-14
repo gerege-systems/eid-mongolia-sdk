@@ -97,7 +97,7 @@ export class Http {
     const headers = res.headers;
     const retryAfterMs = parseRetryAfter(headers.get("Retry-After"));
     if (res.status === 401) {
-      throw new AuthenticationError(`API secret буруу эсвэл байхгүй (401${code ? ` ${code}` : ""})`, { code, body: text, headers });
+      throw new AuthenticationError(`API secret буруу эсвэл байхгүй (401${code ? ` ${code}` : ""})`, { code, serverMessage: error, body: text, headers });
     }
     if (res.status === 403) {
       throw new ForbiddenError(

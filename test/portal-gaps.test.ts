@@ -435,14 +435,20 @@ test("PII — ValidationError-д гэрчилгээний нэр/PNOMN орох�
 // ── 7. AuthenticationError ──
 
 test("AuthenticationError — CA-ийн code/body vs proxy 401", async () => {
-  const ca = client({ status: 401, body: { error: "API secret буруу", code: "RP_AUTH_FAILED" } });
+  // CA-ийн rpAuth: {"error":"RP API secret буруу"} (code-гүй)
+  const ca = client({ status: 401, body: { error: "RP API secret буруу" } });
   await assert.rejects(
     () => ca.eid.session.poll("x", 1000),
+    (e: unknown) => e instanceof AuthenticationError && e.serverMessage === "RP API secret буруу" && e.code === undefined,
+  );
+  const coded = client({ status: 401, body: { error: "x", code: "RP_AUTH_FAILED" } });
+  await assert.rejects(
+    () => coded.eid.session.poll("x", 1000),
     (e: unknown) => e instanceof AuthenticationError && e.code === "RP_AUTH_FAILED" && /RP_AUTH_FAILED/.test(e.body ?? "") && /RP_AUTH_FAILED/.test(e.message),
   );
   const proxy = client({ status: 401, body: "<html>401 Authorization Required</html>" });
   await assert.rejects(
     () => proxy.eid.session.poll("x", 1000),
-    (e: unknown) => e instanceof AuthenticationError && e.code === undefined && /html/.test(e.body ?? ""),
+    (e: unknown) => e instanceof AuthenticationError && e.code === undefined && e.serverMessage === undefined && /html/.test(e.body ?? ""),
   );
 });

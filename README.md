@@ -399,7 +399,7 @@ OK ирж болзошгүй. Иймд `ResponseValidator`:
 
 | Алдаа | Утга |
 |---|---|
-| `AuthenticationError` | 401 — API secret буруу/байхгүй; CA-ийн JSON бол `.code`, proxy-ийнх бол алга (`.body`, `.headers`) |
+| `AuthenticationError` | 401 — API secret буруу/байхгүй; CA-ийн JSON бол `.serverMessage` (+ `.code`), proxy-ийнх бол алга (`.body`, `.headers`) |
 | `ForbiddenError` | 403 — IP allowlist / mTLS / RP-ийн эрх; onBehalfOf татгалзвал `.code` (`OnBehalfErrorCode`) |
 | `SessionFailedError` | endResult ≠ OK (TIMEOUT, USER_REFUSED…) — `.endResult`-оор салга |
 | `ValidationError` | cert chain/signature/level шалгалт бүтэлгүйтсэн |

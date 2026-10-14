@@ -18,18 +18,22 @@ export interface HttpErrorInit {
 }
 
 /**
- * HTTP 401 — API secret буруу/байхгүй. Тохиргооны (RP secret) алдаа. CA-ийн өөрийн 401 нь JSON `{"error","code"}` —
- * `code` бөглөгдөнө; JSON биш (proxy / nginx) бол `code` undefined — үүгээр CA-ийн 401-ийг proxy-ийнхоос ялгана.
+ * HTTP 401 — API secret буруу/байхгүй. Тохиргооны (RP secret) алдаа. CA-ийн өөрийн 401 нь JSON `{"error"[,"code"]}` —
+ * `serverMessage` (ба байвал `code`) бөглөгдөнө; JSON биш (proxy / nginx) бол хоёул undefined — үүгээр CA-ийн 401-ийг
+ * proxy-ийнхоос ялгана.
  */
 export class AuthenticationError extends EidError {
-  /** Серверийн `{"code"}`; JSON биш (proxy) бол undefined. */
+  /** Серверийн `{"code"}`; байхгүй / JSON биш (proxy) бол undefined. */
   readonly code?: string;
+  /** Серверийн `{"error"}` текст (логт); JSON биш (proxy) бол undefined. */
+  readonly serverMessage?: string;
   /** Хариуны бие (таслагдаагүй текст). */
   readonly body?: string;
   readonly headers?: Headers;
-  constructor(message: string, init?: { code?: string; body?: string; headers?: Headers }) {
+  constructor(message: string, init?: { code?: string; serverMessage?: string; body?: string; headers?: Headers }) {
     super(message);
     this.code = init?.code;
+    this.serverMessage = init?.serverMessage;
     this.body = init?.body;
     this.headers = init?.headers;
   }
