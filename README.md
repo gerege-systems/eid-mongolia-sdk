@@ -268,6 +268,40 @@ eid.validator.validateSign(result, digest384, { hashAlgorithm: "SHA-384", expect
 
 RAW_DIGEST_SIGNATURE-д `flowType` гарын үсэгт ордоггүй (зөвхөн digest зурагдана) — энэ нь RP-API хариуны тулгалт.
 
+**QR / Web2App / App2App** — `eid.sign.deviceLinkByEtsi` / `deviceLinkByDocument` (`callbackUrl`-тай бол Web2App/App2App);
+холбоосыг backend-д `buildDeviceLink(deviceLinkInput(s, "QR", "mon"))` (auth/cert session-д ч мөн). `s.sign`
+(`SignContext`: digest, hash, алгоритм, interactions, callback)-ийг session-тэй хамт серверт хадгал.
+
+**`expiresAt`** (ms epoch) — sign / certificate-choice session-ий *тооцоолсон* дуусах мөч: CA session start хариунд
+хугацаа буцаадаггүй (зөвхөн `sessionID`), CA-ийн анхдагч 600с (`DEFAULT_SIGN_SESSION_TTL_MS`; CA админ 60–1800с болгож
+болно → `signSessionTtlMs`). Хүсэлтээс өмнөх цагаас тооцдог тул CA-ийнхаас хойно хэзээ ч биш; эцсийн үнэн нь
+`GET /session` (`TIMEOUT`).
+
+### 3.1. Гэрчилгээг урьдчилж мэдэх (client-side PAdES / CMS)
+
+Гэрчилгээ DTBS-д (`signingCertificateV2`) ордог тул эхлээд certificate-choice, дараа нь digest-ийг **яг тэр төхөөрөмж
+рүү (`documentNumber`)** зуруулна. Олон утастай иргэнд etsi-ээр эхлүүлбэл өөр утас зурж, гарын үсэг гэрчилгээтэйгээ
+таарахгүй.
+
+```ts
+const cc = await eid.sign.certificateChoiceByEtsi("PNOMN-12345678"); // эсвэл certificateChoiceDeviceLink() (зөвхөн QR)
+const signer = eid.validator.validateCertificateChoice(await eid.session.waitForResult(cc.sessionId), cc.sessionId);
+const dtbs = buildDtbs(signer.certificate); // 32 байт SHA-256, стандарт base64
+const s = await eid.sign.digestForSigner(signer, dtbs, ix, { fileName: "Гэрээ.pdf" }); // linked/{documentNumber}
+// QR / Web2App: eid.sign.deviceLinkForSigner(signer, dtbs, ix, { callbackUrl })
+const r = await eid.session.waitForResult(s.sessionId);
+const sig = eid.validator.validateSign(r, s.sign!.digest, {
+  hashAlgorithm: s.sign!.hashAlgorithm,
+  expectedFlowType: "Notification",
+  expectedAlgorithm: s.sign!.signatureAlgorithm, // sha256WithRSAEncryption — PSS хариуг татгалзана
+  expectedCertificate: signer.certificate,       // өөр гэрчилгээгээр зурсан бол татгалзана
+});
+```
+
+`digestForSigner` / `deviceLinkForSigner`-ийн анхдагч: `sha256WithRSAEncryption` + `SHA-256` (CA SplitKey RSA нь хүссэн
+алгоритмаар, PKCS#1 v1.5; хуучин threshold-ECDSA credential нь үргэлж `ecdsa-with-SHA256` — `expectedAlgorithm` үүнийг
+зөвхөн EC P-256 гэрчилгээтэй үед зөвшөөрнө). Digest-ийн урт hash-тай таарахгүй бол хүсэлт явахгүй.
+
 ## 3a. Байгууллагын нэрийн өмнөөс гарын үсэг (onBehalfOf)
 
 Иргэн **өөрийн PIN2 гэрчилгээгээр** зурна; тухайн мөчид байгууллагыг төлөөлөх эрхтэйг eID **өөрийн бүртгэлээр**
