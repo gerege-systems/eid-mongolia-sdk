@@ -19,6 +19,7 @@ export {
   type VerifiedIdentity,
   type VerifiedSignature,
   type ValidateAuthOptions,
+  type ValidateSignOptions,
   type RevocationChecker,
   type RevocationStatus,
   verifyPayloadSignature,

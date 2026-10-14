@@ -843,6 +843,25 @@ test("validateSign — parsedSubject нэмэгдсэн; ECDSA prehashed SHA-256
   assert.throws(() => V.validateSign(result, createHash("sha512").update("x").digest("base64"), "SHA-512"), ValidationError);
 });
 
+test("validateSign — expectedFlowType: таарвал OK, зөрвөл/алга бол татгалзана; өгөөгүй бол хуучин зан", () => {
+  const digest = createHash("sha256").update("баримт").digest("base64");
+  const sig = cryptoSign("sha256", Buffer.from("баримт"), { key: EC.key, dsaEncoding: "der" });
+  const signed = (flowType?: string) => parseSessionResult({
+    state: "COMPLETE", result: { endResult: "OK", documentNumber: "PNOMN-TEST" }, signatureProtocol: "RAW_DIGEST_SIGNATURE",
+    signature: { value: sig.toString("base64"), signatureAlgorithm: "ecdsa-with-SHA256", ...(flowType ? { flowType } : {}) },
+    cert: { value: EC.cert.raw.toString("base64"), certificateLevel: "QUALIFIED" },
+  });
+  assert.equal(V.validateSign(signed("QR"), digest, { expectedFlowType: "QR" }).documentNumber, "PNOMN-TEST");
+  assert.equal(V.validateSign(signed("Web2App"), digest, { expectedFlowType: "Web2App", hashAlgorithm: "SHA-256" }).documentNumber, "PNOMN-TEST");
+  assert.throws(() => V.validateSign(signed("Web2App"), digest, { expectedFlowType: "QR" }), (e: unknown) => e instanceof ValidationError && /эхлүүлсэн урсгал QR/.test(e.message));
+  assert.throws(() => V.validateSign(signed(), digest, { expectedFlowType: "Notification" }), /flowType null ≠ эхлүүлсэн урсгал Notification/);
+  // сонголтгүй / мөр hashAlgorithm — одоогийн зан (flowType шалгахгүй)
+  assert.equal(V.validateSign(signed("Web2App"), digest).documentNumber, "PNOMN-TEST");
+  assert.equal(V.validateSign(signed(), digest, "SHA-256").documentNumber, "PNOMN-TEST");
+  assert.equal(V.validateSign(signed(), digest, {}).documentNumber, "PNOMN-TEST");
+  assert.throws(() => V.validateSign(signed("QR"), createHash("sha512").update("x").digest("base64"), { hashAlgorithm: "SHA-512", expectedFlowType: "QR" }), ValidationError);
+});
+
 const pdfClient = (body: unknown) =>
   new EidClient({ credentials: CREDS, fetchImpl: async () => new Response(JSON.stringify(body), { status: 200 }) });
 const PDF_IN = { pdf: new TextEncoder().encode("%PDF"), fileName: "a.pdf", signer: { etsi: "PNOMN-1" } } as const;
