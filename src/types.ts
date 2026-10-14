@@ -218,11 +218,6 @@ export interface SessionResult {
    */
   onBehalfOf: OrgResult | null;
   /**
-   * PAdES (`POST /pdf/sign/prepare`) session-ий `pdf` блок — PDF урсгал биш бол null (талбар алга = хуучин SDK-аар
-   * угсарсан объект). {@link PdfSessionBlock}.
-   */
-  pdf?: PdfSessionBlock | null;
-  /**
    * COMPLETE+OK auth session-ий `person` блок (CA бүртгэлээс: кирилл нэр, төрсөн огноо, хүйс — гэрчилгээнд байдаггүй).
    * Зөвхөн session эзэмшигч RP-д; CA иргэнийг олоогүй бол null. ГАРЫН ҮСЭГТ ОРДОГГҮЙ — validateAuth-ийн дараа
    * {@link personMatchesCertificate}-ээр гэрчилгээний SERIALNUMBER (`PNOMN-<civilId>`)-тэй тулгаж л хэрэглэнэ.
@@ -267,34 +262,6 @@ export interface TokenCertSessionBlock {
   signSerialHex?: string;
 }
 
-/** PDF баримтын төлөв: PENDING → READY (эсвэл FAILED / EXPIRED). */
-export type PdfDocumentStatus = "PENDING" | "READY" | "FAILED" | "EXPIRED";
-
-/** PAdES гаралтын гарын үсэг зурагч. */
-export interface PdfSigner {
-  etsi: string;
-  certSerial: string;
-  /** Байгууллагын нэрийн өмнөөс бол байгууллагын ETSI (`NTRMN-…`) — баримтад бичигдсэн утга. */
-  onBehalfOf?: string;
-  /** CMS signer-attributes-v2-д бичигдсэн мэдүүлсэн үүрэг: «<албан тушаал>, <нэр> (NTRMN-…)». */
-  claimedRole?: string;
-}
-
-/** GET /session/{id}-ийн `pdf` объект (PAdES, CA угсарна). */
-export interface PdfSessionBlock {
-  docID: string;
-  documentStatus: PdfDocumentStatus | string;
-  /** FAILED үед — ж: `REPRESENTATION_REVOKED` (prepare-ээс хойш эрх хасагдсан, баримт үүсээгүй). */
-  errorCode?: string;
-  /** Гарын үсэгтэй PDF-ийн SHA-256 (hex) — татсан файлтай тулгана. */
-  outSha256?: string;
-  size?: number;
-  expiresAt?: string;
-  signatureLevel?: string;
-  signer?: PdfSigner;
-  validation?: { indication: string; ltv: boolean; signatures: number };
-}
-
 /** Иргэний төлөөлж чадах нэг байгууллага (GET /organization/representations/etsi/{personEtsi}). */
 export interface Representation {
   /** `NTRMN-<бүртгэл>` — `onBehalfOf`-д өгөх утга. */
@@ -318,6 +285,11 @@ export interface Representation {
   source: "REGISTRY" | "MANUAL" | string;
   /** Эх үүсвэрийн хүнд харуулах нэр (REGISTRY → «Улсын бүртгэл», MANUAL → «Захирал нэмсэн»; хэл нь `roleLabel`-тэй ижил). Хуучин CA-д байхгүй. */
   sourceLabel?: string;
+  /**
+   * CMS signer-attributes-v2-д бичих мэдүүлсэн үүрэг («<албан тушаал>, <нэр> (NTRMN-…)») — клиент талын PAdES-д
+   * `pades.prepare({claimedRole})`-д ЯГ ХЭВЭЭР өгнө (CA бүртгэлд дахин тооцож тулгана). Хуучин CA-д байхгүй.
+   */
+  claimedRole?: string;
   /** ISO 8601. */
   validFrom: string;
   /** ISO 8601; байхгүй = хугацаагүй. */

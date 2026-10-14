@@ -48,17 +48,6 @@ export class Http {
     return this.json("GET", path, undefined, undefined, timeoutMs);
   }
 
-  /** multipart/form-data POST (Content-Type-ийг boundary-тай нь fetch тавина). JSON хариу. */
-  postMultipart(path: string, form: FormData, timeoutMs?: number): Promise<unknown> {
-    return this.json("POST", path, form, undefined, timeoutMs);
-  }
-
-  /** GET — хариуг байтаар (ж: гарын үсэгтэй PDF), `maxBytes` хүртэл; хэтэрвэл {@link ResponseTooLargeError}. */
-  async getBytes(path: string, timeoutMs?: number, maxBytes: number = 64 << 20): Promise<Uint8Array> {
-    const res = await this.send("GET", path, undefined, undefined, timeoutMs);
-    return readLimited(res, maxBytes, `GET ${maskPath(path)}`);
-  }
-
   private async json(
     method: "GET" | "POST",
     path: string,

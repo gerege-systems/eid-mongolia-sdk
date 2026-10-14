@@ -20,8 +20,6 @@ export const RP_ROUTES = {
   signDeviceLinkDocument: { method: "POST", path: "/signature/device-link/document/{documentNumber}" },
   certChoiceDeviceLink: { method: "POST", path: "/signature/certificate-choice/device-link/anonymous" },
   certChoiceEtsi: { method: "POST", path: "/signature/certificate-choice/notification/etsi/{semanticsIdentifier}" },
-  pdfPrepare: { method: "POST", path: "/pdf/sign/prepare" },
-  pdfDocument: { method: "GET", path: "/pdf/sign/{sessionID}/document" },
   orgRepresentations: { method: "GET", path: "/organization/representations/etsi/{personEtsi}" },
   session: { method: "GET", path: "/session/{sessionId}" },
   personCertificates: { method: "GET", path: "/certificates/etsi/{personEtsi}" },
@@ -31,19 +29,39 @@ export const RP_ROUTES = {
   personChildren: { method: "GET", path: "/person/children/etsi/{personEtsi}" },
   tokenCertificate: { method: "POST", path: "/token/certificate" },
   tokenCertificateResult: { method: "GET", path: "/token/certificate/{sessionID}" },
+  pdfSignatures: { method: "POST", path: "/pdf/signatures" },
 } as const satisfies Record<string, RpRoute>;
 
 /**
- * CA-ийн гэрээнд (код + docs/TOKEN_AUTH.md, PADES_SIGNING.md §16.5) байгаа ч live `/.well-known/eid`-д хараахан жагсаагдаагүй замууд. Гэрээний
+ * CA-ийн гэрээнд (код + docs/TOKEN_AUTH.md, PADES_CLIENT_SIDE.md §4.3) байгаа ч live `/.well-known/eid`-д хараахан жагсаагдаагүй замууд. Гэрээний
  * тест эдгээрийг WARN болгоно (fail биш); discovery-д нэмэгдмэгц {@link RP_ROUTES} руу шилжүүлнэ.
  */
 export const RP_ROUTES_UNDISCOVERED = {
   tokenAuthChallenge: { method: "POST", path: "/token/auth/challenge" },
   tokenAuthVerify: { method: "POST", path: "/token/auth/verify" },
-  pdfTokenPrepare: { method: "POST", path: "/pdf/token/prepare" },
-  pdfTokenFinalize: { method: "POST", path: "/pdf/token/{signingID}/finalize" },
-  pdfTokenDocument: { method: "GET", path: "/pdf/token/{signingID}/document" },
 } as const satisfies Record<string, RpRoute>;
+
+/**
+ * `POST /pdf/signatures`-ийн биеийн талбарууд — CA `server/internal/dto/pdf.go` `PDFSignatureRegisterRequest`-ийн JSON
+ * tag (CA main d948fdd4, !355). CA `DisallowUnknownFields` тул SDK зөвхөн эдгээрийг илгээнэ. Live discovery-ийн
+ * `endpoints.pdf.signatures` тайлбартай гэрээний тест тулгана.
+ */
+export const PDF_SIGNATURE_REGISTER_FIELDS = [
+  "docID",
+  "revIndex",
+  "medium",
+  "sessionID",
+  "cms",
+  "fileName",
+  "inSha256",
+  "pageSha256",
+  "sigRevSha256",
+  "outSha256",
+  "priorCmsSha256",
+  "priorRevisionSha256",
+  "onBehalfOf",
+  "signerEtsi",
+] as const;
 
 /** Template-ийн `{param}`-уудыг дарааллаар нь `encodeURIComponent` хийсэн `args`-аар орлуулна. */
 export function routePath(route: RpRoute, ...args: string[]): string {

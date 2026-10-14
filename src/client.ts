@@ -1,7 +1,7 @@
 // EidClient — SDK-ийн гол үүд. Бүх flow-г нэг газар цуглуулна:
 //   client.auth      — нэвтрэлт эхлүүлэх (push/QR)
-//   client.sign      — гарын үсэг эхлүүлэх (digest; push / device link) ба гэрчилгээ сонгуулах (certificate-choice)
-//   client.pdf       — PDF гарын үсэг (PAdES, CA угсарна; onBehalfOf)
+//   client.sign      — гарын үсэг эхлүүлэх (digest; push / device link), гэрчилгээ сонгуулах (certificate-choice) ба
+//                      клиент талын PAdES-ийн DTBS (sign.pdfDigest / signPdfDigest, registerSignature)
 //   client.organization — иргэний төлөөлөх байгууллагууд
 //   client.person    — иргэний PKI самбар (PKI_READ): гэрчилгээ, төхөөрөмж, үйл ажиллагаа, тоо, хүүхдүүд
 //   client.token     — USB токены гэрчилгээ олголт (TOKEN_ISSUE) ба токеноор нэвтрэлт (AUTH)
@@ -21,9 +21,14 @@
 
 import { Http } from "./http.js";
 import { AuthApi } from "./auth.js";
-import { SignApi } from "./sign.js";
+import {
+  SignApi,
+  type PdfDigestInput,
+  type PdfDigestSession,
+  type RegisterSignatureInput,
+  type RegisterSignatureResult,
+} from "./sign.js";
 import { SessionApi } from "./session.js";
-import { PdfApi, DEFAULT_PDF_MAX_BYTES, DEFAULT_PDF_TIMEOUT_MS } from "./pdf.js";
 import { OrganizationApi } from "./organization.js";
 import { PersonApi } from "./person.js";
 import { TokenApi } from "./token.js";
@@ -42,13 +47,6 @@ export interface ClientConfig {
   defaultCertificateLevel?: CertificateLevel;
   /** HTTP timeout (мс). */
   timeoutMs?: number;
-  /** PAdES prepare / баримт татах дуудлагын хугацаа (мс). Анхдагч 80000 ({@link DEFAULT_PDF_TIMEOUT_MS}). */
-  pdfTimeoutMs?: number;
-  /**
-   * `pdf.document` / `pdf.tokenDocument`-ийн санах ойд унших дээд хэмжээ (байт). Анхдагч 64 MiB
-   * ({@link DEFAULT_PDF_MAX_BYTES}); хэтэрвэл `ResponseTooLargeError`.
-   */
-  pdfMaxBytes?: number;
   /** undici Dispatcher (mTLS client cert). */
   dispatcher?: unknown;
   /** fetch орлуулагч (тест). */
@@ -95,7 +93,6 @@ export function resolveBaseUrl(baseUrl: string | undefined): string {
 export class EidClient {
   readonly auth: AuthApi;
   readonly sign: SignApi;
-  readonly pdf: PdfApi;
   readonly organization: OrganizationApi;
   readonly person: PersonApi;
   readonly token: TokenApi;
@@ -120,16 +117,21 @@ export class EidClient {
 
     this.auth = new AuthApi(http, cfg.credentials, { certificateLevel: level });
     this.sign = new SignApi(http, cfg.credentials, { certificateLevel: level, sessionTtlMs: cfg.signSessionTtlMs });
-    this.pdf = new PdfApi(http, cfg.credentials, {
-      certificateLevel: level,
-      timeoutMs: cfg.pdfTimeoutMs ?? DEFAULT_PDF_TIMEOUT_MS,
-      maxBytes: cfg.pdfMaxBytes && cfg.pdfMaxBytes > 0 ? cfg.pdfMaxBytes : DEFAULT_PDF_MAX_BYTES,
-    });
     this.organization = new OrganizationApi(http);
     this.person = new PersonApi(http);
     this.token = new TokenApi(http, cfg.credentials);
     this.session = new SessionApi(http);
     this.validator = new ResponseValidator(cfg.trust ?? {});
     this.rpName = cfg.credentials.rpName;
+  }
+
+  /** {@link SignApi.pdfDigest} — клиент талын PAdES-ийн DTBS-д гарын үсгийн session (PDF CA руу очихгүй). */
+  signPdfDigest(input: PdfDigestInput): Promise<PdfDigestSession> {
+    return this.sign.pdfDigest(input);
+  }
+
+  /** {@link SignApi.registerSignature} — `pades.complete()`-ийн CMS-ийг CA-д бүртгэнэ (`POST /pdf/signatures`). */
+  registerSignature(input: RegisterSignatureInput): Promise<RegisterSignatureResult> {
+    return this.sign.registerSignature(input);
   }
 }
