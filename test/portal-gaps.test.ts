@@ -564,3 +564,25 @@ test("language → Accept-Language; анхдагч илгээхгүй", async ()
   await mk({ language: " " }).organization.getRepresentations("PNOMN-1");
   assert.deepEqual(seen, [null, "en", null]);
 });
+
+// ── 0.12.1: rightTypeLabel / sourceLabel (CA !344) ──
+
+test("rightTypeLabel / sourceLabel — representations ба session onBehalfOf; хуучин CA-д байхгүй", async () => {
+  const { eid } = client({ body: { personEtsi: "PNOMN-1", representations: [
+    { orgEtsi: "NTRMN-1", role: "ceo", roleLabel: "Гүйцэтгэх захирал", rightType: "ADMIN", rightTypeLabel: "Админ",
+      source: "REGISTRY", sourceLabel: "Улсын бүртгэл", validFrom: "2026-10-01T00:00:00Z" },
+    { orgEtsi: "NTRMN-2", role: "Нягтлан", rightType: "MANAGER", source: "MANUAL", validFrom: "2026-10-01T00:00:00Z" },
+  ] } });
+  const r = await eid.organization.getRepresentations("PNOMN-1");
+  assert.equal(r.representations[0].rightTypeLabel, "Админ");
+  assert.equal(r.representations[0].sourceLabel, "Улсын бүртгэл");
+  assert.equal(r.representations[1].rightTypeLabel, undefined);
+  assert.equal(r.representations[1].sourceLabel, undefined);
+
+  const base = { state: "COMPLETE", result: { endResult: "OK" } };
+  const s = parseSessionResult({ ...base, onBehalfOf: { orgEtsi: "NTRMN-1", orgName: "Х ХХК", role: "ceo", rightType: "MANAGER", rightTypeLabel: "Signatory" } });
+  assert.equal(s.onBehalfOf?.rightTypeLabel, "Signatory");
+  assert.equal(s.onBehalfOf?.rightType, "MANAGER");
+  const old = parseSessionResult({ ...base, onBehalfOf: { orgEtsi: "NTRMN-1", role: "ceo", rightType: "ADMIN" } });
+  assert.ok(!("rightTypeLabel" in (old.onBehalfOf ?? {})));
+});
