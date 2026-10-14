@@ -1,4 +1,55 @@
 # Changelog
+## 0.16.0 — 2026-10-15
+
+- **Баримт/тайлбарын зөрүү (аудит 2026-10-15) + CHANGELOG нэгтгэл, guard.** Код үйлдэлгүй — зөвхөн `RETRYABLE_ERROR_CODES`
+  ба `/token/auth/*`-ийн гэрээний байрлал өөрчлөгдсөн (доор).
+  - README: upload туслахууд 0.15.0-д устсан (0.14.0 биш); `NO_SIGNING_CERTIFICATE` зөвхөн sign / certificate-choice start
+    (`/pdf/sign/prepare` CA-д 2026-10-14-нөөс байхгүй); `/token/auth/*` live discovery-д
+    (`endpoints.token.auth_challenge` / `auth_verify`) байгаа; зурагчийн гэрчилгээний үндсэн зам = certificate-choice
+    (`CERT` эрх), `person.certificates` (`PKI_READ`) зөвхөн итгэмжлэгдсэн RP-д иргэн 24 цагт нэвтэрсэн үед; аппын доод
+    хувилбар: v3 урсгал iOS 2.2.3 (59) / Android 60-аас, сервер албадах доод нь 2026-10-15-нд iOS 2.2.7 / Android 83
+    (live `/mobile/app-config`).
+  - `src/contract.ts`: `tokenAuthChallenge` / `tokenAuthVerify` → `RP_ROUTES` (гэрээний тест одоо fail-аар шалгана);
+    `RP_ROUTES_UNDISCOVERED` хоосон.
+  - `src/errors.ts`: `RetryableErrorCode` / `RETRYABLE_ERROR_CODES`-оос `PDF_PREPARE_BUSY`, `DOCUMENT_PENDING` (устсан
+    горим A-ийн route), `TSA_UNAVAILABLE`, `LTV_UNAVAILABLE` (CA буцаадаггүй — зөвхөн клиент `PadesError.code`) хасагдсан;
+    үлдсэн `RATE_LIMITED`, `STATE_UNAVAILABLE`, `ISSUANCE_PENDING` (CA `server/internal/service/memory`-д шалгасан).
+    429/503 + Retry-After нь кодоос үл хамааран `retryable` хэвээр. `REPRESENTATION_REVOKED` = `POST /pdf/signatures`
+    ба токены гэрчилгээ олголт; `pdfMaxBytes` дурдлага хасагдсан.
+  - `src/sign.ts`: `registerSignature`-ийн алдааны жагсаалт CA `pades_register.go`-ийн бодит кодоор (`PDF_FOREIGN_SIGNATURE`
+    CA-аас ирдэггүй — клиент `PadesError`); устсан `memory/pades.go`-ийн лавлагаа → `websign.go` `fileNameFromSession`.
+    `src/types.ts` `SessionResult.expiresAt` = CA-ийн утга (0.14.2-оос, auth ч мөн); `src/button.ts` устсан
+    `oidc_login.html` лавлагаа; `src/index.ts` багцын нэр.
+  - `CHANGELOG.md`: 0.13.0 … 0.15.4 фрагментуудыг хувилбар бүрийн гарчгаар нэгтгэв (tag-ийн commit-оор тулгасан:
+    sign-session-gaps → 0.14.1, pades-prior-revision-created → 0.15.2, button-push-disclosure → 0.15.3);
+    sign-session-gaps-ийн «CA хугацаа буцаадаггүй» нь 0.14.2-оос (CA !357) хуучирсныг тэмдэглэв.
+  - Guard: `scripts/changelog.mjs` (`assemble` / `check-release` / `check-pr`); CI `changelog` job PR-д фрагмент шаардана;
+    Release workflow tag-д фрагмент үлдсэн эсвэл `## <version>` гарчиг алга бол publish хийхгүй.
+  - Шалгасан: live `https://ca.eidmongolia.mn/.well-known/eid`, `/mobile/app-config` (2026-10-15), CA main `af939ab0`
+    эх код; `npm run lint`, `npm test`, `npm run test:contract`.
+- **PAdES: харагдах гарын үсэг (сонголттой) + golden v3.**
+  - Юу: `PadesPrepareOptions.appearance` (`page`, `x`, `y`, `width`, `height`, `lang`) — сонгосон хуудсан дээр `/Rect`-тэй
+    widget (`/F 4`, `/P`, `/Annots`-ийн төгсгөлд), `/AP /N` шахалтгүй form XObject (verify хуудасны Noto Sans фонт, өөрийн
+    QR `https://ca.eidmongolia.mn/verify/<docID>/<revIndex>`, нэр/үүрэг/label/огноо, `/Rotate` 0/90/180/270-ийг content
+    `cm`-ээр). Байхгүй бол үл харагдах — golden v2-тэй байт-ижил.
+  - Яагаад: Go reference (`eid-mongolia-sdk-go` 55bcb0a, `pades/APPEARANCE_SPEC.md`)-тэй native SDK бүр байт-ижил.
+  - Хаана: `src/pades/page/appearance.ts` (шинэ), `src/pades/pdf/signature.ts`, `src/pades/page/page.ts` (`fontBodies`,
+    `wrapLimit`, `glyphHex` — verify хуудасны байт өөрчлөгдөөгүй), `src/pades.ts` (`PadesAppearance`, шалгалт, `visibleSpec`),
+    `scripts/sync-pades-golden.mjs` → tag `pades-golden-v3`, README.
+- Шалгасан: golden v3-ийн бүх 17 кейс (15 амжилттай + 2 алдааны) (харагдах 5: `quartz-pdf13-visible`, `-visible-en`, `-visible-second`,
+  `-visible-twice`, `quartz-rotated90-visible`) — digest/DTBS/signedAttrs/prepared/output sha256 байт-ижил; appearance-ийн
+  REQUEST_INVALID кейсүүд (Go `TestAppearanceRejects`-тэй ижил + docId-гүй гарын үсэгтэй баримт); lint, test, golden:check,
+  size:pades (gzip 126.8 KB), test:compat.
+- **0.16.0 (BREAKING): `@deprecated` legacy device-link туслахууд хасагдсан.**
+  - Юу: `deviceLink`, `openOrShowQR` функц ба `DeviceLinkInput`, `OpenOrShowQROptions` төрлийг `.` болон `/browser`
+    entry-ээс хассан. `isMobileUserAgent` / `NavigatorLike` (товч ашигладаг) хэвээр.
+  - Яагаад: статик `{deviceLinkBase}?sessionId=…&vc=…` холбоосыг сервер 2026-10-07-нд хассан (`DEVICE_LINK_REQUIRED`) —
+    эдгээр туслахаар нээгдсэн session ажиллахгүй. Шилжилтийн хугацаа үлдээхгүй; ямар ч RP хуучин API ашиглахгүй.
+  - Шилжих: backend-д `buildDeviceLink` (v3, `deviceLinkInput` / `qrDeviceLinkTicker`), утсан дээр Web2App холбоосыг
+    энгийн `<a href>`-ээр.
+  - Хаана: `src/devicelink.ts`, `src/index.ts`, `src/browser.ts`, `test/sdk.test.ts`, README.
+- Шалгасан: lint, test (browser entry-д `deviceLink`/`openOrShowQR` байхгүйг шалгах тест), test:contract.
+
 ## 0.15.4 — 2026-10-15
 
 - **`<eid-login-button>`: `label`, `icon`, `variant="icon"` тохиргоо, `part="icon"` / `part="label"` (0.15.4).**
