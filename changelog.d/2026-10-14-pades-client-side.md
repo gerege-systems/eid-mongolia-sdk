@@ -14,7 +14,8 @@
 - **Backend:** `eid.signPdfDigest` / `sign.pdfDigest({dtbs, fileName, signer, flow, onBehalfOf})` — CA-ийн одоогийн
   `/signature/{notification|device-link}/{etsi|document}` session (`RAW_DIGEST_SIGNATURE`, `sha256WithRSAEncryption`,
   «Баримтад гарын үсэг зурах: <fileName>» — CA-ийн өөрийн PAdES session-тэй ижил). `eid.registerSignature` /
-  `sign.registerSignature` → `POST /pdf/signatures` (CA docs/PADES_CLIENT_SIDE.md §4.3; discovery-д хараахан алга →
+  `sign.registerSignature` → `POST /pdf/signatures` (docID, sessionID, cms, medium, revIndex, priorCmsSha256, sigRevSha256,
+  outSha256, inSha256, pageSha256, hasPage, fileName, onBehalfOf) (CA docs/PADES_CLIENT_SIDE.md §4.3; discovery-д хараахан алга →
   гэрээний тест WARN). `Representation.claimedRole`. `RP_ROUTES.signDeviceLinkEtsi` / `signDeviceLinkDocument`.
 - CI: Go 1.25.5-аар WASM build, `wasm_exec.js` бэхэлгээний шалгалт, Node 18 smoke (`test/pades-node18.mjs`); release ч
   WASM build хийнэ. README §3d — вэб RP ба зөвхөн Node урсгал.

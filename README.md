@@ -304,7 +304,7 @@ WebAssembly-аар угсарна; CA зөвхөн 32 байт DTBS-д гары�
 | `prepare(pdf, { signerCert, claimedRole?, verifyPage?, fileName?, docId?, … })` | браузер / Node | `{ dtbs, digest, docId, state }` — сүлжээгүй |
 | `eid.signPdfDigest({ dtbs, fileName, signer, flow?, onBehalfOf? })` | RP backend | DTBS-д гарын үсгийн session (push эсвэл device-link) |
 | `complete(state, signature)` | браузер / Node | TSA + OCSP/CRL → `{ pdf, cms, docId, outSha256, inSha256, hasPage, pageSha256, … }` |
-| `eid.registerSignature({ docID, sessionId, cms, … })` | RP backend | `POST /pdf/signatures` — `/verify/{docID}` бүртгэл |
+| `eid.registerSignature({ docID, sessionId, cms, revIndex, sigRevSha256, … })` | RP backend | `POST /pdf/signatures` — `/verify/{docID}` бүртгэл |
 | `verify(pdf)` | браузер / Node | гарын үсгүүдийн тайлан (CA-ийн нийтийн шалгагчийн хэлбэр) |
 
 Үндсэн entry WASM-ыг агуулахгүй (PDF ашиглахгүй RP-д bundle томрохгүй); `/pades` WASM-аа (~24 MB, gzip ~8 MB) анхны
@@ -336,6 +336,7 @@ const done = await complete(p.state, signature);                                
 await api(`/sign/pdf/${s.sessionId}/register`, {
   docID: done.docId, cms: b64(done.cms), outSha256: done.outSha256, inSha256: done.inSha256,
   hasPage: done.hasPage, pageSha256: done.pageSha256,
+  revIndex: done.revIndex, sigRevSha256: done.sigRevSha256, priorCmsSha256: done.priorCmsSha256,
 });
 download(done.pdf, "Гэрээ №12.pdf");
 
@@ -378,7 +379,8 @@ for (let i = 0; ; i++) {
   }
 }
 await eid.registerSignature({ docID: done.docId, sessionId: s.sessionId, cms: done.cms, outSha256: done.outSha256,
-  inSha256: done.inSha256, fileName: "Гэрээ №12.pdf", hasPage: done.hasPage, pageSha256: done.pageSha256 });
+  inSha256: done.inSha256, fileName: "Гэрээ №12.pdf", hasPage: done.hasPage, pageSha256: done.pageSha256,
+  revIndex: done.revIndex, sigRevSha256: done.sigRevSha256, priorCmsSha256: done.priorCmsSha256 });
 writeFileSync("signed.pdf", done.pdf);
 ```
 

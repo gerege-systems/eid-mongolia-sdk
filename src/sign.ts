@@ -105,6 +105,14 @@ export interface RegisterSignatureInput {
   pageSha256?: string;
   /** Байгууллагын нэрийн өмнөөс (`NTRMN-…`) — session-ийнхтэй ижил. */
   onBehalfOf?: string;
+  /** `complete().revIndex` — энэ гарын үсгийн дугаар (1–16). */
+  revIndex: number;
+  /** `complete().sigRevSha256` — гарын үсгийн revision-ий SHA-256 (hex). */
+  sigRevSha256: string;
+  /** `complete().priorCmsSha256` — өмнөх гарын үсгүүдийн CMS SHA-256 (hex); `revIndex > 1` үед заавал. */
+  priorCmsSha256?: string[];
+  /** `phone` (утас, `sessionId`-тэй) | `token` (USB токен). Анхдагч: `sessionId` байвал phone, эс бөгөөс token. */
+  medium?: "phone" | "token";
 }
 
 /** `POST /pdf/signatures`-ийн хариу (201 шинэ, 200 идэмпотент давталт). */
@@ -262,13 +270,24 @@ export class SignApi {
     if (!fileName || Array.from(fileName).length > PDF_MAX_FILE_NAME) {
       throw new ValidationError(`registerSignature: fileName заавал, ≤ ${PDF_MAX_FILE_NAME} тэмдэгт`);
     }
+    if (!Number.isInteger(input.revIndex) || input.revIndex < 1 || input.revIndex > 16) {
+      throw new ValidationError("registerSignature: revIndex 1–16");
+    }
+    const prior = (input.priorCmsSha256 ?? []).map((h, i) => hex(`priorCmsSha256[${i}]`, h, true)!);
+    if (prior.length !== input.revIndex - 1) throw new ValidationError("registerSignature: priorCmsSha256-ийн тоо = revIndex − 1");
+    const medium = input.medium ?? (input.sessionId?.trim() ? "phone" : "token");
+    if (medium === "phone" && !input.sessionId?.trim()) throw new ValidationError("registerSignature: phone-д sessionId заавал");
     const body: Record<string, unknown> = {
       docID: input.docID,
       cms: Buffer.from(input.cms).toString("base64"),
+      medium,
+      revIndex: input.revIndex,
       outSha256: hex("outSha256", input.outSha256, true),
+      sigRevSha256: hex("sigRevSha256", input.sigRevSha256, true),
       fileName,
       hasPage: input.hasPage === true,
     };
+    if (prior.length) body.priorCmsSha256 = prior;
     if (input.sessionId?.trim()) body.sessionID = input.sessionId.trim();
     const inSha = hex("inSha256", input.inSha256, false);
     if (inSha) body.inSha256 = inSha;

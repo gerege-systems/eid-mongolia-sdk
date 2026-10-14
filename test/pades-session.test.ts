@@ -97,20 +97,29 @@ test("registerSignature — POST /pdf/signatures бие ба хариу; алд�
   const cms = new Uint8Array([0x30, 0x82, 0x01]);
   const r = await eid.registerSignature({
     docID, sessionId: "s1", cms, outSha256: sha("out").toUpperCase(), inSha256: sha("in"), fileName: " Гэрээ.pdf ",
-    hasPage: true, pageSha256: sha("page"), onBehalfOf: "NTRMN-6235972",
+    hasPage: true, pageSha256: sha("page"), onBehalfOf: "NTRMN-6235972", revIndex: 1, sigRevSha256: sha("rev"),
   });
   assert.equal(calls[0]!.url, "https://rp.eidmongolia.mn/pdf/signatures");
   assert.equal(calls[0]!.method, "POST");
   assert.deepEqual(calls[0]!.body, {
-    docID, sessionID: "s1", cms: Buffer.from(cms).toString("base64"), outSha256: sha("out"), inSha256: sha("in"),
-    fileName: "Гэрээ.pdf", hasPage: true, pageSha256: sha("page"), onBehalfOf: "NTRMN-6235972",
+    docID, sessionID: "s1", cms: Buffer.from(cms).toString("base64"), medium: "phone", revIndex: 1, outSha256: sha("out"),
+    sigRevSha256: sha("rev"), inSha256: sha("in"), fileName: "Гэрээ.pdf", hasPage: true, pageSha256: sha("page"),
+    onBehalfOf: "NTRMN-6235972",
   });
   assert.equal(r.revIndex, 1);
   assert.equal(r.verifyUrl, `https://ca.eidmongolia.mn/verify/${docID}`);
 
-  const base = { docID, cms, outSha256: sha("out"), fileName: "a.pdf", hasPage: false };
+  // токен (sessionId-гүй) 2 дахь гарын үсэг
+  await eid.registerSignature({ docID, cms, outSha256: sha("o2"), sigRevSha256: sha("r2"), fileName: "a.pdf", hasPage: false,
+    revIndex: 2, priorCmsSha256: [sha("c1")] });
+  assert.equal(calls[1]!.body.medium, "token");
+  assert.deepEqual(calls[1]!.body.priorCmsSha256, [sha("c1")]);
+  assert.equal("sessionID" in calls[1]!.body, false);
+
+  const base = { docID, cms, outSha256: sha("out"), sigRevSha256: sha("rev"), fileName: "a.pdf", hasPage: false, revIndex: 1 };
   for (const bad of [{ ...base, docID: "x" }, { ...base, cms: new Uint8Array() }, { ...base, outSha256: "00" },
-    { ...base, hasPage: true }, { ...base, fileName: "" }]) {
+    { ...base, hasPage: true }, { ...base, fileName: "" }, { ...base, revIndex: 0 }, { ...base, revIndex: 2 },
+    { ...base, sigRevSha256: "" }, { ...base, medium: "phone" as const }]) {
     await assert.rejects(() => eid.registerSignature(bad), ValidationError);
   }
   const conflict = client(() => ({ status: 409, body: { error: "x", code: "CLAIMED_ROLE_MISMATCH" } }));
