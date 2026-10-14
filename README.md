@@ -72,7 +72,7 @@ export const eidLogin = createEidLogin({
     };
   },
   // store: redisStore,            // олон instance / serverless бол (анхдагч — процессын санах ой)
-  // rateLimit: (key) => redisLimiter.allow(key), // "start:<ip>", "push:<idCode>"; анхдагч push 3/мин нэг дугаарт
+  // rateLimit: { start: (key) => redisLimiter.allow(key) }, // анхдагчтай нэгтгэгдэнэ (push 3/мин хэвээр) — доор «Хязгаарлалт»
   trustProxy: 1, // handle(Request)-д клиент IP: nginx/LB нэг hop бол 1 (доор «Клиент IP»)
 });
 ```
@@ -95,8 +95,27 @@ export const POST = (req: Request) => eidLogin.handle(req);
   Vercel `req.headers.get("x-real-ip")`). `trustProxy`-оос давуу.
 
 Аль нь ч үгүй бол IP-ээр хязгаарлахгүй (эхний хүсэлтэд `onError`-оор нэг удаа анхааруулна). `handleRequest`-д `req.ip`
-(Express `req.ip`, `app.set("trust proxy", …)`-тэй) шууд хэрэглэгдэнэ. Анхдагч `rateLimit` зөвхөн `push:`-ийг хязгаарладаг —
-`start:<ip>`-ийг өөрийн `rateLimit`-ээр (Redis г.м.) хязгаарлана. Go: `eidlogin.Config.ClientIP` (`eidlogin.ForwardedClientIP(n)`) — ижил дүрэм.
+(Express `req.ip`, `app.set("trust proxy", …)`-тэй) шууд хэрэглэгдэнэ. Go: `eidlogin.Config.ClientIP` (`eidlogin.ForwardedClientIP(n)`) — ижил дүрэм.
+
+**Хязгаарлалт** (`rateLimit`). Түлхүүр: `start:<ip>` (IP мэдэгдэж байвал), `push:<idCode>`; татгалзвал 429 + `Retry-After: 60`.
+Анхдагч `defaultRateLimit` = `{ push: { limit: 3, windowMs: 60_000 } }` — нэг дугаарт минутад 3 мэдэгдэл (MFA fatigue);
+`start`-ийг анхдагчаар хязгаарладаггүй.
+
+- **Объект** `{ start?, push? }` — анхдагчтай **нэгтгэгдэнэ**: өгсөн төрөл анхдагчийг дарна, өгөөгүй нь анхдагчаараа үлдэнэ.
+  Утга: `{ limit, windowMs }` (процессын санах ойн гулсах цонх), `(key) => boolean | Promise<boolean>` (Redis г.м.),
+  эсвэл `false` (тухайн төрлийг хязгаарлахгүй). Өөр түлхүүр → `createEidLogin` throw.
+- **Функц** `(key) => …` — бүх түлхүүрт дуудагдана, анхдагч хязгаар **дээр нэмэгдэнэ** (хоёулаа зөвшөөрөх ёстой).
+  Анхдагчийг сулруулах/солих бол объектоор тухайн төрлийг өг (`{ push: … }`).
+
+```ts
+import { defaultRateLimit } from "@gerege-systems/eid-mongolia-sdk";
+rateLimit: { start: { limit: 20, windowMs: 60_000 } },             // push 3/мин хэвээр
+rateLimit: { ...defaultRateLimit, start: (k) => redis.allow(k) },  // ижил — анхдагчийг илэрхий бичсэн
+rateLimit: { push: (k) => redis.allow(k, 3, 60) },                 // олон instance: push-ийг Redis-ээр солино
+```
+
+Go: `eidlogin.Config.RateLimits` (`map[string]eidlogin.RateRule{"start": {Max: 20, Window: time.Minute}}`,
+`eidlogin.DefaultRateLimit()`) — ижил нэгтгэл; `Config.RateLimit` функц мөн анхдагч дээр нэмэгдэнэ.
 
 Express:
 
@@ -128,20 +147,38 @@ app.use("/auth/eid", express.json(), async (req, res) => {
 **Дизайн, theme.** Дизайн нь eID нэвтрэх хуудсынх (лого, өнгө). Фонт нь хуудаснаас өвлөгдөнө (товч, цонх, input бүгд).
 `theme="auto"` үед дараалал: хуудасны `html[data-theme="dark|light"]` → `html.dark` / `html.light` → OS
 (`prefers-color-scheme`); хуудас theme солиход (MutationObserver) шууд дагана. `theme="light|dark"` нь хуудсыг давна.
-Өнгө, радиусыг CSS хувьсагчаар (элемент дээр — shadow-ийн `:host`-оос давуу) дарна:
+Өнгө, радиусыг CSS хувьсагчаар дарна. `--eid-*` нь зөвхөн **оролт** (shadow дотор тодорхойлогддоггүй) тул хуудасны
+аль ч түвшинд (`:root`, эцэг элемент, `eid-login-button`) өгсөн утга өвлөгдөж **light ба dark хоёуланд** үйлчилнэ;
+`--eid-<нэр>-dark` нь зөвхөн dark-д, `--eid-<нэр>`-ээс давуу. Аль нь ч үгүй бол eID-ийн анхдагч (доорх хүснэгт) — fallback л.
+Dark-ийн дараалал: `--eid-<нэр>-dark` → `--eid-<нэр>` → dark анхдагч.
 
 ```css
-eid-login-button {
-  --eid-accent: #0b5cff; --eid-accent-fg: #fff;   /* үндсэн товч, QR-ийн алхмын тоо (--eid-accent-subtle, --eid-accent-subtle-fg) */
-  --eid-bg: #fff; --eid-bg-subtle: …; --eid-bg-muted: …;  /* цонх, hover */
-  --eid-fg: …; --eid-fg-muted: …; --eid-fg-subtle: …;     /* текст */
-  --eid-border: …; --eid-border-strong: …; --eid-ring: …; /* хүрээ, focus */
-  --eid-warning-bg: …; --eid-warning-border: …; --eid-warning-fg: …; --eid-danger-fg: …;
+:root {                                   /* эсвэл eid-login-button { … } */
+  --eid-accent: var(--brand);             /* хоёр theme-д */
+  --eid-accent-dark: var(--brand-400);    /* зөвхөн dark-д (өгөхгүй бол --eid-accent) */
   --eid-radius: 6px; --eid-radius-lg: 8px;
 }
-html[data-theme="dark"] eid-login-button { --eid-accent: …; } /* dark-д өөр өнгө бол */
-eid-login-button::part(button) { width: 100%; }               /* part: button, backdrop, dialog */
+eid-login-button::part(button) { width: 100%; }  /* part: button, backdrop, dialog */
 ```
+
+| Хувьсагч (`-dark` хувилбартай) | Юунд | Light анхдагч | Dark анхдагч |
+|---|---|---|---|
+| `--eid-accent` | үндсэн товч | `oklch(0.534 0.2 259)` | `oklch(0.64 0.15 259)` |
+| `--eid-accent-fg` | үндсэн товчны текст | `#fff` | `hsl(229 50% 6%)` |
+| `--eid-accent-subtle` | алхмын дугаарын дэвсгэр | `oklch(0.97 0.03 259)` | `oklch(0.24 0.06 259)` |
+| `--eid-accent-subtle-fg` | алхмын дугаар | `oklch(0.474 0.19 259)` | `oklch(0.82 0.1 259)` |
+| `--eid-ring` | focus | `oklch(0.604 0.2 259)` | `oklch(0.68 0.15 259)` |
+| `--eid-bg` | цонх, outline товч, input | `hsl(0 0% 100%)` | `hsl(229 50% 6%)` |
+| `--eid-bg-subtle` | — (нөөц) | `hsl(210 40% 98%)` | `hsl(222 47% 9%)` |
+| `--eid-bg-muted` | hover | `hsl(210 40% 96%)` | `hsl(217 33% 13%)` |
+| `--eid-fg` | текст | `hsl(222 47% 11%)` | `hsl(210 40% 98%)` |
+| `--eid-fg-muted` | хоёрдогч текст | `hsl(215 19% 35%)` | `hsl(213 27% 84%)` |
+| `--eid-fg-subtle` | тайлбар, placeholder | `hsl(215 16% 45%)` | `hsl(215 20% 65%)` |
+| `--eid-border` | цонх, QR, тусгаарлагч | `hsl(214 32% 91%)` | `hsl(217 33% 17%)` |
+| `--eid-border-strong` | outline товч, input | `hsl(213 27% 84%)` | `hsl(215 25% 27%)` |
+| `--eid-warning-bg` / `-border` / `-fg` | сүлжээний анхааруулга | `hsl(48 100% 96%)` / `hsl(45 95% 78%)` / `hsl(23 75% 33%)` | `hsl(20 60% 10%)` / `hsl(22 70% 26%)` / `hsl(40 92% 65%)` |
+| `--eid-danger-fg` | алдаа | `hsl(0 74% 42%)` | `hsl(0 91% 71%)` |
+| `--eid-radius` / `--eid-radius-lg` (theme-гүй) | булан | `6px` / `8px` | — |
 
 **eID аппын доод хувилбар.** `flowType` бэхлэлт (device link v3) ба Web2App-ийн `userChallengeVerifier` нь
 **iOS 2.2.3 (build 59)**, **Android 2.2.3 (versionCode 60)**-аас эхэлсэн. eID сервер 2026-10-07-оос legacy холбоосыг

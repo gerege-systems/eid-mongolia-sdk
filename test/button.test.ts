@@ -119,6 +119,26 @@ test("mountEidLoginButton: theme сонголт атрибут болно", () =
   assert.equal(b.scheme, "dark");
 });
 
+test("токен: --eid-* хоёр theme-д (хуудасны аль ч түвшнээс), --eid-*-dark зөвхөн dark-д; анхдагч нь fallback", () => {
+  const { sr, b } = make({ theme: "light" });
+  const base = sr.querySelector("style:not([data-eid-theme])")!.textContent ?? "";
+  const dark = () => sr.querySelector('style[data-eid-theme="dark"]')!.textContent ?? "";
+  const names = ["bg", "bg-subtle", "bg-muted", "fg", "fg-muted", "fg-subtle", "border", "border-strong", "accent", "accent-fg",
+    "accent-subtle", "accent-subtle-fg", "ring", "warning-bg", "warning-border", "warning-fg", "danger-fg"];
+  // Нийтийн --eid-* shadow дотор ТОДОРХОЙЛОГДОХГҮЙ (тэгвэл :root/эцгийн утга өвлөгдөхгүй) — зөвхөн var()-аар уншина.
+  assert.doesNotMatch(base, /(^|[\s;{])--eid-[a-z-]+\s*:/);
+  for (const n of names) assert.ok(base.includes(`--_eid-${n}: var(--eid-${n}, `), `light ${n}`);
+  assert.match(base, /--_eid-accent: var\(--eid-accent, oklch\(0\.534 0\.2 259\)\);/);
+  assert.match(base, /--_eid-radius: var\(--eid-radius, 6px\); --_eid-radius-lg: var\(--eid-radius-lg, 8px\);/);
+  assert.match(base, /\.btn-primary \{ background: var\(--_eid-accent\); color: var\(--_eid-accent-fg\); \}/);
+  assert.equal(dark(), "");
+  b.setAttribute("theme", "dark");
+  assert.doesNotMatch(dark(), /(^|[\s;{])--eid-[a-z-]+\s*:/);
+  for (const n of names) assert.ok(dark().includes(`--_eid-${n}: var(--eid-${n}-dark, var(--eid-${n}, `), `dark ${n}`);
+  assert.match(dark(), /--_eid-accent: var\(--eid-accent-dark, var\(--eid-accent, oklch\(0\.64 0\.15 259\)\)\);/);
+  assert.doesNotMatch(dark(), /^[^]*:\s*oklch\(0\.64 0\.15 259\);/m, "dark accent хатуу утгаар тодорхойлогдохгүй");
+});
+
 test("desktop: ачаалж байна → QR (svg) + VC + алхмууд → OK: event + redirect", async () => {
   startReplies = [{ status: 200, body: { mode: "qr", qr: QR, vc: "12345", expiresIn: 120 } }];
   statusReplies = [{ state: "PENDING", qr: QR, expiresIn: 119 }, { state: "OK", redirect: "/dashboard", data: { u: 1 } }];

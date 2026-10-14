@@ -119,91 +119,106 @@ export interface EidLoginButtonOptions {
   onError?: (error: string) => void;
 }
 
+// Өнгөний токен: [нэр, light анхдагч, dark анхдагч]. Нийтийн `--eid-<нэр>` нь ЗӨВХӨН оролт — shadow дотор
+// тодорхойлогддоггүй тул хуудасны аль ч түвшинд (`:root`, эцэг, элемент) өгсөн утга өвлөгдөж ХОЁР theme-д үйлчилнэ.
+// `--eid-<нэр>-dark` нь dark-д давуу. Анхдагч нь зөвхөн fallback. Дотоод утга `--_eid-<нэр>`.
+const EID_COLOR_TOKENS: ReadonlyArray<readonly [string, string, string]> = [
+  ["bg", "hsl(0 0% 100%)", "hsl(229 50% 6%)"],
+  ["bg-subtle", "hsl(210 40% 98%)", "hsl(222 47% 9%)"],
+  ["bg-muted", "hsl(210 40% 96%)", "hsl(217 33% 13%)"],
+  ["fg", "hsl(222 47% 11%)", "hsl(210 40% 98%)"],
+  ["fg-muted", "hsl(215 19% 35%)", "hsl(213 27% 84%)"],
+  ["fg-subtle", "hsl(215 16% 45%)", "hsl(215 20% 65%)"],
+  ["border", "hsl(214 32% 91%)", "hsl(217 33% 17%)"],
+  ["border-strong", "hsl(213 27% 84%)", "hsl(215 25% 27%)"],
+  ["accent", "oklch(0.534 0.2 259)", "oklch(0.64 0.15 259)"],
+  ["accent-fg", "#fff", "hsl(229 50% 6%)"],
+  ["accent-subtle", "oklch(0.97 0.03 259)", "oklch(0.24 0.06 259)"],
+  ["accent-subtle-fg", "oklch(0.474 0.19 259)", "oklch(0.82 0.1 259)"],
+  ["ring", "oklch(0.604 0.2 259)", "oklch(0.68 0.15 259)"],
+  ["warning-bg", "hsl(48 100% 96%)", "hsl(20 60% 10%)"],
+  ["warning-border", "hsl(45 95% 78%)", "hsl(22 70% 26%)"],
+  ["warning-fg", "hsl(23 75% 33%)", "hsl(40 92% 65%)"],
+  ["danger-fg", "hsl(0 74% 42%)", "hsl(0 91% 71%)"],
+];
+
+const lightVars = EID_COLOR_TOKENS.map(([n, l]) => `--_eid-${n}: var(--eid-${n}, ${l});`).join("\n  ");
+const darkVars = EID_COLOR_TOKENS.map(([n, , d]) => `--_eid-${n}: var(--eid-${n}-dark, var(--eid-${n}, ${d}));`).join("\n  ");
+
 const CSS_BASE = `
-:host { display: inline-block;
-  --eid-bg: hsl(0 0% 100%); --eid-bg-subtle: hsl(210 40% 98%); --eid-bg-muted: hsl(210 40% 96%);
-  --eid-fg: hsl(222 47% 11%); --eid-fg-muted: hsl(215 19% 35%); --eid-fg-subtle: hsl(215 16% 45%);
-  --eid-border: hsl(214 32% 91%); --eid-border-strong: hsl(213 27% 84%);
-  --eid-accent: oklch(0.534 0.2 259); --eid-accent-fg: #fff; --eid-accent-subtle: oklch(0.97 0.03 259);
-  --eid-accent-subtle-fg: oklch(0.474 0.19 259); --eid-ring: oklch(0.604 0.2 259);
-  --eid-warning-bg: hsl(48 100% 96%); --eid-warning-border: hsl(45 95% 78%); --eid-warning-fg: hsl(23 75% 33%);
-  --eid-danger-fg: hsl(0 74% 42%); --eid-radius: 6px; --eid-radius-lg: 8px; font-family: inherit; color-scheme: light; }
+:host { display: inline-block; font-family: inherit; color-scheme: light;
+  ${lightVars}
+  --_eid-radius: var(--eid-radius, 6px); --_eid-radius-lg: var(--eid-radius-lg, 8px); }
 button, input { font-family: inherit; }
 `;
 
-// Dark токен — `theme`-ээс (эсвэл auto үед хуудсын html[data-theme] / html.dark / prefers-color-scheme) хамаарч
-// тусдаа <style>-д идэвхжинэ. :host дээр тул RP-ийн `eid-login-button { --eid-bg: … }` дүрэм давуу хэвээр.
+// Dark — `theme`-ээс (эсвэл auto үед хуудсын html[data-theme] / html.dark / prefers-color-scheme) хамаарч тусдаа
+// <style>-д идэвхжинэ: `--eid-<нэр>-dark` → `--eid-<нэр>` → dark анхдагч.
 const DARK_CSS = `:host { color-scheme: dark;
-  --eid-bg: hsl(229 50% 6%); --eid-bg-subtle: hsl(222 47% 9%); --eid-bg-muted: hsl(217 33% 13%);
-  --eid-fg: hsl(210 40% 98%); --eid-fg-muted: hsl(213 27% 84%); --eid-fg-subtle: hsl(215 20% 65%);
-  --eid-border: hsl(217 33% 17%); --eid-border-strong: hsl(215 25% 27%);
-  --eid-accent: oklch(0.64 0.15 259); --eid-accent-fg: hsl(229 50% 6%); --eid-accent-subtle: oklch(0.24 0.06 259);
-  --eid-accent-subtle-fg: oklch(0.82 0.1 259); --eid-ring: oklch(0.68 0.15 259);
-  --eid-warning-bg: hsl(20 60% 10%); --eid-warning-border: hsl(22 70% 26%); --eid-warning-fg: hsl(40 92% 65%);
-  --eid-danger-fg: hsl(0 91% 71%); }
+  ${darkVars} }
 `;
 
 const CSS_REST = `
 *, *::before, *::after { box-sizing: border-box; }
 [hidden] { display: none !important; }
 h2, p, ol { margin: 0; }
-:focus-visible { outline: 2px solid var(--eid-ring); outline-offset: 2px; }
+:focus-visible { outline: 2px solid var(--_eid-ring); outline-offset: 2px; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 .btn { display: inline-flex; width: 100%; align-items: center; justify-content: center; gap: 8px; min-height: 44px; padding: 0 20px;
-  border-radius: var(--eid-radius); font-family: inherit; font-weight: 500; font-size: 1rem; line-height: 1.25; text-decoration: none; border: 1px solid transparent; cursor: pointer;
+  border-radius: var(--_eid-radius); font-family: inherit; font-weight: 500; font-size: 1rem; line-height: 1.25; text-decoration: none; border: 1px solid transparent; cursor: pointer;
   transition: background-color 160ms cubic-bezier(0,0,0.2,1); }
 .btn:disabled { opacity: 0.6; cursor: progress; }
-.btn-primary { background: var(--eid-accent); color: var(--eid-accent-fg); }
-.btn-primary:hover { background: color-mix(in oklab, var(--eid-accent) 88%, black); }
-.btn-outline { background: var(--eid-bg); color: var(--eid-fg); border-color: var(--eid-border-strong); }
-.btn-outline:hover { background: var(--eid-bg-muted); }
+.btn-primary { background: var(--_eid-accent); color: var(--_eid-accent-fg); }
+.btn-primary:hover { background: color-mix(in oklab, var(--_eid-accent) 88%, black); }
+.btn-outline { background: var(--_eid-bg); color: var(--_eid-fg); border-color: var(--_eid-border-strong); }
+.btn-outline:hover { background: var(--_eid-bg-muted); }
 .btn-sm { width: auto; min-height: 36px; padding: 0 14px; font-size: 0.8125rem; }
 .trigger { width: auto; }
 .trigger img { width: 20px; height: 20px; border-radius: 4px; }
 .backdrop { position: fixed; inset: 0; z-index: 2147483000; background: hsl(222 47% 11% / 0.5); display: flex; align-items: center;
   justify-content: center; padding: 16px; overflow-y: auto; }
-.dialog { position: relative; width: 100%; max-width: 26rem; max-height: calc(100dvh - 32px); overflow-y: auto; background: var(--eid-bg);
-  color: var(--eid-fg); border: 1px solid var(--eid-border); border-radius: var(--eid-radius-lg); padding: 24px; font-size: 0.875rem; line-height: 1.5rem; }
+.dialog { position: relative; width: 100%; max-width: 26rem; max-height: calc(100dvh - 32px); overflow-y: auto; background: var(--_eid-bg);
+  color: var(--_eid-fg); border: 1px solid var(--_eid-border); border-radius: var(--_eid-radius-lg); padding: 24px; font-size: 0.875rem; line-height: 1.5rem; }
 @media (max-width: 639px) { .dialog { padding: 16px; } }
 .head { display: flex; align-items: center; gap: 8px; margin-bottom: 16px; }
-.head img { width: 28px; height: 28px; border-radius: var(--eid-radius); }
+.head img { width: 28px; height: 28px; border-radius: var(--_eid-radius); }
 .head h2 { flex: 1; font-size: 1.125rem; line-height: 1.75rem; font-weight: 600; }
-.x { width: 36px; height: 36px; border: 0; border-radius: var(--eid-radius); background: transparent; color: var(--eid-fg-muted); cursor: pointer; font-size: 1.25rem; line-height: 1; }
-.x:hover { background: var(--eid-bg-muted); color: var(--eid-fg); }
-.qr { position: relative; width: 256px; max-width: 100%; aspect-ratio: 1; margin: 0 auto; border: 1px solid var(--eid-border);
-  border-radius: var(--eid-radius-lg); background: #fff; overflow: hidden; }
+.x { width: 36px; height: 36px; border: 0; border-radius: var(--_eid-radius); background: transparent; color: var(--_eid-fg-muted); cursor: pointer; font-size: 1.25rem; line-height: 1; }
+.x:hover { background: var(--_eid-bg-muted); color: var(--_eid-fg); }
+.qr { position: relative; width: 256px; max-width: 100%; aspect-ratio: 1; margin: 0 auto; border: 1px solid var(--_eid-border);
+  border-radius: var(--_eid-radius-lg); background: #fff; overflow: hidden; }
 .qr svg { display: block; width: 100%; height: 100%; }
 .qr.stale svg { opacity: 0.12; }
 .qr-stale { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px;
   color: hsl(222 47% 11%); font-weight: 500; }
-.qr-vc { margin-top: 8px; text-align: center; font-size: 0.8125rem; color: var(--eid-fg-subtle); }
-.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-variant-numeric: tabular-nums; letter-spacing: 0.08em; color: var(--eid-fg-muted); }
+.qr-vc { margin-top: 8px; text-align: center; font-size: 0.8125rem; color: var(--_eid-fg-subtle); }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-variant-numeric: tabular-nums; letter-spacing: 0.08em; color: var(--_eid-fg-muted); }
 .steps { margin-top: 16px; padding: 0; list-style: none; counter-reset: st; display: grid; gap: 8px; }
 .steps li { counter-increment: st; display: flex; align-items: center; gap: 12px; }
-.steps li::before { content: counter(st); flex: none; width: 24px; height: 24px; border-radius: 9999px; background: var(--eid-accent-subtle);
-  color: var(--eid-accent-subtle-fg); display: flex; align-items: center; justify-content: center; font-size: 0.75rem; font-weight: 600; }
-.or { display: flex; align-items: center; gap: 12px; margin: 24px 0; color: var(--eid-fg-subtle); font-size: 0.8125rem; }
-.or::before, .or::after { content: ""; flex: 1; height: 1px; background: var(--eid-border); }
+.steps li::before { content: counter(st); flex: none; width: 24px; height: 24px; border-radius: 9999px; background: var(--_eid-accent-subtle);
+  color: var(--_eid-accent-subtle-fg); display: flex; align-items: center; justify-content: center; font-size: 0.75rem; font-weight: 600; }
+.or { display: flex; align-items: center; gap: 12px; margin: 24px 0; color: var(--_eid-fg-subtle); font-size: 0.8125rem; }
+.or::before, .or::after { content: ""; flex: 1; height: 1px; background: var(--_eid-border); }
 .field { display: grid; gap: 8px; }
 .field label { font-weight: 500; }
-.field input { width: 100%; height: 44px; padding: 0 12px; border: 1px solid var(--eid-border-strong); border-radius: var(--eid-radius);
-  background: var(--eid-bg); color: var(--eid-fg); font-family: inherit; font-size: 1rem; line-height: 1.5rem; letter-spacing: 0.02em; text-transform: uppercase; }
-.field input::placeholder { color: var(--eid-fg-subtle); text-transform: none; }
-.field input[aria-invalid="true"] { border-color: var(--eid-danger-fg); }
-.hint { font-size: 0.8125rem; color: var(--eid-fg-subtle); }
-.err { font-size: 0.8125rem; color: var(--eid-danger-fg); font-weight: 500; }
+.field input { width: 100%; height: 44px; padding: 0 12px; border: 1px solid var(--_eid-border-strong); border-radius: var(--_eid-radius);
+  background: var(--_eid-bg); color: var(--_eid-fg); font-family: inherit; font-size: 1rem; line-height: 1.5rem; letter-spacing: 0.02em; text-transform: uppercase; }
+.field input::placeholder { color: var(--_eid-fg-subtle); text-transform: none; }
+.field input[aria-invalid="true"] { border-color: var(--_eid-danger-fg); }
+.hint { font-size: 0.8125rem; color: var(--_eid-fg-subtle); }
+.err { font-size: 0.8125rem; color: var(--_eid-danger-fg); font-weight: 500; }
 .push { margin-top: 16px; }
 .center { text-align: center; }
 .vc { font: 600 2.25rem/2.5rem ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: 0.16em; padding-left: 0.16em; }
 .vc:focus, h2:focus { outline: none; }
-.text { margin-top: 12px; color: var(--eid-fg-muted); }
-.pending { margin-top: 16px; display: inline-flex; align-items: center; gap: 8px; color: var(--eid-fg-muted); }
+.text { margin-top: 12px; color: var(--_eid-fg-muted); }
+.pending { margin-top: 16px; display: inline-flex; align-items: center; gap: 8px; color: var(--_eid-fg-muted); }
 .end .btn, .center .btn { margin-top: 24px; }
 .spinner { width: 16px; height: 16px; flex: none; border: 2px solid currentColor; border-right-color: transparent; border-radius: 9999px; animation: spin 0.8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
-.netwarn { margin-top: 16px; padding: 8px 12px; border: 1px solid var(--eid-warning-border); border-radius: var(--eid-radius); background: var(--eid-warning-bg);
-  color: var(--eid-warning-fg); font-size: 0.8125rem; }
-.meta { margin-top: 16px; font-size: 0.8125rem; color: var(--eid-fg-subtle); }
+.netwarn { margin-top: 16px; padding: 8px 12px; border: 1px solid var(--_eid-warning-border); border-radius: var(--_eid-radius); background: var(--_eid-warning-bg);
+  color: var(--_eid-warning-fg); font-size: 0.8125rem; }
+.meta { margin-top: 16px; font-size: 0.8125rem; color: var(--_eid-fg-subtle); }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; }
   .spinner { animation: none; border-right-color: currentColor; opacity: 0.6; } }
 `;
