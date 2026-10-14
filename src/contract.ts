@@ -20,6 +20,22 @@ export const RP_ROUTES = {
   pdfDocument: { method: "GET", path: "/pdf/sign/{sessionID}/document" },
   orgRepresentations: { method: "GET", path: "/organization/representations/etsi/{personEtsi}" },
   session: { method: "GET", path: "/session/{sessionId}" },
+  personCertificates: { method: "GET", path: "/certificates/etsi/{personEtsi}" },
+  personDevices: { method: "GET", path: "/devices/etsi/{personEtsi}" },
+  personActivity: { method: "GET", path: "/rp/activity/etsi/{personEtsi}" },
+  personSummary: { method: "GET", path: "/person/summary/etsi/{personEtsi}" },
+  personChildren: { method: "GET", path: "/person/children/etsi/{personEtsi}" },
+  tokenCertificate: { method: "POST", path: "/token/certificate" },
+  tokenCertificateResult: { method: "GET", path: "/token/certificate/{sessionID}" },
+} as const satisfies Record<string, RpRoute>;
+
+/**
+ * CA-ийн гэрээнд (код + docs/TOKEN_AUTH.md) байгаа ч live `/.well-known/eid`-д хараахан жагсаагдаагүй замууд. Гэрээний
+ * тест эдгээрийг WARN болгоно (fail биш); discovery-д нэмэгдмэгц {@link RP_ROUTES} руу шилжүүлнэ.
+ */
+export const RP_ROUTES_UNDISCOVERED = {
+  tokenAuthChallenge: { method: "POST", path: "/token/auth/challenge" },
+  tokenAuthVerify: { method: "POST", path: "/token/auth/verify" },
 } as const satisfies Record<string, RpRoute>;
 
 /** Template-ийн `{param}`-уудыг дарааллаар нь `encodeURIComponent` хийсэн `args`-аар орлуулна. */

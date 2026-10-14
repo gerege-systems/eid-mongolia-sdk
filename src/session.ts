@@ -4,7 +4,14 @@
 
 import { RP_ROUTES, routePath } from "./contract.js";
 import type { Http } from "./http.js";
-import type { OrgResult, PdfSessionBlock, SessionResult, SignatureAlgorithmParameters } from "./types.js";
+import type {
+  OrgResult,
+  PdfSessionBlock,
+  PersonBlock,
+  SessionResult,
+  SignatureAlgorithmParameters,
+  TokenCertSessionBlock,
+} from "./types.js";
 
 /** Серверийн нэг long-poll-ийн дээд хугацаа (мс). */
 const SERVER_POLL_MS = 30_000;
@@ -44,7 +51,48 @@ export function parseSessionResult(raw: unknown): SessionResult {
     interactionTypeUsed: str(r.interactionTypeUsed),
     onBehalfOf: parseOrg(r.onBehalfOf),
     pdf: parsePdf(r.pdf),
+    person: parsePerson(r.person),
+    tokenCertificate: parseTokenCert(r.tokenCertificate),
+    raw,
   };
+}
+
+const PERSON_STRINGS = [
+  "firstName", "lastName", "familyName", "firstNameEn", "lastNameEn", "civilId", "regNo", "birthDate", "gender",
+] as const;
+
+/** `person` блок. Байхгүй / хоосон бол null. */
+function parsePerson(raw: unknown): PersonBlock | null {
+  const p = asRecord(raw);
+  const out: PersonBlock = {};
+  for (const k of PERSON_STRINGS) if (typeof p[k] === "string" && p[k]) out[k] = p[k] as string;
+  if (typeof p.geID === "number" && p.geID !== 0) out.geID = p.geID;
+  return Object.keys(out).length ? out : null;
+}
+
+/** `tokenCertificate` блок. status алга бол null. */
+function parseTokenCert(raw: unknown): TokenCertSessionBlock | null {
+  const t = asRecord(raw);
+  const status = str(t.status);
+  if (!status) return null;
+  const out: TokenCertSessionBlock = { status };
+  if (t.errorCode) out.errorCode = String(t.errorCode);
+  if (t.authSerialHex) out.authSerialHex = String(t.authSerialHex);
+  if (t.signSerialHex) out.signSerialHex = String(t.signSerialHex);
+  return out;
+}
+
+/**
+ * Person блокийн `civilId` нь баталгаажсан гэрчилгээний SERIALNUMBER-тэй (`PNOMN-<civilId>`) таарах эсэх — хоёулаа
+ * хоосон биш байх ёстой. Person блок гарын үсэгт ордоггүй тул RP үүнийг validateAuth-ийн дараа шалгаж байж нэр /
+ * төрсөн огноонд итгэнэ. `subject` — validateAuth-ийн `parsedSubject` (эсвэл түүний `serialNumber`).
+ */
+export function personMatchesCertificate(
+  person: PersonBlock | null | undefined,
+  subject: { serialNumber?: string } | string | null | undefined,
+): boolean {
+  const serial = typeof subject === "string" ? subject : subject?.serialNumber;
+  return !!person?.civilId && !!serial && serial === `PNOMN-${person.civilId}`;
 }
 
 /** PAdES `pdf` блок. Байхгүй (PDF урсгал биш) бол null. */

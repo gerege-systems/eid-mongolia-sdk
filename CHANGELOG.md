@@ -1,4 +1,32 @@
 # Changelog
+## 0.10.0 — 2026-10-14
+
+Порталыг (eid-mongolia-mn) Go SDK руу шилжүүлэхэд илэрсэн дутагдлууд — бүгд additive (Go SDK 0.1.2-той ижил):
+
+- **`SessionResult.person`** (CA `person` блок: `firstName` / `lastName` (эцгийн) / `familyName` (ургийн овог), `…En`,
+  `civilId`, `regNo`, `birthDate`, `gender`, `geID`), **`.tokenCertificate`**, **`.raw`** (түүхий JSON);
+  `personMatchesCertificate(person, subject)` — person блок гарын үсэгт ордоггүй тул `PNOMN-<civilId>` тулгалт.
+- **`ApiError` / `ForbiddenError`: `retryAfterMs`** (Retry-After секунд эсвэл HTTP-огноо) **+ `headers`**;
+  `ApiError.retryable`, `RETRYABLE_ERROR_CODES` (`PDF_PREPARE_BUSY`, `DOCUMENT_PENDING`, `TSA_UNAVAILABLE`,
+  `LTV_UNAVAILABLE`, `RATE_LIMITED`, `STATE_UNAVAILABLE`, `ISSUANCE_PENDING`), `parseRetryAfter`.
+  **`ClientConfig.pdfTimeoutMs`** (анхдагч `DEFAULT_PDF_TIMEOUT_MS` = 80000; өмнө нь тогтмол 60000).
+- **`SignOptions.fileName`** → хүсэлтийн `fileName` (CA `NotificationSignRequest.FileName`).
+- **`client.person`** (PKI_READ): `certificates`, `devices`, `activity({ flow, limit, offset })`, `summary`, `children`.
+  **`client.token`**: `issueCertificate` (CA-ийн CSR hash тулгалттай), `certificateResult`, `authChallenge`,
+  `authVerify` (endResult + identity.etsi = гэрчилгээний SERIALNUMBER); `verifyTokenCertificates`, `tokenAuthDigest`
+  (TOKEN_AUTH тест вектор), `tokenLimitOf`.
+- **ResponseValidator**: `trust.allowedIssuerSkis` (+ `CITIZEN_ISSUING_CA_SKI`), `checkKeyUsage` (auth → clientAuth,
+  sign → nonRepudiation), `schemeName`; `checkRevocationStatus` → `"good"` / `"unchecked"` / `"skipped"`.
+- **PII**: `NetworkError`-ийн мессеж ба шинэ `.op`-д замын `/etsi/…`, `/document/…` (PNOMN / РД / documentNumber)
+  орохгүй; `.timeout`.
+- **`AuthenticationError`**: `.serverMessage` (CA-ийн `{"error"}`), `.code`, `.body`, `.headers` (CA-ийн 401 vs proxy-ийн 401).
+- Гэрээ: `src/contract.ts`-д person ×5, token/certificate ×2; `/token/auth/*` CA-д (код + docs/TOKEN_AUTH.md) байгаа ч
+  `/.well-known/eid`-д алга тул `RP_ROUTES_UNDISCOVERED` (гэрээний тест WARN).
+- **Гэрээний шалгалт** (`npm run test:contract`, `.github/workflows/contract.yml` — PR / main / өдөр бүр): SDK-ийн RP-API
+  зам бүр live `/.well-known/eid`-д, OIDC утгууд `openid-configuration`-д таарахыг шалгана; SDK хамраагүй discovery
+  замууд WARN. RP-API замууд ба OIDC хүлээлт `src/contract.ts`-д төвлөрсөн (зан төлөв өөрчлөгдөөгүй).
+- Шалгасан: `npm run lint`, `npm test` (87 тест; шинэ 17), `npm run test:contract` (live ногоон).
+
 ## 0.9.1 — 2026-10-14
 
 demo PDF device-link/push урсгалаас илэрсэн дутагдал — additive:

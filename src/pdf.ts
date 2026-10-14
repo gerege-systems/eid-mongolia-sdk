@@ -11,7 +11,16 @@ import type { CertificateLevel, PdfSessionBlock, RpCredentials } from "./types.j
 
 export interface PdfDefaults {
   certificateLevel: CertificateLevel;
+  /** prepare / document дуудлагын хугацаа (мс); анхдагч {@link DEFAULT_PDF_TIMEOUT_MS}. */
+  timeoutMs?: number;
 }
+
+/**
+ * PAdES prepare / баримт татах нэг дуудлагын анхдагч хугацаа (мс). CA prepare нь ≤ 10 MiB уншиж, өмнөх гарын үсэг +
+ * LTV өгөгдөл шалгаад push эхлүүлдэг; баримт татахад угсралтыг ≤ 30с хүлээдэг (PADES_SIGNING §3.4). 80с нь хоёуланд
+ * хүрэлцэнэ, CA-ийн nginx proxy_read_timeout-оос бага.
+ */
+export const DEFAULT_PDF_TIMEOUT_MS = 80_000;
 
 /** Гарын үсэг зурагч — яг нэг нь. */
 export type PdfSignerRef =
@@ -73,7 +82,10 @@ export class PdfApi {
     private readonly defaults: PdfDefaults,
   ) {}
 
-  /** POST /pdf/sign/prepare — multipart (`request` JSON + `pdf`). SIGN эрх шаардана. */
+  /**
+   * POST /pdf/sign/prepare — multipart (`request` JSON + `pdf`). SIGN эрх шаардана. Түр алдаа: `ApiError` 429
+   * PDF_PREPARE_BUSY, 503 LTV_UNAVAILABLE / TSA_UNAVAILABLE — `retryAfterMs`-ийн дараа дахин (`retryable`).
+   */
   async prepare(input: PdfPrepareInput): Promise<PdfPrepareSession> {
     const request: Record<string, unknown> = {
       relyingPartyUUID: this.creds.rpUUID,
@@ -91,7 +103,7 @@ export class PdfApi {
     form.append("request", new Blob([JSON.stringify(request)], { type: "application/json" }));
     form.append("pdf", new Blob([input.pdf], { type: "application/pdf" }), input.fileName);
 
-    const r = rec(await this.http.postMultipart(routePath(RP_ROUTES.pdfPrepare), form, 60_000));
+    const r = rec(await this.http.postMultipart(routePath(RP_ROUTES.pdfPrepare), form, this.defaults.timeoutMs ?? DEFAULT_PDF_TIMEOUT_MS));
     const receivedAt = Date.now();
     const vc = rec(r.vc).value;
     const dl = rec(r.deviceLink);
@@ -116,10 +128,12 @@ export class PdfApi {
 
   /**
    * GET /pdf/sign/{sessionID}/document — гарын үсэгтэй PDF (READY-ээс хойш 30 мин). Татсан байтын SHA-256-ийг
-   * session-ий `pdf.outSha256`-тай тулга. Эрх хасагдсан бол `ForbiddenError` `.code = "REPRESENTATION_REVOKED"`.
+   * session-ий `pdf.outSha256`-тай тулга. Эрх хасагдсан бол `ForbiddenError` `.code = "REPRESENTATION_REVOKED"`. Баримт
+   * бэлэн болоогүй бол `ApiError` 503 `.code` DOCUMENT_PENDING / TSA_UNAVAILABLE / LTV_UNAVAILABLE — `retryAfterMs`-ийн
+   * дараа дахин татна (`retryable`).
    */
   document(sessionId: string): Promise<Uint8Array> {
-    return this.http.getBytes(routePath(RP_ROUTES.pdfDocument, sessionId), 60_000);
+    return this.http.getBytes(routePath(RP_ROUTES.pdfDocument, sessionId), this.defaults.timeoutMs ?? DEFAULT_PDF_TIMEOUT_MS);
   }
 
   /**
