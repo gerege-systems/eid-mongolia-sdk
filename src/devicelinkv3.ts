@@ -7,6 +7,7 @@
 
 import { createHmac } from "node:crypto";
 import { DeviceLinkError } from "./errors.js";
+import type { DeviceLinkSession } from "./types.js";
 
 /** Холбоосын төрөл — апп гарын үсгийн `flowType`-д яг энэ утгыг зурна (authCode-оор хамгаалагдсан). */
 export type DeviceLinkType = "QR" | "Web2App" | "App2App";
@@ -133,6 +134,35 @@ export function buildDeviceLink(p: BuildDeviceLinkInput): string {
   ].join("|");
   const authCode = createHmac("sha256", Buffer.from(p.sessionSecret, "base64")).update(payload, "utf8").digest("base64url");
   return `${unprotected}&authCode=${authCode}`;
+}
+
+/**
+ * Session start-ын хариу + хүсэлтийн утгуудаас {@link buildDeviceLink}-ийн оролт (auth: `acsp`, sign: `sign`, cert:
+ * `relyingPartyName`). `lang` — ISO 639-2 (`mon`, `eng`). Web2App/App2App-д session нь `callbackUrl`-тай эхэлсэн байх
+ * ёстой (эс бөгөөс `buildDeviceLink` DeviceLinkError). sessionToken/sessionSecret алга бол buildDeviceLink татгалзана.
+ */
+export function deviceLinkInput(s: DeviceLinkSession, deviceLinkType: DeviceLinkType, lang: string): BuildDeviceLinkInput {
+  const base = {
+    deviceLinkBase: s.deviceLinkBase ?? "",
+    deviceLinkType,
+    sessionToken: s.sessionToken ?? "",
+    sessionSecret: s.sessionSecret ?? "",
+    lang,
+    receivedAt: s.receivedAt,
+  };
+  if (s.sessionType === "sign" && s.sign) {
+    return {
+      ...base, sessionType: "sign", digest: s.sign.digest, relyingPartyName: s.sign.relyingPartyName,
+      interactions: s.sign.interactions, initialCallbackUrl: s.sign.initialCallbackUrl,
+    };
+  }
+  if (s.sessionType === "cert") {
+    return { ...base, sessionType: "cert", relyingPartyName: s.relyingPartyName ?? "", interactions: "" };
+  }
+  return {
+    ...base, sessionType: "auth", rpChallenge: s.acsp?.rpChallenge ?? s.rpChallenge, relyingPartyName: s.acsp?.relyingPartyName ?? "",
+    interactions: s.acsp?.interactions ?? "", initialCallbackUrl: s.acsp?.initialCallbackUrl ?? "",
+  };
 }
 
 export interface QrDeviceLinkTickerOptions {

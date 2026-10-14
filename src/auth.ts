@@ -5,6 +5,7 @@
 import { RP_ROUTES, routePath } from "./contract.js";
 import type { Http } from "./http.js";
 import { interactionsToBase64, randomChallenge } from "./crypto.js";
+import { parseExpiresAt } from "./types.js";
 import type {
   AcspContext,
   CertificateLevel,
@@ -97,13 +98,21 @@ export class AuthApi {
   private parseNotification(raw: unknown, acsp: AcspContext): NotificationSession {
     const r = rec(raw);
     const vc = rec(r.vc).value;
-    return { sessionId: String(r.sessionID), vc: vc != null ? String(vc) : null, rpChallenge: acsp.rpChallenge, acsp };
+    const expiresAt = parseExpiresAt(r.expiresAt);
+    return {
+      sessionId: String(r.sessionID),
+      vc: vc != null ? String(vc) : null,
+      rpChallenge: acsp.rpChallenge,
+      acsp,
+      ...(expiresAt !== undefined ? { expiresAt } : {}),
+    };
   }
 
   private parseDeviceLink(raw: unknown, acsp: AcspContext): DeviceLinkSession {
     const r = rec(raw);
     // CA device-link хариунд vc нь мөр; notification-ийн хэлбэр ({type,value})-ийг ч хүлээн авна.
     const vc = typeof r.vc === "object" && r.vc !== null ? rec(r.vc).value : r.vc;
+    const expiresAt = parseExpiresAt(r.expiresAt);
     return {
       sessionId: String(r.sessionID),
       sessionToken: r.sessionToken != null ? String(r.sessionToken) : null,
@@ -113,6 +122,8 @@ export class AuthApi {
       rpChallenge: acsp.rpChallenge,
       acsp,
       receivedAt: Date.now(),
+      sessionType: "auth",
+      ...(expiresAt !== undefined ? { expiresAt } : {}),
     };
   }
 

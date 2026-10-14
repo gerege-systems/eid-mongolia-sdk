@@ -7,6 +7,8 @@ export {
   SignApi,
   type SignOptions,
   type SignDefaults,
+  type CertChoiceOptions,
+  type SignerRef,
   type PdfDigestInput,
   type PdfDigestSession,
   type PdfDigestSigner,
@@ -52,6 +54,7 @@ export {
   type VerifiedSignature,
   type ValidateAuthOptions,
   type ValidateSignOptions,
+  type Signer,
   type RevocationChecker,
   type RevocationStatus,
   type RevocationOutcome,
@@ -79,6 +82,7 @@ export {
 } from "./devicelink.js";
 export {
   buildDeviceLink,
+  deviceLinkInput,
   qrDeviceLinkTicker,
   type BuildDeviceLinkInput,
   type DeviceLinkType,
@@ -89,6 +93,7 @@ export {
   createEidLogin,
   memoryLoginStore,
   withReturnHint,
+  forwardedClientIp,
   type EidLogin,
   type EidLoginOptions,
   type EidLoginIdentity,
@@ -105,6 +110,9 @@ export {
   AuthenticationError,
   ForbiddenError,
   ApiError,
+  NoSigningCertificateError,
+  CertChoiceInvalidError,
+  RequestInvalidError,
   NetworkError,
   SessionFailedError,
   ValidationError,
@@ -117,6 +125,7 @@ export {
   type RetryableErrorCode,
   type HttpErrorInit,
 } from "./errors.js";
+export { DEFAULT_SIGN_SESSION_TTL_MS, sessionExpiry, startExpiry, parseExpiresAt } from "./types.js";
 export type {
   CertificateLevel,
   SignatureProtocol,
@@ -130,6 +139,7 @@ export type {
   EndResult,
   NotificationSession,
   DeviceLinkSession,
+  SignContext,
   SessionResult,
   RpCredentials,
   OrgResult,

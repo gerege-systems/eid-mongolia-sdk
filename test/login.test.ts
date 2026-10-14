@@ -4,7 +4,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { createEidLogin, EidClient, ValidationError, withReturnHint, type EidLoginIdentity, type EidLoginRequest } from "../dist/index.js";
+import { createEidLogin, EidClient, forwardedClientIp, ValidationError, withReturnHint, type EidLoginIdentity, type EidLoginRequest } from "../dist/index.js";
 
 const SID = "0b5e6a4c-1d2e-4f3a-8b9c-0d1e2f3a4b5c";
 const SECRET = Buffer.alloc(32, 7).toString("base64");
@@ -108,6 +108,10 @@ test("QR: start → PENDING (шинэ QR) → OK (validateAuth QR, onSuccess, co
   assert.deepEqual(validated, [{ flow: "QR", verifier: undefined }]);
   assert.equal(identities[0]!.civilId, "111949212017");
   assert.equal(identities[0]!.flowType, "QR");
+  // RP үргэлжлүүлэхэд (гарын үсэг, гэрчилгээ холбох): sessionId, documentNumber, гэрчилгээ.
+  assert.equal(identities[0]!.sessionId, SID);
+  assert.equal(identities[0]!.documentNumber, "doc-1");
+  assert.equal(identities[0]!.certificateDerB64, "AAAA");
   const sc = [ok.headers["Set-Cookie"]].flat();
   assert.ok(sc.some((c) => c.startsWith("eid_login=;") && c.includes("Max-Age=0")));
   assert.ok(sc.includes("app_session=s1; Path=/; HttpOnly"));
@@ -154,6 +158,67 @@ test("rateLimit hook: start:<ip> ба push:<id> түлхүүр", async () => {
   const r = await login.handleRequest({ ...req("POST", "/auth/eid/start", { body: { mode: "qr" } }), ip: "203.0.113.5" });
   assert.equal(r.status, 429);
   assert.deepEqual(keys, ["start:203.0.113.5"]);
+});
+
+test("onSuccess: tx-ийг дуусгасны дараа дуудагдана — onSuccess дотор store-оос уншвал алга (нэг удаа)", async () => {
+  const store = new Map<string, unknown>();
+  let seenInStore: boolean | undefined;
+  const { login, fake } = setup({
+    store: {
+      get: (k) => store.get(k) as never,
+      set: (k, tx) => void store.set(k, tx),
+      delete: (k) => store.delete(k),
+    },
+    onSuccess: (id) => {
+      seenInStore = store.has(id.sessionId);
+      return {};
+    },
+  });
+  const s = await login.handleRequest(req("POST", "/auth/eid/start", { body: { mode: "qr" } }));
+  fake.session = COMPLETE_OK("QR");
+  const ok = await login.handleRequest(req("GET", "/auth/eid/status", { headers: { cookie: cookieOf(s.headers) } }));
+  assert.equal(JSON.parse(ok.body).state, "OK");
+  assert.equal(seenInStore, false);
+  assert.equal(store.size, 0);
+});
+
+test("forwardedClientIp: true = XFF зүүн; n = баруунаас n; hop дутвал undefined; XFF-гүй бол X-Real-IP", () => {
+  const h = { "x-forwarded-for": "198.51.100.7, 10.0.0.2, 10.0.0.1", "x-real-ip": "10.0.0.9" };
+  assert.equal(forwardedClientIp(h, true), "198.51.100.7");
+  assert.equal(forwardedClientIp(h, 1), "10.0.0.1");
+  assert.equal(forwardedClientIp(h, 3), "198.51.100.7");
+  assert.equal(forwardedClientIp(h, 4), undefined);
+  assert.equal(forwardedClientIp(h, false), undefined);
+  assert.equal(forwardedClientIp({ "x-real-ip": " 203.0.113.9 " }, 1), "203.0.113.9");
+  assert.equal(forwardedClientIp({}, true), undefined);
+});
+
+test("handle(Request): trustProxy / getClientIp → start:<ip>; аль нь ч үгүй бол нэг удаа анхааруулна", async () => {
+  const mk = (ip?: string) =>
+    new Request("https://bank.example.mn/auth/eid/start", {
+      method: "POST",
+      headers: { "content-type": "application/json", ...(ip ? { "x-forwarded-for": ip } : {}) },
+      body: JSON.stringify({ mode: "qr" }),
+    });
+  const keys: string[] = [];
+  const rateLimit = (k: string) => (keys.push(k), true);
+  const proxied = setup({ rateLimit, trustProxy: 1 }).login;
+  assert.equal((await proxied.handle(mk("1.2.3.4, 198.51.100.7"))).status, 200);
+  assert.deepEqual(keys, ["start:198.51.100.7"]);
+
+  keys.length = 0;
+  const cb = setup({ rateLimit, getClientIp: () => "203.0.113.1" }).login;
+  await cb.handle(mk("9.9.9.9"));
+  assert.deepEqual(keys, ["start:203.0.113.1"], "getClientIp давуу, XFF-д итгэхгүй");
+
+  keys.length = 0;
+  const warnings: string[] = [];
+  const bare = setup({ rateLimit, onError: (e) => warnings.push(String(e)) }).login;
+  await bare.handle(mk("9.9.9.9"));
+  await bare.handle(mk("9.9.9.9"));
+  assert.deepEqual(keys, [], "trustProxy-гүй үед XFF-д итгэхгүй");
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0]!, /getClientIp/);
 });
 
 test("CSRF: cross-site, JSON бус POST, GET qr татгалзана", async () => {

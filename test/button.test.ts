@@ -6,7 +6,7 @@ import { JSDOM } from "jsdom";
 
 const dom = new JSDOM("<!doctype html><html><body></body></html>", { url: "https://bank.example.mn/login" });
 const w = dom.window as unknown as Record<string, unknown>;
-for (const k of ["window", "document", "HTMLElement", "customElements", "CustomEvent", "Node", "KeyboardEvent", "location", "navigator"]) {
+for (const k of ["window", "document", "HTMLElement", "customElements", "CustomEvent", "Node", "KeyboardEvent", "location", "navigator", "MutationObserver"]) {
   Object.defineProperty(globalThis, k, { value: k === "window" ? dom.window : w[k], configurable: true, writable: true });
 }
 
@@ -26,7 +26,7 @@ globalThis.fetch = (async (url: string, init?: RequestInit) => {
   return new Response(JSON.stringify(s), { status: 200, headers: { "Content-Type": "application/json" } });
 }) as typeof fetch;
 
-const { EidLoginButton, mountEidLoginButton } = await import("../dist/button.js");
+const { EidLoginButton, mountEidLoginButton, resolveEidTheme } = await import("../dist/button.js");
 
 const QR = "https://ca.eidmongolia.mn/dl?deviceLinkType=QR&elapsedSeconds=0&sessionToken=t&sessionType=auth&version=1.0&lang=mon&authCode=x";
 const tick = (ms = 0) => new Promise((r) => setTimeout(r, ms));
@@ -64,6 +64,59 @@ test("товч: брэнд лого + текст, aria-haspopup; lang=en", () =>
   b.setAttribute("lang", "en");
   assert.equal(btn.textContent, "Log in with eID");
   assert.ok(b instanceof EidLoginButton);
+});
+
+test("фонт: `font: … inherit` (хүчингүй shorthand) үгүй; button/input хуудасны фонтыг өвлөнө, хэмжээ тодорхой", () => {
+  const { sr } = make();
+  const css = [...sr.querySelectorAll("style")].map((x) => x.textContent ?? "").join("\n");
+  // jsdom-ийн CSSOM shorthand-ийн хүчинтэй эсэхийг шалгадаггүй тул эх текстээр тулгана.
+  assert.doesNotMatch(css, /\bfont\s*:[^;}]*\binherit\b/, "font shorthand-д inherit орвол бүх мөр хүчингүй");
+  assert.match(css, /button, input \{ font-family: inherit; \}/);
+  const rule = (sel: string) => new RegExp(`(^|\\n)${sel.replace(/[.*]/g, "\\$&")} \\{[^}]*font-family: inherit;[^}]*font-size: 1rem;`);
+  assert.match(css, rule(".btn"));
+  assert.match(css, rule(".field input"));
+});
+
+test("theme: light|dark атрибут; auto → html[data-theme] / html.dark / OS-ийг дагана (MutationObserver)", async () => {
+  const html = document.documentElement;
+  const darkOn = (sr: ShadowRoot) => (sr.querySelector('style[data-eid-theme="dark"]')!.textContent ?? "").includes("color-scheme: dark");
+  const { b, sr } = make();
+  assert.equal(b.scheme, "light");
+  assert.equal(darkOn(sr), false);
+  html.setAttribute("data-theme", "dark");
+  await tick(0);
+  assert.equal(darkOn(sr), true, "data-theme=dark");
+  html.removeAttribute("data-theme");
+  html.classList.add("dark");
+  await tick(0);
+  assert.equal(darkOn(sr), true, "html.dark");
+  b.setAttribute("theme", "light");
+  assert.equal(darkOn(sr), false, "theme=light нь хуудсыг давна");
+  html.classList.remove("dark");
+  b.setAttribute("theme", "dark");
+  assert.equal(darkOn(sr), true);
+  b.setAttribute("theme", "auto");
+  assert.equal(darkOn(sr), false);
+  // OS (prefers-color-scheme) — html-д тэмдэг байхгүй үед.
+  const fakeDoc = { documentElement: html, defaultView: { matchMedia: () => ({ matches: true }) } } as unknown as Document;
+  assert.equal(resolveEidTheme("auto", fakeDoc), "dark");
+  assert.equal(resolveEidTheme(null, fakeDoc), "dark");
+  html.setAttribute("data-theme", "light");
+  assert.equal(resolveEidTheme("auto", fakeDoc), "light", "хуудасны data-theme OS-ийг давна");
+  html.removeAttribute("data-theme");
+  // Салгахад observer зогсоно.
+  b.remove();
+  html.classList.add("dark");
+  await tick(0);
+  assert.equal(darkOn(sr), false);
+  html.classList.remove("dark");
+});
+
+test("mountEidLoginButton: theme сонголт атрибут болно", () => {
+  document.body.replaceChildren();
+  const b = mountEidLoginButton(document.body, { startUrl: "/s", statusUrl: "/t", theme: "dark" });
+  assert.equal(b.getAttribute("theme"), "dark");
+  assert.equal(b.scheme, "dark");
 });
 
 test("desktop: ачаалж байна → QR (svg) + VC + алхмууд → OK: event + redirect", async () => {
