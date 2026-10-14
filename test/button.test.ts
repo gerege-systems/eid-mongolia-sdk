@@ -1,0 +1,201 @@
+// <eid-login-button> — jsdom дээрх төлөвүүд: QR цонх, push, амжилт (event + redirect), татгалзсан, хугацаа дууссан,
+// сүлжээ тасарсан, утсан дээр Web2App навигаци, Esc / focus.
+import { test, beforeEach } from "node:test";
+import assert from "node:assert/strict";
+import { JSDOM } from "jsdom";
+
+const dom = new JSDOM("<!doctype html><html><body></body></html>", { url: "https://bank.example.mn/login" });
+const w = dom.window as unknown as Record<string, unknown>;
+for (const k of ["window", "document", "HTMLElement", "customElements", "CustomEvent", "Node", "KeyboardEvent", "location", "navigator"]) {
+  Object.defineProperty(globalThis, k, { value: k === "window" ? dom.window : w[k], configurable: true, writable: true });
+}
+
+type Status = Record<string, unknown>;
+let startReplies: Array<{ status: number; body: Status }> = [];
+let statusReplies: Array<Status | "neterr"> = [];
+let requests: { url: string; method: string; body?: unknown }[] = [];
+
+globalThis.fetch = (async (url: string, init?: RequestInit) => {
+  requests.push({ url: String(url), method: init?.method ?? "GET", body: init?.body ? JSON.parse(String(init.body)) : undefined });
+  if (String(url).includes("/start")) {
+    const r = startReplies.shift() ?? { status: 500, body: {} };
+    return new Response(JSON.stringify(r.body), { status: r.status, headers: { "Content-Type": "application/json" } });
+  }
+  const s = statusReplies.shift() ?? { state: "PENDING" };
+  if (s === "neterr") throw new TypeError("network");
+  return new Response(JSON.stringify(s), { status: 200, headers: { "Content-Type": "application/json" } });
+}) as typeof fetch;
+
+const { EidLoginButton, mountEidLoginButton } = await import("../dist/button.js");
+
+const QR = "https://ca.eidmongolia.mn/dl?deviceLinkType=QR&elapsedSeconds=0&sessionToken=t&sessionType=auth&version=1.0&lang=mon&authCode=x";
+const tick = (ms = 0) => new Promise((r) => setTimeout(r, ms));
+async function until(cond: () => boolean, ms = 3000): Promise<void> {
+  const end = Date.now() + ms;
+  while (!cond()) {
+    if (Date.now() > end) throw new Error("хүлээлт дууслаа");
+    await tick(10);
+  }
+}
+
+function make(attrs: Record<string, string> = {}, mobile = false) {
+  document.body.replaceChildren();
+  const b = mountEidLoginButton(document.body, { startUrl: "/auth/eid/start", statusUrl: "/auth/eid/status", lang: "mn", ...attrs });
+  const navs: string[] = [];
+  b.isMobile = () => mobile;
+  b.navigate = (u: string) => navs.push(u);
+  const sr = b.shadowRoot!;
+  const text = () => sr.textContent ?? "";
+  return { b, sr, navs, text, click: () => (sr.querySelector("button.trigger") as HTMLButtonElement).click() };
+}
+
+beforeEach(() => {
+  startReplies = [];
+  statusReplies = [];
+  requests = [];
+});
+
+test("товч: брэнд лого + текст, aria-haspopup; lang=en", () => {
+  const { sr, b } = make();
+  const btn = sr.querySelector("button.trigger")!;
+  assert.equal(btn.getAttribute("aria-haspopup"), "dialog");
+  assert.match(btn.querySelector("img")!.getAttribute("src")!, /^data:image\/png;base64,/);
+  assert.equal(btn.textContent, "eID-ээр нэвтрэх");
+  b.setAttribute("lang", "en");
+  assert.equal(btn.textContent, "Log in with eID");
+  assert.ok(b instanceof EidLoginButton);
+});
+
+test("desktop: ачаалж байна → QR (svg) + VC + алхмууд → OK: event + redirect", async () => {
+  startReplies = [{ status: 200, body: { mode: "qr", qr: QR, vc: "12345", expiresIn: 120 } }];
+  statusReplies = [{ state: "PENDING", qr: QR, expiresIn: 119 }, { state: "OK", redirect: "/dashboard", data: { u: 1 } }];
+  const { sr, navs, text, click, b } = make();
+  const events: unknown[] = [];
+  b.addEventListener("eid-login-success", (e: Event) => events.push((e as CustomEvent).detail));
+  click();
+  const dlg = sr.querySelector('[role="dialog"]')!;
+  assert.equal(dlg.getAttribute("aria-modal"), "true");
+  assert.match(text(), /Ачаалж байна/);
+  await until(() => !!sr.querySelector(".qr svg path"));
+  assert.match(text(), /Утсан дээрх код: 12345/);
+  assert.match(text(), /PIN1 кодоо оруулна/);
+  assert.deepEqual(requests[0], { url: "/auth/eid/start", method: "POST", body: { mode: "qr", lang: "mn" } });
+  await until(() => navs.length > 0, 5000);
+  assert.deepEqual(navs, ["/dashboard"]);
+  assert.deepEqual(events, [{ state: "OK", redirect: "/dashboard", data: { u: 1 } }]);
+  assert.match(text(), /Амжилттай нэвтэрлээ/);
+  b.close();
+});
+
+test("success event preventDefault → redirect хийхгүй", async () => {
+  startReplies = [{ status: 200, body: { mode: "qr", qr: QR, vc: "1", expiresIn: 120 } }];
+  statusReplies = [{ state: "OK", redirect: "/x" }];
+  const { navs, click, b, text } = make();
+  b.addEventListener("eid-login-success", (e: Event) => e.preventDefault());
+  click();
+  await until(() => /Амжилттай/.test(text()), 5000);
+  await tick(20);
+  assert.deepEqual(navs, []);
+  b.close();
+});
+
+test("push: регистр шалгалт (латин, хоосон) → илгээх → том VC → татгалзсан → дахин оролдох", async () => {
+  startReplies = [
+    { status: 200, body: { mode: "qr", qr: QR, vc: "1", expiresIn: 120 } },
+    { status: 200, body: { mode: "push", vc: "54321", expiresIn: 120 } },
+  ];
+  statusReplies = [{ state: "PENDING", qr: QR }];
+  const { sr, text, click, b } = make();
+  const errs: string[] = [];
+  b.addEventListener("eid-login-error", (e: Event) => errs.push((e as CustomEvent).detail.error));
+  click();
+  await until(() => !!sr.querySelector("form"));
+  const form = sr.querySelector("form")!;
+  const input = sr.querySelector("input")! as HTMLInputElement;
+  form.dispatchEvent(new (dom.window.Event)("submit", { cancelable: true }));
+  assert.equal(input.getAttribute("aria-invalid"), "true");
+  assert.match(text(), /Регистрийн дугаар оруулна уу/);
+  input.value = "UB12345678";
+  form.dispatchEvent(new (dom.window.Event)("submit", { cancelable: true }));
+  assert.match(text(), /кириллээр/);
+  input.value = "уб 12345678";
+  statusReplies = [{ state: "FAILED", error: "USER_REFUSED_DISPLAYTEXTANDPIN" }];
+  form.dispatchEvent(new (dom.window.Event)("submit", { cancelable: true }));
+  await until(() => !!sr.querySelector(".vc"));
+  assert.equal(sr.querySelector(".vc")!.textContent, "54321");
+  assert.deepEqual(requests.find((r) => (r.body as { mode?: string })?.mode === "push")!.body, { mode: "push", idCode: "УБ12345678", lang: "mn" });
+  await until(() => /татгалзсан/.test(text()), 5000);
+  assert.deepEqual(errs, ["USER_REFUSED_DISPLAYTEXTANDPIN"]);
+  assert.ok(sr.querySelector(".end button"), "дахин оролдох товч");
+  b.close();
+});
+
+test("push 429 → алдааны мессеж (цонх хэвээр)", async () => {
+  startReplies = [
+    { status: 200, body: { mode: "qr", qr: QR, vc: "1", expiresIn: 120 } },
+    { status: 429, body: { error: "rate_limited" } },
+  ];
+  const { sr, text, click, b } = make();
+  click();
+  await until(() => !!sr.querySelector("form"));
+  (sr.querySelector("input") as HTMLInputElement).value = "УБ12345678";
+  sr.querySelector("form")!.dispatchEvent(new (dom.window.Event)("submit", { cancelable: true }));
+  await until(() => /Хэт олон оролдлого/.test(text()));
+  b.close();
+});
+
+test("EXPIRED / WAIT_CALLBACK / start алдаа", async () => {
+  startReplies = [{ status: 200, body: { mode: "qr", qr: QR, vc: "1", expiresIn: 120 } }];
+  statusReplies = [{ state: "EXPIRED" }];
+  let m = make();
+  m.click();
+  await until(() => /хугацаа дууссан/.test(m.text()), 5000);
+  m.b.close();
+
+  startReplies = [{ status: 200, body: { mode: "qr", qr: QR, vc: "1", expiresIn: 120 } }];
+  statusReplies = [{ state: "WAIT_CALLBACK" }];
+  m = make();
+  m.click();
+  await until(() => /хөтчөөр үргэлжилнэ/.test(m.text()), 5000);
+  m.b.close();
+
+  startReplies = [{ status: 502, body: { error: "eid_unavailable" } }];
+  m = make();
+  m.click();
+  await until(() => /холбогдож чадсангүй/.test(m.text()));
+  m.b.close();
+});
+
+test("сүлжээ 3 удаа тасарвал анхааруулга + QR саарал", async () => {
+  startReplies = [{ status: 200, body: { mode: "qr", qr: QR, vc: "1", expiresIn: 120 } }];
+  statusReplies = ["neterr", "neterr", "neterr", "neterr", "neterr"];
+  const { sr, click, b } = make();
+  click();
+  await until(() => !(sr.querySelector(".netwarn") as HTMLElement | null)?.hidden && !!sr.querySelector(".qr.stale"), 8000);
+  b.close();
+});
+
+test("утас: Web2App start-url руу шууд навигаци (fetch-гүй)", () => {
+  const { navs, click, sr } = make({}, true);
+  click();
+  assert.deepEqual(navs, ["https://bank.example.mn/auth/eid/start?mode=web2app&lang=mn"]);
+  assert.equal(sr.querySelector('[role="dialog"]'), null);
+  assert.equal(requests.length, 0);
+});
+
+test("Esc цонхыг хааж, poll зогсоно; Tab focus цонхонд үлдэнэ", async () => {
+  startReplies = [{ status: 200, body: { mode: "qr", qr: QR, vc: "1", expiresIn: 120 } }];
+  const { sr, click } = make();
+  click();
+  await until(() => !!sr.querySelector("form"));
+  const dlg = sr.querySelector(".backdrop")!;
+  const focusables = Array.from(dlg.querySelectorAll<HTMLElement>("button:not([disabled]), input")).filter((n) => !n.closest("[hidden]"));
+  focusables.at(-1)!.focus();
+  dlg.dispatchEvent(new (dom.window.KeyboardEvent)("keydown", { key: "Tab", bubbles: true, cancelable: true }));
+  assert.equal(sr.activeElement, focusables[0]);
+  dlg.dispatchEvent(new (dom.window.KeyboardEvent)("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+  assert.equal(sr.querySelector(".backdrop"), null);
+  const n = requests.length;
+  await tick(1200);
+  assert.equal(requests.length, n, "хаасны дараа poll үгүй");
+});

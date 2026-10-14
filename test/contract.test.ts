@@ -1,11 +1,11 @@
 // Гэрээний тест — сүлжээ шаарддаг тул `npm test`-д орохгүй: `npm run test:contract`.
 // SDK-ийн дууддаг RP-API зам бүр (src/contract.ts) live /.well-known/eid-ийн endpoints-д байх ёстой; discovery-д
-// байгаа ч SDK хамраагүй замууд WARN (fail биш). OIDC: SDK-ийн хүлээдэг утгууд discovery-тэй таарах ёстой.
+// байгаа ч SDK хамраагүй замууд WARN (fail биш).
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { DEFAULT_BASE_URL, EID_ACR_ADVANCED, EID_ACR_QUALIFIED, EID_OIDC_ISSUER } from "../dist/index.js";
-import { ID_TOKEN_CLAIMS, OIDC_EXPECT, RP_ROUTES, RP_ROUTES_UNDISCOVERED } from "../src/contract.ts";
+import { DEFAULT_BASE_URL } from "../dist/index.js";
+import { RP_ROUTES, RP_ROUTES_UNDISCOVERED } from "../src/contract.ts";
 
 const EID_DISCOVERY = "https://rp.eidmongolia.mn/.well-known/eid";
 
@@ -80,36 +80,4 @@ test("RP-API: SDK-ийн зам бүр /.well-known/eid-д бий", async () => 
   warn("discovery-д байгаа ч SDK хамраагүй", uncovered);
 
   assert.deepEqual(missing, [], "SDK зам discovery-д алга");
-});
-
-test("OIDC: SDK-ийн хүлээдэг утгууд openid-configuration-тэй таарна", async () => {
-  const d = await getJson(EID_OIDC_ISSUER + "/.well-known/openid-configuration");
-  assert.equal(d.issuer, EID_OIDC_ISSUER, "issuer");
-  for (const k of ["authorization_endpoint", "token_endpoint", "jwks_uri"]) {
-    assert.ok(typeof d[k] === "string" && d[k].startsWith("https://"), `${k} = ${String(d[k])}`);
-  }
-  const has = (field: string, want: string) => {
-    const list = d[field];
-    assert.ok(Array.isArray(list) && list.includes(want), `${field} ${JSON.stringify(list)}-д SDK-ийн "${want}" алга`);
-  };
-  has("id_token_signing_alg_values_supported", OIDC_EXPECT.idTokenAlg);
-  has("code_challenge_methods_supported", OIDC_EXPECT.pkceMethod);
-  has("token_endpoint_auth_methods_supported", OIDC_EXPECT.tokenEndpointAuthMethod);
-  has("response_types_supported", "code");
-  has("scopes_supported", OIDC_EXPECT.defaultScope);
-  has("acr_values_supported", EID_ACR_QUALIFIED);
-  has("acr_values_supported", EID_ACR_ADVANCED);
-
-  // EidIdTokenClaims-ийн талбар бүр claims_supported-д: required алга бол fail, optional бол WARN.
-  const supported = Array.isArray(d.claims_supported) ? (d.claims_supported as string[]) : [];
-  const absent = Object.entries(ID_TOKEN_CLAIMS).filter(([c]) => !supported.includes(c));
-  warn(
-    "claims_supported-д SDK-ийн optional claim алга",
-    absent.filter(([, kind]) => kind === "optional").map(([c]) => c),
-  );
-  assert.deepEqual(
-    absent.filter(([, kind]) => kind === "required").map(([c]) => c),
-    [],
-    `claims_supported ${JSON.stringify(supported)}-д SDK-ийн required claim алга`,
-  );
 });
