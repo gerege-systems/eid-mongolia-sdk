@@ -7,7 +7,7 @@
   - Хаана: `src/pades/page/appearance.ts` (шинэ), `src/pades/pdf/signature.ts`, `src/pades/page/page.ts` (`fontBodies`,
     `wrapLimit`, `glyphHex` — verify хуудасны байт өөрчлөгдөөгүй), `src/pades.ts` (`PadesAppearance`, шалгалт, `visibleSpec`),
     `scripts/sync-pades-golden.mjs` → tag `pades-golden-v3`, README.
-- Шалгасан: golden v3-ийн бүх 21 кейс (харагдах 5: `quartz-pdf13-visible`, `-visible-en`, `-visible-second`,
+- Шалгасан: golden v3-ийн бүх 17 кейс (15 амжилттай + 2 алдааны) (харагдах 5: `quartz-pdf13-visible`, `-visible-en`, `-visible-second`,
   `-visible-twice`, `quartz-rotated90-visible`) — digest/DTBS/signedAttrs/prepared/output sha256 байт-ижил; appearance-ийн
   REQUEST_INVALID кейсүүд (Go `TestAppearanceRejects`-тэй ижил + docId-гүй гарын үсэгтэй баримт); lint, test, golden:check,
   size:pades (gzip 126.8 KB), test:compat.
