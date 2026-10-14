@@ -106,6 +106,70 @@ export interface EidLoginSuccess {
   headers?: Record<string, string | string[]>;
 }
 
+/** Хязгаарлагч: true — зөвшөөрөх, false — 429. */
+export type EidLoginRateLimitFn = (key: string) => boolean | Promise<boolean>;
+
+/** Нэг төрлийн хязгаар: санах ойн гулсах цонх, өөрийн функц, эсвэл `false` (хязгааргүй). */
+export type EidLoginRateRule = { limit: number; windowMs: number } | EidLoginRateLimitFn | false;
+
+/** Төрөл тус бүрийн хязгаар: `start` — `start:<ip>`, `push` — `push:<idCode>`. */
+export interface EidLoginRateLimits {
+  start?: EidLoginRateRule;
+  push?: EidLoginRateRule;
+}
+
+/** Анхдагч хязгаар — `rateLimit`-ийн объектод өгөөгүй төрөл энүүгээр үлдэнэ. `{ ...defaultRateLimit, start: … }`. */
+export const defaultRateLimit: Readonly<EidLoginRateLimits> = Object.freeze({
+  push: Object.freeze({ limit: 3, windowMs: 60_000 }),
+});
+
+const RATE_KINDS = ["start", "push"] as const;
+
+/** Санах ойн гулсах цонх (түлхүүр тус бүрд), 10 000 түлхүүрээс хэтэрвэл цэвэрлэнэ. */
+function windowLimiter(limit: number, windowMs: number): (key: string) => boolean {
+  const hits = new Map<string, number[]>();
+  return (key) => {
+    const now = Date.now();
+    const h = (hits.get(key) ?? []).filter((t) => now - t < windowMs);
+    if (hits.size > 10_000) hits.clear();
+    if (h.length >= limit) {
+      hits.set(key, h);
+      return false;
+    }
+    h.push(now);
+    hits.set(key, h);
+    return true;
+  };
+}
+
+/** `rateLimit` тохиргоог анхдагчтай нэгтгэж нэг функц болгоно. */
+function buildRateLimit(opt: EidLoginOptions["rateLimit"]): EidLoginRateLimitFn {
+  const extra = typeof opt === "function" ? opt : undefined;
+  const user = opt && typeof opt === "object" ? opt : {};
+  for (const k of Object.keys(user)) {
+    if (!(RATE_KINDS as readonly string[]).includes(k)) throw new Error(`createEidLogin: rateLimit.${k} — зөвхөн start | push`);
+  }
+  const merged: EidLoginRateLimits = { ...defaultRateLimit, ...user };
+  const perKind = new Map<string, EidLoginRateLimitFn>();
+  for (const k of RATE_KINDS) {
+    const r = merged[k];
+    if (r === undefined || r === false) continue;
+    if (typeof r === "function") {
+      perKind.set(k, r);
+      continue;
+    }
+    if (!(Number.isInteger(r.limit) && r.limit > 0 && r.windowMs > 0)) {
+      throw new Error(`createEidLogin: rateLimit.${k} — limit (бүхэл > 0), windowMs (> 0)`);
+    }
+    perKind.set(k, windowLimiter(r.limit, r.windowMs));
+  }
+  return async (key) => {
+    const fn = perKind.get(key.slice(0, key.indexOf(":")));
+    if (fn && !(await fn(key))) return false;
+    return extra ? extra(key) : true;
+  };
+}
+
 export interface EidLoginOptions {
   client: EidClient;
   /**
@@ -132,10 +196,15 @@ export interface EidLoginOptions {
   store?: EidLoginStore;
   cookie?: { name?: string; path?: string; secure?: boolean; domain?: string };
   /**
-   * Хязгаарлалт: `start:<ip>` (ip мэдэгдэж байвал) ба `push:<idCode>` түлхүүрээр дуудагдана; false → 429.
-   * Анхдагч: push-д нэг дугаарт 60 секундэд 3 (санах ойд) — хохирогчийн утсыг мэдэгдлээр дарахаас (MFA fatigue).
+   * Хязгаарлалт. Түлхүүр: `start:<ip>` (ip мэдэгдэж байвал), `push:<idCode>`; false → 429.
+   * Анхдагч {@link defaultRateLimit}: push-д нэг дугаарт 60 секундэд 3 (санах ойд) — MFA fatigue-ээс.
+   *
+   * - Объект `{ start?, push? }` — анхдагчтай НЭГТГЭГДЭНЭ: өгсөн төрөл анхдагчийг дарна, өгөөгүй нь анхдагчаараа.
+   *   Утга: `{ limit, windowMs }` (санах ойн гулсах цонх), функц (Redis г.м.) эсвэл `false` (тухайн төрлийг хязгаарлахгүй).
+   * - Функц `(key) => boolean` — бүх түлхүүрт дуудагдана, анхдагч хязгаар ДЭЭР НЭМЭГДЭНЭ (хоёулаа зөвшөөрөх ёстой).
+   *   Анхдагчийг сулруулах/солих бол объект хэлбэрээр тухайн төрлийг өг.
    */
-  rateLimit?: (key: string) => boolean | Promise<boolean>;
+  rateLimit?: EidLoginRateLimitFn | EidLoginRateLimits;
   /**
    * `handle(Request)`-ийн клиент IP (`start:<ip>` хязгаарт). Web-standard `Request`-д IP байдаггүй тул эсвэл энийг, эсвэл
    * {@link EidLoginOptions.trustProxy}-г өг; аль нь ч үгүй бол IP-ээр хязгаарлахгүй (анхны дуудлагад onError-оор анхааруулна).
@@ -304,19 +373,7 @@ export function createEidLogin(opts: EidLoginOptions): EidLogin {
   const successRedirect = opts.successRedirect ?? "/";
   const failureRedirect = opts.failureRedirect ?? "/";
   const onError = opts.onError ?? ((e: unknown) => console.error("eid-login:", e instanceof Error ? e.message : e));
-  const pushHits = new Map<string, number[]>();
-  const rateLimit =
-    opts.rateLimit ??
-    ((key: string) => {
-      if (!key.startsWith("push:")) return true;
-      const now = Date.now();
-      const hits = (pushHits.get(key) ?? []).filter((t) => now - t < 60_000);
-      if (pushHits.size > 10_000) pushHits.clear();
-      if (hits.length >= 3) return false;
-      hits.push(now);
-      pushHits.set(key, hits);
-      return true;
-    });
+  const rateLimit = buildRateLimit(opts.rateLimit);
 
   const displayText = (opts.displayText ?? `${client.rpName}-д нэвтрэх`).slice(0, 60);
   const interactions = [{ type: "displayTextAndPIN" as const, displayText60: displayText }];

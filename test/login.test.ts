@@ -4,7 +4,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { createEidLogin, EidClient, forwardedClientIp, ValidationError, withReturnHint, type EidLoginIdentity, type EidLoginRequest } from "../dist/index.js";
+import { createEidLogin, defaultRateLimit, EidClient, forwardedClientIp, ValidationError, withReturnHint, type EidLoginIdentity, type EidLoginRequest } from "../dist/index.js";
 
 const SID = "0b5e6a4c-1d2e-4f3a-8b9c-0d1e2f3a4b5c";
 const SECRET = Buffer.alloc(32, 7).toString("base64");
@@ -158,6 +158,45 @@ test("rateLimit hook: start:<ip> ба push:<id> түлхүүр", async () => {
   const r = await login.handleRequest({ ...req("POST", "/auth/eid/start", { body: { mode: "qr" } }), ip: "203.0.113.5" });
   assert.equal(r.status, 429);
   assert.deepEqual(keys, ["start:203.0.113.5"]);
+});
+
+const push = (id = "УБ12345678") => req("POST", "/auth/eid/start", { body: { mode: "push", idCode: id } });
+async function pushStatuses(login: ReturnType<typeof createEidLogin>, n: number, ip?: string): Promise<number[]> {
+  const out: number[] = [];
+  for (let i = 0; i < n; i++) out.push((await login.handleRequest({ ...push(), ...(ip ? { ip } : {}) })).status);
+  return out;
+}
+
+test("rateLimit объект: зөвхөн start өгөхөд анхдагч push 3/мин идэвхтэй хэвээр", async () => {
+  const keys: string[] = [];
+  const { login } = setup({ rateLimit: { start: (k) => (keys.push(k), true) } });
+  assert.deepEqual(await pushStatuses(login, 4, "203.0.113.5"), [200, 200, 200, 429]);
+  assert.deepEqual(keys, Array(4).fill("start:203.0.113.5"));
+});
+
+test("rateLimit функц: анхдагч push хязгаар дээр нэмэгдэнэ (идэвхгүй болгохгүй)", async () => {
+  const keys: string[] = [];
+  const { login } = setup({ rateLimit: (k) => (keys.push(k), true) });
+  assert.deepEqual(await pushStatuses(login, 4), [200, 200, 200, 429]);
+  assert.deepEqual(keys, Array(3).fill("push:УБ12345678"), "анхдагч татгалзсан үед хэрэглэгчийн функц дуудагдахгүй");
+});
+
+test("rateLimit объект: push-ийг дарна ({limit,windowMs}, функц, false); start-ийн window", async () => {
+  assert.deepEqual(await pushStatuses(setup({ rateLimit: { push: { limit: 1, windowMs: 60_000 } } }).login, 2), [200, 429]);
+  assert.deepEqual(await pushStatuses(setup({ rateLimit: { push: false } }).login, 5), [200, 200, 200, 200, 200]);
+  assert.deepEqual(await pushStatuses(setup({ rateLimit: { push: () => true } }).login, 5), [200, 200, 200, 200, 200]);
+  const { login } = setup({ rateLimit: { ...defaultRateLimit, start: { limit: 2, windowMs: 60_000 } } });
+  const qr = { ...req("POST", "/auth/eid/start", { body: { mode: "qr" } }), ip: "198.51.100.9" };
+  const st: number[] = [];
+  for (let i = 0; i < 3; i++) st.push((await login.handleRequest(qr)).status);
+  assert.deepEqual(st, [200, 200, 429]);
+});
+
+test("defaultRateLimit: push 3/60с, frozen; буруу түлхүүр/утга → throw", () => {
+  assert.deepEqual(defaultRateLimit, { push: { limit: 3, windowMs: 60_000 } });
+  assert.ok(Object.isFrozen(defaultRateLimit));
+  assert.throws(() => setup({ rateLimit: { pin: false } as never }), /rateLimit\.pin/);
+  assert.throws(() => setup({ rateLimit: { push: { limit: 0, windowMs: 1 } } }), /rateLimit\.push/);
 });
 
 test("onSuccess: tx-ийг дуусгасны дараа дуудагдана — onSuccess дотор store-оос уншвал алга (нэг удаа)", async () => {
