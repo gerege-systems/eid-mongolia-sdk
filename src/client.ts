@@ -53,6 +53,11 @@ export interface ClientConfig {
   dispatcher?: unknown;
   /** fetch орлуулагч (тест). */
   fetchImpl?: typeof fetch;
+  /**
+   * Хүнд харуулах текстийн хэл (`roleLabel` г.м.) — дуудлага бүрд `Accept-Language` болж илгээгдэнэ (`"mn"` | `"en"`).
+   * Анхдагч: илгээхгүй (сервер mn).
+   */
+  language?: string;
   /** Trust anchor (Root CA) — validator-д. Production-д ЗААВАЛ. */
   trust?: TrustConfig;
 }
@@ -101,6 +106,7 @@ export class EidClient {
       timeoutMs: cfg.timeoutMs,
       dispatcher: cfg.dispatcher,
       fetchImpl: cfg.fetchImpl,
+      language: cfg.language?.trim() || undefined,
     });
     const level: CertificateLevel = cfg.defaultCertificateLevel ?? "QUALIFIED";
 

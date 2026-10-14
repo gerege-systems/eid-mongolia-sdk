@@ -18,6 +18,8 @@ export interface HttpConfig {
   dispatcher?: unknown;
   /** Тест/custom орчинд fetch-ийг орлуулах (default — global fetch). */
   fetchImpl?: typeof fetch;
+  /** `Accept-Language` header-ийн утга (ж: "en"); хоосон бол илгээхгүй. */
+  language?: string;
 }
 
 const DEFAULT_TIMEOUT_MS = 15_000;
@@ -74,6 +76,7 @@ export class Http {
       headers: {
         Authorization: `Bearer ${this.cfg.apiSecret}`,
         ...(contentType ? { "Content-Type": contentType } : {}),
+        ...(this.cfg.language ? { "Accept-Language": this.cfg.language } : {}),
       },
       body,
       signal: AbortSignal.timeout(timeoutMs ?? this.cfg.timeoutMs ?? DEFAULT_TIMEOUT_MS),

@@ -241,8 +241,16 @@ export interface Representation {
   orgRegister: string;
   orgName: string;
   orgNameEn?: string;
-  /** Бүртгэлийн албан тушаал (ХУР-аас холбогдсонд `ceo` / `founder`, MANAGER-т ADMIN-ий бичсэн текст). */
+  /**
+   * Албан тушаалын машин утга (ХУР-аас холбогдсонд `ceo` / `founder` / `stakeholder`, MANAGER-т ADMIN-ий бичсэн
+   * текст) — өөрөө орчуулахгүй, хүнд {@link Representation.roleLabel}-ийг харуулна.
+   */
   role?: string;
+  /**
+   * Албан тушаалын хүнд харуулах нэр (CA нэг газраас; хэл: `ClientConfig.language` → `Accept-Language`, анхдагч mn).
+   * Хуучин CA-д байхгүй.
+   */
+  roleLabel?: string;
   rightType: "ADMIN" | "MANAGER" | string;
   source: "REGISTRY" | "MANUAL" | string;
   /** ISO 8601. */
@@ -264,8 +272,10 @@ export interface OrgResult {
   /** `NTRMN-<улсын бүртгэлийн дугаар>`. */
   orgEtsi: string;
   orgName: string | null;
-  /** Албан тушаал (ж: "Захирал"). Эрх хураагдсан бол null. */
+  /** Албан тушаалын машин утга (`ceo`, MANUAL текст) — өөрөө орчуулахгүй. Эрх хураагдсан бол null. */
   role: string | null;
+  /** Албан тушаалын хүнд харуулах нэр ({@link Representation.roleLabel}). Эрх хураагдсан / хуучин CA бол байхгүй. */
+  roleLabel?: string;
   /** ADMIN | MANAGER. Эрх хураагдсан бол null. */
   rightType: string | null;
 }
