@@ -95,6 +95,8 @@ export class EidClient {
   readonly token: TokenApi;
   readonly session: SessionApi;
   readonly validator: ResponseValidator;
+  /** `credentials.rpName` — иргэний утсанд харагдах RP нэр. */
+  readonly rpName: string;
 
   constructor(cfg: ClientConfig) {
     if (!cfg.credentials?.apiSecret) throw new Error("EidClient: credentials.apiSecret шаардлагатай");
@@ -122,5 +124,6 @@ export class EidClient {
     this.token = new TokenApi(http, cfg.credentials);
     this.session = new SessionApi(http);
     this.validator = new ResponseValidator(cfg.trust ?? {});
+    this.rpName = cfg.credentials.rpName;
   }
 }
