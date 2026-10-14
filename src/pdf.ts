@@ -3,8 +3,10 @@
 // `onBehalfOf` (`NTRMN-…`) өгвөл байгууллагын нэрийн өмнөөс: хувь хүний квалификацтай гарын үсэг + eID-ийн
 // бүртгэлээр шалгасан төлөөлөл (CMS signer-attributes-v2 мэдүүлсэн үүрэг, /Reason «<нэр>-ийг төлөөлж»).
 
+import { createHash } from "node:crypto";
+import { ValidationError } from "./errors.js";
 import type { Http } from "./http.js";
-import type { CertificateLevel, RpCredentials } from "./types.js";
+import type { CertificateLevel, PdfSessionBlock, RpCredentials } from "./types.js";
 
 export interface PdfDefaults {
   certificateLevel: CertificateLevel;
@@ -42,6 +44,12 @@ export interface PdfPrepareSession {
   docId: string;
   /** Иргэнд ХАРУУЛАХ баталгаажуулах код (ПИН биш). */
   vc: string | null;
+  /**
+   * Иргэний зурах DTBS (base64, SHA-256 = 32 байт) — урсгалаас үл хамааран. Хариуны гарын үсгийг өөрөө шалгахад:
+   * `validator.validateSign(result, digest)`. Хуучин CA push хариунд талбаргүй → undefined (device-link-д
+   * `deviceLink.digest`-ээс).
+   */
+  digest?: string;
   deviceLink: {
     sessionToken: string;
     sessionSecret: string;
@@ -86,10 +94,12 @@ export class PdfApi {
     const receivedAt = Date.now();
     const vc = rec(r.vc).value;
     const dl = rec(r.deviceLink);
+    const digest = typeof r.digest === "string" && r.digest ? r.digest : typeof dl.digest === "string" && dl.digest ? dl.digest : undefined;
     return {
       sessionId: String(r.sessionID),
       docId: String(r.docID),
       vc: vc != null ? String(vc) : null,
+      ...(digest !== undefined ? { digest } : {}),
       deviceLink: dl.sessionToken
         ? {
             sessionToken: String(dl.sessionToken),
@@ -109,5 +119,26 @@ export class PdfApi {
    */
   document(sessionId: string): Promise<Uint8Array> {
     return this.http.getBytes(`/pdf/sign/${encodeURIComponent(sessionId)}/document`, 60_000);
+  }
+
+  /**
+   * {@link document} + тулгалт: татсан байтын SHA-256 нь session poll-ийн `pdf.outSha256`-тай тэнцүү байх ёстой.
+   * `expected` — poll-ийн `result.pdf` блок (`documentStatus` READY + `outSha256` заавал) эсвэл SHA-256 hex.
+   *
+   * @throws {ValidationError} блок READY биш / `outSha256` алга / hash таарахгүй (файлд бүү итгэ).
+   */
+  async documentVerified(sessionId: string, expected: PdfSessionBlock | string): Promise<Uint8Array> {
+    let want: string | undefined;
+    if (typeof expected === "string") {
+      want = expected;
+    } else {
+      if (expected.documentStatus !== "READY") throw new ValidationError(`pdf.documentStatus ${expected.documentStatus} ≠ READY`);
+      want = expected.outSha256;
+    }
+    if (!want || !/^[0-9a-fA-F]{64}$/.test(want)) throw new ValidationError("pdf.outSha256 алга эсвэл SHA-256 hex биш");
+    const bytes = await this.document(sessionId);
+    const got = createHash("sha256").update(bytes).digest("hex");
+    if (got !== want.toLowerCase()) throw new ValidationError("Татсан PDF-ийн SHA-256 нь pdf.outSha256-тай таарсангүй");
+    return bytes;
   }
 }
