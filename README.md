@@ -74,6 +74,8 @@ export const eidLogin = createEidLogin({
   // store: redisStore,            // олон instance / serverless бол (анхдагч — процессын санах ой)
   // rateLimit: { start: (key) => redisLimiter.allow(key) }, // анхдагчтай нэгтгэгдэнэ (push 3/мин хэвээр) — доор «Хязгаарлалт»
   trustProxy: 1, // handle(Request)-д клиент IP: nginx/LB нэг hop бол 1 (доор «Клиент IP»)
+  onEvent: ({ kind, sessionId, meta }) => audit.record(`auth.eid_${kind}`, sessionId, meta), // таны аудит
+  // auditKey: process.env.EID_AUDIT_KEY, // pushKey-ийг instance/restart хооронд тогтвортой болгох
 });
 ```
 
@@ -197,7 +199,31 @@ RP талд нэмэлт шалгалт хэрэггүй. Эх сурвалж: e
 - `OK` нь зөвхөн `validateAuth` амжилттай үед: QR → `flowType=QR`, push → `Notification`, утас → `Web2App` + callback-ийн
   `userChallengeVerifier`. Web2App session-ийг poll дуусгахгүй (`WAIT_CALLBACK`). `onSuccess` нэг session-д нэг л удаа
   (store-ийн `delete` атомар байх ёстой — Redis `DEL`).
-- `onSuccess`-ийн `data` хөтөчид очно — нууц бүү оруул. Иргэний бүртгэлтэй эсэхийг push алдаагаар задлахгүй (`eid_unavailable`).
+- `onSuccess`-ийн `data` хөтөчид очно — нууц бүү оруул.
+- **Регистрийн oracle хаалт (decoy + доод хугацаа, анхдагчаар асаалттай).** eID push-ийг дугаарын шалтгаанаар татгалзвал
+  (eID-ийн өөрийн JSON 4xx — танихгүй / ашиглах боломжгүй дугаар) бодит push-тэй **ижил** хариу: `{mode, vc (санамсаргүй
+  5 оронтой — eID-тэй ижил хэлбэр), expiresIn}`, ижил cookie; `status` нь eID-ээс асуулгүй `pollMs`-ийн хугацаанд барьж
+  `PENDING`, TTL-ийн дараа `EXPIRED` — утсаа аваагүй иргэнтэй ялгаагүй (бодит push-ийн CA `TIMEOUT` ч `EXPIRED` болно). Push start-ийн хариу бүр (бодит, decoy, 502)
+  `pushFloorMs`-оос (анхдагч 1000) хурдан гарахгүй — decoy-г цагаар ялгахгүйн тулд (`handle(Request)`-д хүсэлт тасарвал
+  хүлээхгүй; `handleRequest`-д `signal` өг). Хязгаар (`push:<idCode>`, `start:<ip>`) decoy-д ч үйлчилнэ; 429 ба 400
+  (`invalid_id` — хэлбэрийн алдаа, бүртгэлээс хамааралгүй) нь floor-гүй. eID-ийн 5xx, холболтын алдаа, JSON бус 4xx (eID-ийн
+  өмнөх proxy, ж: mTLS татгалзал), 401/403 (RP-ийн нууц/эрх) ба 429 нь **decoy биш** — `502 eid_unavailable` / `429` (eID
+  порталын зан: тасалдлыг decoy-оор нуувал иргэн дуусахгүй spinner харна; эдгээр нь дугаараас хамаардаггүй тул oracle
+  биш). Унтраах: `decoy: false`, `pushFloorMs: 0` — **⚠️** тэгвэл `/start` нь «энэ регистр eID-д бүртгэлтэй эсэх»-ийг
+  нэвтрээгүй хэнд ч хэлнэ; зөвхөн дотоод/тестийн орчинд.
+- **Гэрчилгээний цуцлалт (OCSP, анхдагчаар асаалттай).** `validateAuth`-ийн дараа, `onSuccess`-ийн өмнө иргэний гэрчилгээг
+  түүний AIA-д бичигдсэн OCSP responder-оос асууна (`revocation`, анхдагч `ocspRevocationChecker()`; хариу олгогч эсвэл
+  түүний OCSPSigning responder-ийн гарын үсэгтэй, энэ serial-ийн, thisUpdate ≤ 48 цаг, good-ийг 5 мин кэшлэнэ). `revoked`,
+  мөн `unknown` (олгогч энэ гэрчилгээг олгоогүй) → `FAILED` / `VALIDATION` (500 биш), `onSuccess` дуудагдахгүй. Хариугүй
+  (timeout 2 с, 5xx, AIA алга, шалгалт унасан хариу): `revocationMode` анхдагч `"soft-fail"` — зөвшөөрч `onError`-оор
+  анхааруулна, `identity.revocation = "unchecked"` (eID порталын `EID_OCSP=soft`: CA-ийн responder унавал бүх иргэн
+  түгжигдэхгүй; утас session-ийг батлахад CA секундын өмнө хүрэх боломжтой байсан); `"hard-fail"` → `FAILED` /
+  `VALIDATION`. `revocation: false` — **⚠️** цуцалсан (хулгайлагдсан утасны) гэрчилгээгээр нэвтэрнэ.
+- **Аудит — `onEvent({ kind, sessionId, meta })`** (await хийгдэнэ, алдаа нь `onError` руу): `push_sent` (meta `decoy` —
+  зөвхөн таны аудитад, хөтөч рүү хэзээ ч), `push_limited`, `refused` (иргэн татгалзсан), `expired` (TIMEOUT / eID-д
+  олдохгүй), `unverified` (`reason`: `validation` | `revoked` | `revocation_unavailable`), `flow_refused` (Web2App callback
+  өөр хөтчид), `success` (`flow`, `revocation`), `failed` (бусад `endResult`). meta-д `mode`; токен/нууц, регистрийн дугаар
+  орохгүй — push-д `pushKey` = HMAC-SHA256(`auditKey`, дугаар)-ын 32 hex (`auditKey` алга бол процесс бүрт санамсаргүй).
 - Олон instance / serverless (Vercel г.м.) дээр анхдагч санах ойн store ажиллахгүй — `EidLoginStore` (`get`/`set`/`delete`)-ийг Redis-ээр.
 - `onSuccess` дуудагдахаас ӨМНӨ tx store-оос атомар устгагдана (нэг удаагийн баталгаа) — `onSuccess` дотор store-оос бүү
   унш; хэрэгтэй бүхэн `identity`-д (`sessionId`, `documentNumber`, `certificateDerB64`, …).
@@ -631,7 +657,8 @@ OK ирж болзошгүй. Иймд `ResponseValidator`:
      хүссэн session-д `ecdsa-with-SHA256` хариу ирвэл хуурамч гэж татгалзана.
 
 5. Цуцлалт — `trust.revocation` (OCSP/CRL hook) → `checkRevocation`, эсвэл `checkRevocationStatus` (`"good"` /
-   `"unchecked"` (soft-fail) / `"skipped"` (hook алга)).
+   `"unchecked"` (soft-fail) / `"skipped"` (hook алга)). Бэлэн hook: `ocspRevocationChecker()` — гэрчилгээний AIA OCSP
+   (revoked/unknown → `"revoked"`; хариугүй → `"unknown"`, горим шийднэ). Өөр checker/горимоор нэг удаа: `checkRevocationWith`.
 6. Нэмэлт (сонголттой): `allowedIssuerSkis: [CITIZEN_ISSUING_CA_SKI]` — зөвхөн иргэний Issuing CA (04)-ийн гэрчилгээ;
    `checkKeyUsage: true` — auth → clientAuth, sign → nonRepudiation (CA-ийн профайл); `schemeName` — CA-ийн
    `acsp_scheme_name` (анхдагч `smart-id`).

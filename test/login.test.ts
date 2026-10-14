@@ -1,10 +1,22 @@
 // createEidLogin — handler-уудын тест. eID RP-API-г fetchImpl-ээр дуурайна; гарын үсэг/гинжийн шалгалт нь
 // ResponseValidator-ийн өөрийн тестэд (sdk.test.ts) — энд validateAuth-ийг орлуулж ямар урсгал/verifier-ээр
 // дуудагдсаныг тулгана.
-import { test } from "node:test";
+import { mock, test } from "node:test";
+import { readFileSync } from "node:fs";
 import assert from "node:assert/strict";
 
-import { createEidLogin, defaultRateLimit, EidClient, forwardedClientIp, ValidationError, withReturnHint, type EidLoginIdentity, type EidLoginRequest } from "../dist/index.js";
+import {
+  createEidLogin,
+  defaultRateLimit,
+  EidClient,
+  forwardedClientIp,
+  ocspRevocationChecker,
+  ValidationError,
+  withReturnHint,
+  type EidLoginEvent,
+  type EidLoginIdentity,
+  type EidLoginRequest,
+} from "../dist/index.js";
 
 const SID = "0b5e6a4c-1d2e-4f3a-8b9c-0d1e2f3a4b5c";
 const SECRET = Buffer.alloc(32, 7).toString("base64");
@@ -13,6 +25,8 @@ const IPHONE_CHROME = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) Ap
 interface Fake {
   session: Record<string, unknown>;
   calls: { method: string; url: string; body?: unknown }[];
+  /** notification start-ын хариу: undefined = бодит session; "json400" — eID-ийн татгалзал; "proxy400" — JSON бус 4xx; "500"; "401". */
+  refuse?: "json400" | "proxy400" | "500" | "401";
 }
 
 function setup(opts: Partial<Parameters<typeof createEidLogin>[0]> = {}) {
@@ -25,7 +39,13 @@ function setup(opts: Partial<Parameters<typeof createEidLogin>[0]> = {}) {
     if (u.pathname === "/authentication/device-link/anonymous") {
       return ok({ sessionID: SID, sessionToken: "tok_ABC-123", sessionSecret: SECRET, deviceLinkBase: "https://ca.eidmongolia.mn/dl", vc: "12345" });
     }
-    if (u.pathname.startsWith("/authentication/notification/etsi/")) return ok({ sessionID: SID, vc: { type: "alphaNumeric4", value: "54321" } });
+    if (u.pathname.startsWith("/authentication/notification/etsi/")) {
+      if (fake.refuse === "json400") return new Response('{"error":"хэрэглэгч олдсонгүй"}', { status: 400, headers: { "Content-Type": "application/json" } });
+      if (fake.refuse === "proxy400") return new Response("<html>400 The SSL certificate error</html>", { status: 400, headers: { "Content-Type": "text/html" } });
+      if (fake.refuse === "401") return new Response('{"error":"unauthorized"}', { status: 401, headers: { "Content-Type": "application/json" } });
+      if (fake.refuse === "500") return new Response('{"error":"дотоод алдаа"}', { status: 500, headers: { "Content-Type": "application/json" } });
+      return ok({ sessionID: SID, vc: { type: "alphaNumeric4", value: "54321" } });
+    }
     if (u.pathname === `/session/${SID}`) return ok(fake.session);
     return new Response("{}", { status: 404 });
   }) as typeof fetch;
@@ -44,6 +64,7 @@ function setup(opts: Partial<Parameters<typeof createEidLogin>[0]> = {}) {
     };
   };
   const identities: EidLoginIdentity[] = [];
+  const events: EidLoginEvent[] = [];
   const login = createEidLogin({
     client,
     callbackUrl: "https://bank.example.mn/auth/eid/callback",
@@ -54,9 +75,11 @@ function setup(opts: Partial<Parameters<typeof createEidLogin>[0]> = {}) {
       return { redirect: "/dashboard", data: { user: id.etsi }, headers: { "Set-Cookie": "app_session=s1; Path=/; HttpOnly" } };
     },
     onError: () => {},
+    onEvent: (e) => void events.push(e),
+    pushFloorMs: 0, // хугацааны доод хязгаарыг тусдаа тестэд хуурмаг цагаар шалгана
     ...opts,
   });
-  return { login, fake, validated, identities, setFail: (v: boolean) => (fail = v) };
+  return { login, fake, validated, identities, events, setFail: (v: boolean) => (fail = v) };
 }
 
 const req = (method: string, url: string, init: Partial<EidLoginRequest> = {}): EidLoginRequest => ({
@@ -355,4 +378,218 @@ test("withReturnHint: iOS/Android хөтөч, танихгүй бол хэвээ
     cb + "?retPkg=com.sec.android.app.sbrowser",
   );
   assert.equal(withReturnHint(cb, "Mozilla/5.0 (Macintosh) Safari/605"), cb);
+});
+
+// ── G1: регистрийн oracle — decoy + доод хугацаа ──
+
+const keysOf = (o: object) => Object.keys(o).sort();
+// mock.timers({apis: [..., "Date"]}) — Node ≥ 20.4 (18-д хуучин API, Date-гүй).
+const [NODE_MAJOR, NODE_MINOR] = process.versions.node.split(".").map(Number) as [number, number];
+const MOCK_DATE = NODE_MAJOR > 20 || (NODE_MAJOR === 20 && NODE_MINOR >= 4);
+const settle = () => new Promise<void>((r) => setImmediate(r));
+
+test("push decoy: eID татгалзсан дугаар бодит push-тэй ижил хэлбэр; status PENDING (eID-ээс асуухгүй) → EXPIRED", async () => {
+  const { login, fake, events } = setup({ pollMs: 5 });
+  const real = await login.handleRequest(push("УБ12345678"));
+  fake.refuse = "json400";
+  const decoy = await login.handleRequest(push("УБ87654321"));
+  assert.equal(real.status, 200);
+  assert.equal(decoy.status, 200);
+  const rb = JSON.parse(real.body);
+  const db = JSON.parse(decoy.body);
+  assert.deepEqual(keysOf(db), keysOf(rb));
+  assert.equal(db.mode, "push");
+  assert.equal(db.expiresIn, rb.expiresIn);
+  assert.match(db.vc, /^[0-9]{5}$/);
+  assert.deepEqual(keysOf(decoy.headers), keysOf(real.headers));
+  const dc = cookieOf(decoy.headers);
+  assert.match(dc, /^eid_login=[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\./);
+
+  const calls = fake.calls.length;
+  const rp = JSON.parse((await login.handleRequest(req("GET", "/auth/eid/status", { headers: { cookie: cookieOf(real.headers) } }))).body);
+  const dp = JSON.parse((await login.handleRequest(req("GET", "/auth/eid/status", { headers: { cookie: dc } }))).body);
+  assert.equal(rp.state, "PENDING");
+  assert.equal(dp.state, "PENDING");
+  assert.deepEqual(keysOf(dp), keysOf(rp));
+  assert.equal(dp.vc, db.vc);
+  assert.equal(fake.calls.length, calls + 1, "decoy-ийн status eID руу хүсэлт илгээхгүй");
+
+  // TTL дууссаны дараа EXPIRED — бодиттой ижил зам (store-ийн хугацаа).
+  const exp = setup({ ttlMs: 1, pollMs: 1 });
+  exp.fake.refuse = "json400";
+  const d2 = await exp.login.handleRequest(push());
+  await new Promise((r) => setTimeout(r, 5));
+  assert.equal(JSON.parse((await exp.login.handleRequest(req("GET", "/auth/eid/status", { headers: { cookie: cookieOf(d2.headers) } }))).body).state, "EXPIRED");
+
+  // Аудит: хоёулаа push_sent, decoy нь зөвхөн meta-д; регистр meta-д алга.
+  assert.deepEqual(events.map((e) => [e.kind, e.meta.decoy]), [["push_sent", false], ["push_sent", true]]);
+  assert.match(String(events[0]!.meta.pushKey), /^[0-9a-f]{32}$/);
+  assert.notEqual(events[0]!.meta.pushKey, events[1]!.meta.pushKey);
+  assert.ok(!JSON.stringify(events).includes("12345678") && !JSON.stringify(events).includes("87654321"));
+});
+
+test("push floor: бодит ба decoy хоёулаа ≥ 1 с (хуурмаг цаг); qr-д хамаарахгүй; pushFloorMs: 0 унтраана", { skip: !MOCK_DATE && "mock.timers (Date) — Node ≥ 20.4" }, async () => {
+  mock.timers.enable({ apis: ["setTimeout", "Date"] });
+  try {
+    for (const refuse of [undefined, "json400", "500"] as const) {
+      const { login, fake } = setup({ pushFloorMs: undefined });
+      fake.refuse = refuse;
+      let done = false;
+      const p = login.handleRequest(push()).then((r) => ((done = true), r));
+      await settle();
+      mock.timers.tick(999);
+      await settle();
+      assert.equal(done, false, `${refuse ?? "real"}: 999 мс-д хариулахгүй`);
+      mock.timers.tick(1);
+      await settle();
+      assert.equal(done, true, `${refuse ?? "real"}: 1000 мс-д хариулна`);
+      assert.equal((await p).status, refuse === "500" ? 502 : 200);
+    }
+    const qr = await setup({ pushFloorMs: undefined }).login.handleRequest(req("POST", "/auth/eid/start", { body: { mode: "qr" } }));
+    assert.equal(qr.status, 200, "qr floor-гүй (timer tick-гүйгээр дууссан)");
+    const off = await setup({ pushFloorMs: 0 }).login.handleRequest(push());
+    assert.equal(off.status, 200);
+  } finally {
+    mock.timers.reset();
+  }
+});
+
+test("push: eID тасалдал (5xx, proxy-ийн JSON бус 4xx, 401) → 502, decoy биш (порталтай ижил); decoy: false → 502", async () => {
+  for (const refuse of ["500", "proxy400", "401"] as const) {
+    const { login, fake, events } = setup();
+    fake.refuse = refuse;
+    const r = await login.handleRequest(push());
+    assert.equal(r.status, 502, refuse);
+    assert.equal(JSON.parse(r.body).error, "eid_unavailable");
+    assert.equal(events.length, 0);
+  }
+  const off = setup({ decoy: false });
+  off.fake.refuse = "json400";
+  assert.equal((await off.login.handleRequest(push())).status, 502);
+});
+
+test("push decoy: хязгаар decoy-д ч үйлчилнэ; push_limited event", async () => {
+  const { login, fake, events } = setup();
+  fake.refuse = "json400";
+  assert.deepEqual(await pushStatuses(login, 4), [200, 200, 200, 429]);
+  assert.deepEqual(events.map((e) => e.kind), ["push_sent", "push_sent", "push_sent", "push_limited"]);
+  assert.equal(events[3]!.sessionId, null);
+});
+
+// ── G2: гэрчилгээний цуцлалт ──
+
+const FIX = JSON.parse(readFileSync(new URL("./fixtures/ocsp.json", import.meta.url), "utf8")) as Record<string, string>;
+const der = (b64: string) => Buffer.from(b64, "base64");
+
+async function revocationRun(opts: Parameters<typeof setup>[0]) {
+  const t = setup(opts);
+  const s = await t.login.handleRequest(req("POST", "/auth/eid/start", { body: { mode: "qr" } }));
+  t.fake.session = COMPLETE_OK("QR");
+  const r = await t.login.handleRequest(req("GET", "/auth/eid/status", { headers: { cookie: cookieOf(s.headers) } }));
+  return { ...t, r, body: JSON.parse(r.body) };
+}
+
+test("revocation: revoked / шалгагчийн алдаа / hard-fail unknown → FAILED VALIDATION (500 биш), onSuccess-гүй", async () => {
+  const cases = [
+    { revocation: async () => "revoked" as const, reason: "revoked" },
+    { revocation: async (): Promise<"good"> => { throw new Error("boom"); }, reason: "revocation_unavailable" },
+    { revocation: async () => "unknown" as const, revocationMode: "hard-fail" as const, reason: "revocation_unavailable" },
+  ];
+  for (const { reason, ...opts } of cases) {
+    const { r, body, identities, events } = await revocationRun(opts);
+    assert.equal(r.status, 200);
+    assert.deepEqual(body, { state: "FAILED", error: "VALIDATION" });
+    assert.equal(identities.length, 0);
+    assert.deepEqual(events.at(-1), { kind: "unverified", sessionId: SID, meta: { mode: "qr", reason } });
+  }
+});
+
+test("revocation: анхдагч OCSP (хариугүй → soft-fail unchecked), good, false → skipped", async () => {
+  for (const [opts, want] of [
+    [{}, "unchecked"],
+    [{ revocation: async () => "good" as const }, "good"],
+    [{ revocation: async () => "unknown" as const }, "unchecked"],
+    [{ revocation: false as const }, "skipped"],
+  ] as const) {
+    const { body, identities, events } = await revocationRun(opts);
+    assert.equal(body.state, "OK", JSON.stringify(opts));
+    assert.equal(identities[0]!.revocation, want);
+    assert.deepEqual(events.at(-1), { kind: "success", sessionId: SID, meta: { mode: "qr", flow: "QR", revocation: want } });
+  }
+});
+
+test("ocspRevocationChecker: good / revoked / unknown→revoked, хуучин хариу, 5xx, issuer алга, good кэш", async () => {
+  const { X509Certificate } = await import("node:crypto");
+  const leaf = new X509Certificate(der(FIX.leaf!));
+  const ca = new X509Certificate(der(FIX.ca!));
+  let answer: string | number = "good";
+  let calls = 0;
+  const fetchImpl = (async (url: string, init?: RequestInit) => {
+    calls++;
+    assert.equal(url, "http://ocsp.test/ocsp");
+    assert.equal(init?.redirect, "manual");
+    if (typeof answer === "number") return new Response("", { status: answer });
+    return new Response(der(FIX[answer]!), { status: 200 });
+  }) as typeof fetch;
+  const at = Date.parse(FIX.at!) + 60_000;
+  const mk = (now = at) => ocspRevocationChecker({ fetchImpl, now: () => now });
+  answer = "revoked";
+  assert.equal(await mk()(leaf, ca), "revoked");
+  answer = "unknown";
+  assert.equal(await mk()(leaf, ca), "revoked", "олгогч мэдэхгүй serial → revoked");
+  answer = "good";
+  assert.equal(await mk(at + 72 * 3600_000)(leaf, ca), "unknown", "хуучин thisUpdate");
+  assert.equal(await mk(at - 3600_000)(leaf, ca), "unknown", "ирээдүйн thisUpdate");
+  answer = 500;
+  assert.equal(await mk()(leaf, ca), "unknown");
+  assert.equal(await mk()(leaf, undefined), "unknown");
+  answer = "good";
+  const c = mk();
+  assert.equal(await c(leaf, ca), "good");
+  answer = 500;
+  const before = calls;
+  assert.equal(await c(leaf, ca), "good", "good 5 мин кэшлэгдэнэ");
+  assert.equal(calls, before);
+  assert.equal(await mk()(leaf, leaf), "unknown", "буруу issuer-ийн гарын үсэг");
+});
+
+// ── G3: аудит ──
+
+test("onEvent: refused / failed / expired / unverified / flow_refused", async () => {
+  const { login, fake, events, setFail } = setup();
+  for (const endResult of ["USER_REFUSED_DISPLAYTEXTANDPIN", "WRONG_VC", "TIMEOUT"]) {
+    fake.session = { state: "RUNNING" };
+    const s = await login.handleRequest(req("POST", "/auth/eid/start", { body: { mode: "qr" } }));
+    fake.session = { state: "COMPLETE", result: { endResult } };
+    await login.handleRequest(req("GET", "/auth/eid/status", { headers: { cookie: cookieOf(s.headers) } }));
+  }
+  assert.deepEqual(events.map((e) => [e.kind, e.meta.endResult]), [["refused", "USER_REFUSED_DISPLAYTEXTANDPIN"], ["failed", "WRONG_VC"], ["expired", "TIMEOUT"]]);
+
+  events.length = 0;
+  setFail(true);
+  const s = await login.handleRequest(req("POST", "/auth/eid/start", { body: { mode: "qr" } }));
+  fake.session = COMPLETE_OK("QR");
+  await login.handleRequest(req("GET", "/auth/eid/status", { headers: { cookie: cookieOf(s.headers) } }));
+  assert.deepEqual(events, [{ kind: "unverified", sessionId: SID, meta: { mode: "qr", reason: "validation" } }]);
+
+  events.length = 0;
+  const w = await login.handleRequest(req("GET", "/auth/eid/start?mode=web2app"));
+  await login.handleRequest(req("GET", "/auth/eid/callback?sessionId=other&userChallengeVerifier=x", { headers: { cookie: cookieOf(w.headers) } }));
+  assert.deepEqual(events, [{ kind: "flow_refused", sessionId: SID, meta: { mode: "web2app", reason: "unbound" } }]);
+});
+
+test("onEvent алдаа урсгалыг зогсоохгүй (onError руу)", async () => {
+  const errs: unknown[] = [];
+  const { login } = setup({ onEvent: () => { throw new Error("audit down"); }, onError: (e) => errs.push(e) });
+  assert.equal((await login.handleRequest(push())).status, 200);
+  assert.match(String(errs[0]), /audit down/);
+});
+
+test("push: CA TIMEOUT → EXPIRED (decoy-той ижил төгсгөл, FAILED/TIMEOUT биш)", async () => {
+  const { login, fake, events } = setup();
+  const s = await login.handleRequest(push());
+  fake.session = { state: "COMPLETE", result: { endResult: "TIMEOUT" } };
+  const r = await login.handleRequest(req("GET", "/auth/eid/status", { headers: { cookie: cookieOf(s.headers) } }));
+  assert.deepEqual(JSON.parse(r.body), { state: "EXPIRED" });
+  assert.deepEqual(events.map((e) => e.kind), ["push_sent", "expired"]);
 });

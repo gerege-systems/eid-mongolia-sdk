@@ -68,6 +68,7 @@ export {
   verifyPrehashedSignature,
   userChallengeOf,
 } from "./validator.js";
+export { ocspRevocationChecker, type OcspCheckerOptions } from "./ocsp.js";
 export { parseSubject, type CertSubject } from "./subject.js";
 export {
   sha256Base64,
@@ -113,6 +114,8 @@ export {
   type EidLoginSuccess,
   type EidLoginRequest,
   type EidLoginResponse,
+  type EidLoginEvent,
+  type EidLoginEventKind,
 } from "./login.js";
 export {
   EidError,
