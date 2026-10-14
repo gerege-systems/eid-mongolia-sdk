@@ -44,6 +44,14 @@ export class Http {
     return this.json("POST", path, JSON.stringify(body), "application/json", timeoutMs);
   }
 
+  /** {@link post} + HTTP статус (201 / 200-г ялгах: `POST /pdf/signatures`). */
+  async postWithStatus(path: string, body: unknown, timeoutMs?: number): Promise<{ status: number; body: unknown }> {
+    const op = `POST ${maskPath(path)}`;
+    const res = await this.send("POST", path, JSON.stringify(body), "application/json", timeoutMs);
+    const text = new TextDecoder().decode(await readLimited(res, MAX_JSON_BYTES, op));
+    return { status: res.status, body: text ? (JSON.parse(text) as unknown) : {} };
+  }
+
   get(path: string, timeoutMs?: number): Promise<unknown> {
     return this.json("GET", path, undefined, undefined, timeoutMs);
   }

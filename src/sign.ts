@@ -8,7 +8,7 @@
 //   → validator.validateSign(…, { expectedAlgorithm, expectedCertificate }).
 
 import { PDF_SIGNATURE_REGISTER_FIELDS, RP_ROUTES, routePath } from "./contract.js";
-import { ValidationError } from "./errors.js";
+import { ApiError, ValidationError } from "./errors.js";
 import type { Http } from "./http.js";
 import { hashLen, interactionsToBase64, sha256Base64 } from "./crypto.js";
 import { startExpiry } from "./types.js";
@@ -129,10 +129,26 @@ export interface RegisterSignatureInput {
   priorCmsSha256?: string[];
   /** Горим A-ийн (CA угсарсан) өмнөх гарын үсгүүдийн revision SHA-256. `priorCmsSha256`-тай нийлээд = `revIndex − 1`. */
   priorRevisionSha256?: string[];
+  /**
+   * SDK-д л (CA руу илгээхгүй): өмнөх гарын үсэг бүрийн хоёр түлхүүр, баримтын дарааллаар — {@link registrationFromCompleted}
+   * бөглөнө. CA өмнөх мөр бүрийг өөрийнх нь түлхүүрээр таньдаг (клиент талын мөр — CMS, горим A — revision), файлаас аль
+   * нь болохыг ялгах боломжгүй. Тиймээс `registerSignature` эхлээд бүгдийг CMS-ээр илгээж, 409 `PRIOR_MISMATCH` бол
+   * эхний k-г revision-оор (горим A нь клиент талынхаас өмнө), өмнөх нь ≤ 4 бол бүх хослолыг оролдоно.
+   * `priorRevisionSha256`-г гараар өгсөн бол оролдохгүй.
+   */
+  priorSignatures?: PriorSignature[];
   /** Байгууллагын нэрийн өмнөөс (`NTRMN-…`) — session-ийнхтэй ижил. */
   onBehalfOf?: string;
   /** Заавал биш (`PNOMN-…`): ирвэл CMS-ийн зурагчийн SERIALNUMBER-тэй тэнцүү (эс бөгөөс 409 `SIGNER_MISMATCH`). */
   signerEtsi?: string;
+}
+
+/** Өмнөх нэг гарын үсгийн хоёр түлхүүр ({@link RegisterSignatureInput.priorSignatures}). */
+export interface PriorSignature {
+  /** CMS DER-ийн SHA-256 (hex) — клиент талын мөр. */
+  cmsSha256: string;
+  /** `sha256(doc[0 : ByteRange[2]+ByteRange[3]])` (hex) — горим A-ийн мөр (CA `sig_rev_sha256`). */
+  revisionSha256: string;
 }
 
 /** {@link registrationFromCompleted}-д хэрэгтэй `pades.complete()`-ийн хэсэг (JSON-оор дамжсан бол `cms` нь base64). */
@@ -146,6 +162,8 @@ export interface CompletedForRegistration {
   sigRevSha256: string;
   outSha256: string;
   priorCmsSha256: string[];
+  /** `complete().priorRevisionSha256` (0.15.2+) — байвал `priorSignatures` бөглөгдөж горим A-ийн өмнөх мөрийг SDK өөрөө тааруулна. */
+  priorRevisionSha256?: string[];
 }
 
 /**
@@ -168,8 +186,17 @@ export function registrationFromCompleted(
   if (extra.medium) out.medium = extra.medium;
   if (extra.sessionID) out.sessionID = extra.sessionID;
   if (done.hasPage && done.pageSha256) out.pageSha256 = done.pageSha256;
-  if (done.priorCmsSha256.length) out.priorCmsSha256 = done.priorCmsSha256;
-  if (extra.priorRevisionSha256?.length) out.priorRevisionSha256 = extra.priorRevisionSha256;
+  if (extra.priorRevisionSha256?.length) {
+    // Дуудагч өөрөө ангилсан (хуучин зан) — CMS-ийн жагсаалтаас хасах нь түүний үүрэг.
+    if (done.priorCmsSha256.length) out.priorCmsSha256 = done.priorCmsSha256;
+    out.priorRevisionSha256 = extra.priorRevisionSha256;
+  } else if (done.priorCmsSha256.length) {
+    out.priorCmsSha256 = done.priorCmsSha256;
+    const rev = done.priorRevisionSha256 ?? [];
+    if (rev.length === done.priorCmsSha256.length) {
+      out.priorSignatures = done.priorCmsSha256.map((c, i) => ({ cmsSha256: c, revisionSha256: rev[i]! }));
+    }
+  }
   if (extra.onBehalfOf) out.onBehalfOf = extra.onBehalfOf;
   if (extra.signerEtsi) out.signerEtsi = extra.signerEtsi;
   return out;
@@ -183,7 +210,27 @@ export interface RegisterSignatureResult {
   registeredAt: string;
   /** Нийтийн шалгах хуудас (`https://ca.eidmongolia.mn/verify/<docID>`). */
   verifyUrl: string;
+  /** true — 201 (шинээр бүртгэв); false — 200 (ижил биеийн идэмпотент давталт, анхны хариу). */
+  created: boolean;
   raw: unknown;
+}
+
+/**
+ * `PRIOR_MISMATCH`-ийн дараах оролдлогууд (true = тухайн өмнөх гарын үсгийг revision-оор): эхлээд эхний k (k = 1…n; горим A
+ * нь клиент талынхаас өмнө — §15 устгагдаж буй), дараа нь n ≤ 4 бол үлдсэн бүх хослол. Бүгдийг CMS-ээр (k = 0) аль хэдийн
+ * оролдсон. Go `priorSplits`-тэй ижил дараалал.
+ */
+function priorSplits(n: number): boolean[][] {
+  const out: boolean[][] = [];
+  const seen = new Set<number>();
+  for (let k = 1; k <= n; k++) {
+    seen.add((1 << k) - 1);
+    out.push(Array.from({ length: n }, (_, i) => i < k));
+  }
+  if (n <= 4) {
+    for (let m = 1; m < 1 << n; m++) if (!seen.has(m)) out.push(Array.from({ length: n }, (_, i) => (m & (1 << i)) !== 0));
+  }
+  return out;
 }
 
 const HEX64 = /^[0-9a-f]{64}$/;
@@ -432,17 +479,36 @@ export class SignApi {
    * `/verify` «бүртгэлгүй» гэнэ.
    */
   async registerSignature(input: RegisterSignatureInput): Promise<RegisterSignatureResult> {
-    return this.registerBody(buildRegisterBody(input));
+    const body = buildRegisterBody(input);
+    const prior = input.priorSignatures ?? [];
+    if (input.priorRevisionSha256?.length || prior.length === 0 || prior.length !== input.revIndex - 1) return this.registerBody(body);
+    try {
+      return await this.registerBody(body);
+    } catch (first) {
+      if (!(first instanceof ApiError && first.code === "PRIOR_MISMATCH")) throw first;
+      // Аль өмнөх мөр горим A (revision-оор) болохыг файлаас мэдэх аргагүй — хослолыг оролдоно (priorSplits).
+      for (const asRevision of priorSplits(prior.length)) {
+        const next = { ...input, priorSignatures: undefined, priorCmsSha256: prior.filter((_, i) => !asRevision[i]).map((p) => p.cmsSha256),
+          priorRevisionSha256: prior.filter((_, i) => asRevision[i]).map((p) => p.revisionSha256) };
+        try {
+          return await this.registerBody(buildRegisterBody(next));
+        } catch (e) {
+          if (!(e instanceof ApiError && e.code === "PRIOR_MISMATCH")) throw e;
+        }
+      }
+      throw first;
+    }
   }
 
   private async registerBody(body: Record<string, unknown>): Promise<RegisterSignatureResult> {
-    const raw = await this.http.post(routePath(RP_ROUTES.pdfSignatures), body);
+    const { status, body: raw } = await this.http.postWithStatus(routePath(RP_ROUTES.pdfSignatures), body);
     const r = rec(raw);
     return {
       docID: String(r.docID ?? body.docID),
       revIndex: Number(r.revIndex ?? 0),
       registeredAt: typeof r.registeredAt === "string" ? r.registeredAt : "",
       verifyUrl: String(r.verifyUrl ?? ""),
+      created: status === 201,
       raw,
     };
   }

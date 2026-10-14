@@ -482,6 +482,11 @@ const reg = await eid.registerSignature(registrationFromCompleted(req.body, {
 reply({ verifyUrl: reg.verifyUrl });
 ```
 
+- `reg.created` — `true` 201 (шинэ), `false` 200 (ижил биеийн давталт). Өмнөх гарын үсэг CA-ийн угсарсан (горим A) бол
+  `complete().priorRevisionSha256`-ийг (`sha256(doc[0 : ByteRange[2]+ByteRange[3]])`) `registrationFromCompleted`
+  `priorSignatures` болгож дамжуулна; `registerSignature` 409 `PRIOR_MISMATCH`-ийн дараа өөрөө revision-оор тааруулна
+  (`priorRevisionSha256`-г гараар өгвөл оролдохгүй). Хөтчөөс JSON-оор дамжуулахдаа `priorRevisionSha256`-ийг ч явуул.
+
 ### Зөвхөн Node (backend бүгдийг хийнэ)
 
 ```ts
