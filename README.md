@@ -272,10 +272,16 @@ RAW_DIGEST_SIGNATURE-д `flowType` гарын үсэгт ордоггүй (зө�
 холбоосыг backend-д `buildDeviceLink(deviceLinkInput(s, "QR", "mon"))` (auth/cert session-д ч мөн). `s.sign`
 (`SignContext`: digest, hash, алгоритм, interactions, callback)-ийг session-тэй хамт серверт хадгал.
 
-**`expiresAt`** (ms epoch) — sign / certificate-choice session-ий *тооцоолсон* дуусах мөч: CA session start хариунд
-хугацаа буцаадаггүй (зөвхөн `sessionID`), CA-ийн анхдагч 600с (`DEFAULT_SIGN_SESSION_TTL_MS`; CA админ 60–1800с болгож
-болно → `signSessionTtlMs`). Хүсэлтээс өмнөх цагаас тооцдог тул CA-ийнхаас хойно хэзээ ч биш; эцсийн үнэн нь
-`GET /session` (`TIMEOUT`).
+**`expiresAt`** (ms epoch) — session дуусах мөч: CA-ийн session start хариуны `expiresAt` (RFC 3339; auth / sign /
+certificate-choice бүгдэд, 2026-10-14-өөс). Хуучин CA (талбаргүй) үед sign / certificate-choice-д SDK тооцоолно — CA-ийн
+анхдагч 600с (`DEFAULT_SIGN_SESSION_TTL_MS`; CA админ 60–1800с болгож болно → `signSessionTtlMs`), auth-д undefined.
+Эцсийн үнэн нь `GET /session` (`TIMEOUT`).
+
+**Session эхлэх алдаа** (`ApiError`-ийн дэд анги, `.code`-той): `NoSigningCertificateError` — 409
+`NO_SIGNING_CERTIFICATE` (sign / certificate-choice start, `/pdf/sign/prepare`: иргэнд идэвхтэй төхөөрөмж / хүчинтэй
+гарын үсгийн гэрчилгээ алга, session үүсээгүй); `CertChoiceInvalidError` — 409 `CERT_CHOICE_INVALID` (linked sign-ийн
+certificate-choice хүчингүй / хуучирсан / ашиглагдсан → cert-choice-ийг дахин эхлүүл); `RequestInvalidError` — 400
+`REQUEST_INVALID` (ж: linked-д `linkedSessionID` дутуу).
 
 ### 3.1. Гэрчилгээг урьдчилж мэдэх (client-side PAdES / CMS)
 
@@ -522,6 +528,9 @@ OK ирж болзошгүй. Иймд `ResponseValidator`:
 | `ForbiddenError` | 403 — IP allowlist / mTLS / RP-ийн эрх; onBehalfOf татгалзвал `.code` (`OnBehalfErrorCode`) |
 | `SessionFailedError` | endResult ≠ OK (TIMEOUT, USER_REFUSED…) — `.endResult`-оор салга |
 | `ValidationError` | cert chain/signature/level шалгалт бүтэлгүйтсэн |
+| `NoSigningCertificateError` | 409 `NO_SIGNING_CERTIFICATE` — гарын үсгийн гэрчилгээ / төхөөрөмж алга (sign, cert-choice start, PDF prepare); `ApiError`-ийн дэд анги |
+| `CertChoiceInvalidError` | 409 `CERT_CHOICE_INVALID` — linked sign-ийн certificate-choice хүчингүй; `ApiError`-ийн дэд анги |
+| `RequestInvalidError` | 400 `REQUEST_INVALID` — хүсэлт буруу (ж: `linkedSessionID` дутуу); `ApiError`-ийн дэд анги |
 | `ApiError` | бусад HTTP алдаа (`.status`, `.body`, серверийн `.code`, `.retryAfterMs`, `.headers`, `.retryable` — ж: 404 `ORG_NOT_FOUND`) |
 | `ResponseTooLargeError` | хариу SDK-ийн хязгаараас их (JSON 4 MiB, PDF `pdfMaxBytes`) — `.op`, `.limit` |
 | `NetworkError` | timeout/сүлжээ (`.op` — таних тэмдэггүй зам, `.timeout`) |

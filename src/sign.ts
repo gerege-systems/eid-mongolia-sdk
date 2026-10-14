@@ -10,7 +10,7 @@
 import { RP_ROUTES, routePath } from "./contract.js";
 import type { Http } from "./http.js";
 import { hashLen, interactionsToBase64, sha256Base64 } from "./crypto.js";
-import { sessionExpiry } from "./types.js";
+import { startExpiry } from "./types.js";
 import type {
   CertificateLevel,
   DeviceLinkSession,
@@ -129,7 +129,7 @@ export class SignApi {
       vc: vcOf(r),
       rpChallenge: "",
       ...(sign ? { sign } : {}),
-      expiresAt: sessionExpiry(sent, this.defaults.sessionTtlMs),
+      expiresAt: startExpiry(r, sent, this.defaults.sessionTtlMs),
     };
   }
 
@@ -149,7 +149,7 @@ export class SignApi {
       rpChallenge: "",
       receivedAt: Date.now(),
       ...extra,
-      expiresAt: sessionExpiry(sent, this.defaults.sessionTtlMs),
+      expiresAt: startExpiry(r, sent, this.defaults.sessionTtlMs),
     };
   }
 

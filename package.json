@@ -1,6 +1,6 @@
 {
   "name": "@gerege-systems/eid-mongolia-sdk",
-  "version": "0.14.1",
+  "version": "0.14.2",
   "description": "e-ID Mongolia Relying Party SDK — иргэнээр утсаар нь нэвтрэлт ба хууль ёсны цахим гарын үсэг (RP-API v3, Smart-ID нийцтэй).",
   "license": "MIT",
   "type": "module",
@@ -34,7 +34,7 @@
   },
   "scripts": {
     "build": "tsup src/index.ts src/browser.ts --format esm,cjs --dts --clean && tsup src/button.ts --format esm,cjs --dts --tsconfig tsconfig.button.json",
-    "test": "npm run build && node --test --experimental-strip-types test/sdk.test.ts test/portal-gaps.test.ts test/chain.test.ts test/qr.test.ts test/login.test.ts test/button.test.ts test/sign-gaps.test.ts",
+    "test": "npm run build && node --test --experimental-strip-types test/sdk.test.ts test/portal-gaps.test.ts test/chain.test.ts test/qr.test.ts test/login.test.ts test/button.test.ts test/sign-gaps.test.ts test/session-start.test.ts",
     "test:contract": "npm run build && node --experimental-strip-types test/contract.test.ts",
     "lint": "tsc --noEmit && tsc --noEmit -p tsconfig.button.json"
   },

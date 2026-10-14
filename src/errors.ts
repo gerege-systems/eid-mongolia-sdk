@@ -90,6 +90,23 @@ export class ApiError extends EidError {
 }
 
 /**
+ * 409 `NO_SIGNING_CERTIFICATE` — иргэнд (баримтад) идэвхтэй төхөөрөмж / SIGN credential / хүчинтэй гарын үсгийн
+ * гэрчилгээ алга: sign ба certificate-choice session start, `/pdf/sign/prepare`. Session үүсээгүй. Танихгүй
+ * лавлагаанд ч ижил хариу (бүртгэл задлахгүй) — хэрэглэгчид «eID гарын үсгийн гэрчилгээгүй» гэж харуулна.
+ */
+export class NoSigningCertificateError extends ApiError {}
+
+/**
+ * 409 `CERT_CHOICE_INVALID` — linked sign-ийн `linkedSessionID` (certificate-choice) хүчингүй: өөр RP, COMPLETE+OK биш,
+ * өөр documentNumber, 5 минутаас хуучин, гэрчилгээ солигдсон, эсвэл аль хэдийн ашиглагдсан. Certificate-choice-ийг
+ * дахин эхлүүлнэ.
+ */
+export class CertChoiceInvalidError extends ApiError {}
+
+/** 400 `REQUEST_INVALID` — хүсэлтийн бие/талбар буруу (ж: linked sign-д `linkedSessionID` дутуу). Програмын алдаа. */
+export class RequestInvalidError extends ApiError {}
+
+/**
  * CA-ийн түр (давтаж болох) алдааны кодууд — `ApiError.code`. PDF_PREPARE_BUSY (429 prepare, Retry-After 5),
  * DOCUMENT_PENDING (503 document, 5), TSA_UNAVAILABLE (503, 30), LTV_UNAVAILABLE (503, 60), RATE_LIMITED (429 токен),
  * STATE_UNAVAILABLE (503 токен), ISSUANCE_PENDING (503 токены үр дүн, 5).
