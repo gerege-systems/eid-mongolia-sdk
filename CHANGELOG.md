@@ -1,4 +1,21 @@
 # Changelog
+## 0.12.1 — 2026-10-14
+
+Эрхийн төрөл ба эх үүсвэрийн нэр (`rightTypeLabel`, `sourceLabel`, CA !344) — Go SDK 0.1.5-тай ижил, additive:
+
+- **`rightTypeLabel` / `sourceLabel`** (CA !344, additive) — `Representation.rightTypeLabel?: string`,
+  `Representation.sourceLabel?: string` (`getRepresentations`) ба session-ий `OrgResult.rightTypeLabel?: string`
+  (`onBehalfOf`; тэнд `source` байхгүй). Эрхийн төрөл (ADMIN → «Админ» / Administrator, MANAGER → «Гарын үсэг зурагч» /
+  Signatory) ба эх үүсвэрийн (REGISTRY → «Улсын бүртгэл» / State registry, MANUAL → «Захирал нэмсэн» / Added by the
+  director) хүнд харуулах нэр, CA нэг газраас (`orgrole.RightTypeLabel` / `SourceLabel`, CA `docs/ORG_LOGIN.md` §4а);
+  хэл нь `roleLabel`-тэй ижил (`language` → `Accept-Language`). Клиент `rightType`/`source` кодыг өөрөө орчуулахгүй.
+  Хуучин CA-д талбар байхгүй (`undefined`). README: «roleLabel / rightTypeLabel / sourceLabel». Go SDK 0.1.5-тай ижил.
+- Шалгасан: `test/portal-gaps.test.ts` — representations / session `onBehalfOf` decode, хуучин хариунд байхгүй.
+  `npm run lint`, `npm test`.
+- **Тест:** `qrDeviceLinkTicker` тест тогтмол 30 мс хүлээгээд ≥ 3 tick шаарддаг байсан тул GitHub runner дээр 2 tick-ээр
+  тогтвортой унаж байв (PR #16-ийн CI 3 удаа, кодын өөрчлөлттэй холбоогүй). Одоо 3 tick хүртэл (≤ 2 с) хүлээнэ;
+  SDK-ийн код өөрчлөгдөөгүй. Шалгасан: `npm run lint`, `npm test`.
+
 ## 0.12.0 — 2026-10-14
 
 Албан тушаалын нэр (`roleLabel`, CA !339) — Go SDK 0.1.4-тэй ижил, additive:

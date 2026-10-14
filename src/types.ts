@@ -252,7 +252,11 @@ export interface Representation {
    */
   roleLabel?: string;
   rightType: "ADMIN" | "MANAGER" | string;
+  /** Эрхийн төрлийн хүнд харуулах нэр (ADMIN → «Админ», MANAGER → «Гарын үсэг зурагч»; хэл нь `roleLabel`-тэй ижил). Хуучин CA-д байхгүй. */
+  rightTypeLabel?: string;
   source: "REGISTRY" | "MANUAL" | string;
+  /** Эх үүсвэрийн хүнд харуулах нэр (REGISTRY → «Улсын бүртгэл», MANUAL → «Захирал нэмсэн»; хэл нь `roleLabel`-тэй ижил). Хуучин CA-д байхгүй. */
+  sourceLabel?: string;
   /** ISO 8601. */
   validFrom: string;
   /** ISO 8601; байхгүй = хугацаагүй. */
@@ -278,6 +282,8 @@ export interface OrgResult {
   roleLabel?: string;
   /** ADMIN | MANAGER. Эрх хураагдсан бол null. */
   rightType: string | null;
+  /** Эрхийн төрлийн хүнд харуулах нэр ({@link Representation.rightTypeLabel}). Эрх хураагдсан / хуучин CA бол байхгүй. */
+  rightTypeLabel?: string;
 }
 
 /** RP-ийн нэвтрэх мэдээлэл — бүх дуудлагад хэрэгтэй таних тэмдэг + secret. */
