@@ -111,13 +111,15 @@ export interface EidLoginButtonOptions {
   lang?: Lang;
   /** auto (анхдагч: утас → Web2App, бусад → QR цонх) | qr | app. */
   mode?: "auto" | "qr" | "app";
+  /** auto (анхдагч: html[data-theme] / html.dark / prefers-color-scheme-ийг дагана) | light | dark. */
+  theme?: "auto" | "light" | "dark";
   /** Амжилтын дараа (backend redirect өгөөгүй бол) шилжих URL. */
   successUrl?: string;
   onSuccess?: (s: EidLoginStatus) => void;
   onError?: (error: string) => void;
 }
 
-const CSS = `
+const CSS_BASE = `
 :host { display: inline-block;
   --eid-bg: hsl(0 0% 100%); --eid-bg-subtle: hsl(210 40% 98%); --eid-bg-muted: hsl(210 40% 96%);
   --eid-fg: hsl(222 47% 11%); --eid-fg-muted: hsl(215 19% 35%); --eid-fg-subtle: hsl(215 16% 45%);
@@ -125,22 +127,30 @@ const CSS = `
   --eid-accent: oklch(0.534 0.2 259); --eid-accent-fg: #fff; --eid-accent-subtle: oklch(0.97 0.03 259);
   --eid-accent-subtle-fg: oklch(0.474 0.19 259); --eid-ring: oklch(0.604 0.2 259);
   --eid-warning-bg: hsl(48 100% 96%); --eid-warning-border: hsl(45 95% 78%); --eid-warning-fg: hsl(23 75% 33%);
-  --eid-danger-fg: hsl(0 74% 42%); --eid-radius: 6px; --eid-radius-lg: 8px; font-family: inherit; }
-@media (prefers-color-scheme: dark) { :host {
+  --eid-danger-fg: hsl(0 74% 42%); --eid-radius: 6px; --eid-radius-lg: 8px; font-family: inherit; color-scheme: light; }
+button, input { font-family: inherit; }
+`;
+
+// Dark токен — `theme`-ээс (эсвэл auto үед хуудсын html[data-theme] / html.dark / prefers-color-scheme) хамаарч
+// тусдаа <style>-д идэвхжинэ. :host дээр тул RP-ийн `eid-login-button { --eid-bg: … }` дүрэм давуу хэвээр.
+const DARK_CSS = `:host { color-scheme: dark;
   --eid-bg: hsl(229 50% 6%); --eid-bg-subtle: hsl(222 47% 9%); --eid-bg-muted: hsl(217 33% 13%);
   --eid-fg: hsl(210 40% 98%); --eid-fg-muted: hsl(213 27% 84%); --eid-fg-subtle: hsl(215 20% 65%);
   --eid-border: hsl(217 33% 17%); --eid-border-strong: hsl(215 25% 27%);
   --eid-accent: oklch(0.64 0.15 259); --eid-accent-fg: hsl(229 50% 6%); --eid-accent-subtle: oklch(0.24 0.06 259);
   --eid-accent-subtle-fg: oklch(0.82 0.1 259); --eid-ring: oklch(0.68 0.15 259);
   --eid-warning-bg: hsl(20 60% 10%); --eid-warning-border: hsl(22 70% 26%); --eid-warning-fg: hsl(40 92% 65%);
-  --eid-danger-fg: hsl(0 91% 71%); } }
+  --eid-danger-fg: hsl(0 91% 71%); }
+`;
+
+const CSS_REST = `
 *, *::before, *::after { box-sizing: border-box; }
 [hidden] { display: none !important; }
 h2, p, ol { margin: 0; }
 :focus-visible { outline: 2px solid var(--eid-ring); outline-offset: 2px; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 .btn { display: inline-flex; width: 100%; align-items: center; justify-content: center; gap: 8px; min-height: 44px; padding: 0 20px;
-  border-radius: var(--eid-radius); font: 500 1rem/1.25 inherit; text-decoration: none; border: 1px solid transparent; cursor: pointer;
+  border-radius: var(--eid-radius); font-family: inherit; font-weight: 500; font-size: 1rem; line-height: 1.25; text-decoration: none; border: 1px solid transparent; cursor: pointer;
   transition: background-color 160ms cubic-bezier(0,0,0.2,1); }
 .btn:disabled { opacity: 0.6; cursor: progress; }
 .btn-primary { background: var(--eid-accent); color: var(--eid-accent-fg); }
@@ -177,7 +187,7 @@ h2, p, ol { margin: 0; }
 .field { display: grid; gap: 8px; }
 .field label { font-weight: 500; }
 .field input { width: 100%; height: 44px; padding: 0 12px; border: 1px solid var(--eid-border-strong); border-radius: var(--eid-radius);
-  background: var(--eid-bg); color: var(--eid-fg); font: 1rem/1.5rem inherit; letter-spacing: 0.02em; text-transform: uppercase; }
+  background: var(--eid-bg); color: var(--eid-fg); font-family: inherit; font-size: 1rem; line-height: 1.5rem; letter-spacing: 0.02em; text-transform: uppercase; }
 .field input::placeholder { color: var(--eid-fg-subtle); text-transform: none; }
 .field input[aria-invalid="true"] { border-color: var(--eid-danger-fg); }
 .hint { font-size: 0.8125rem; color: var(--eid-fg-subtle); }
@@ -198,6 +208,22 @@ h2, p, ol { margin: 0; }
   .spinner { animation: none; border-right-color: currentColor; opacity: 0.6; } }
 `;
 
+const CSS = CSS_BASE + CSS_REST;
+
+type Scheme = "light" | "dark";
+
+/** `theme` атрибутын утгыг (light | dark | auto) бодит схем болгоно. auto: html[data-theme] → html.dark/.light → OS. */
+export function resolveEidTheme(theme: string | null, doc: Document = document): Scheme {
+  if (theme === "light" || theme === "dark") return theme;
+  const html = doc.documentElement;
+  const dt = html?.getAttribute("data-theme");
+  if (dt === "dark" || dt === "light") return dt;
+  if (html?.classList.contains("dark")) return "dark";
+  if (html?.classList.contains("light")) return "light";
+  const mq = doc.defaultView?.matchMedia?.("(prefers-color-scheme: dark)");
+  return mq?.matches ? "dark" : "light";
+}
+
 const ID_RE = /^([А-ЯЁӨҮ]{2}[0-9]{8}|[0-9]{8,14})$/;
 const FOCUSABLE = 'button:not([disabled]), input:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])';
 
@@ -210,9 +236,9 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, attrs: Record<string,
 
 const Base: typeof HTMLElement = typeof HTMLElement === "undefined" ? (class {} as unknown as typeof HTMLElement) : HTMLElement;
 
-/** `<eid-login-button>` — атрибут: start-url, status-url, lang (mn|en), mode (auto|qr|app), success-url. */
+/** `<eid-login-button>` — атрибут: start-url, status-url, lang (mn|en), mode (auto|qr|app), theme (auto|light|dark), success-url. */
 export class EidLoginButton extends Base {
-  static readonly observedAttributes = ["lang"];
+  static readonly observedAttributes = ["lang", "theme"];
   /** Тест/дотоод: гар утас эсэхийг дарж бичих. */
   isMobile: () => boolean = () => isMobileUserAgent();
   /** Тест/дотоод: шилжилт (location.assign). */
@@ -229,6 +255,10 @@ export class EidLoginButton extends Base {
   private fails = 0;
   private gen = 0; // цонх нээх бүрд нэмэгдэнэ — хуучин fetch-ийн хариуг үл тооно
   private lastFocus: Element | null = null;
+  private darkStyle!: HTMLStyleElement;
+  private themeObs: MutationObserver | null = null;
+  private mq: MediaQueryList | null = null;
+  private readonly onScheme = () => this.applyTheme();
 
   private get t() {
     return T[this.getAttribute("lang") === "en" ? "en" : "mn"];
@@ -238,23 +268,57 @@ export class EidLoginButton extends Base {
   }
 
   connectedCallback(): void {
-    if (this.root) return;
-    this.root = this.attachShadow({ mode: "open" });
-    const style = el("style");
-    style.textContent = CSS;
-    this.trigger = el("button", { type: "button", class: "btn btn-outline trigger", part: "button", "aria-haspopup": "dialog" });
-    this.trigger.append(el("img", { src: EID_LOGO_DATA_URI, alt: "", width: "20", height: "20" }), el("span", {}, this.t.button));
-    this.trigger.addEventListener("click", () => this.start());
-    this.root.append(style, this.trigger);
+    if (!this.root) {
+      this.root = this.attachShadow({ mode: "open" });
+      const style = el("style");
+      style.textContent = CSS;
+      this.darkStyle = el("style", { "data-eid-theme": "dark" });
+      this.trigger = el("button", { type: "button", class: "btn btn-outline trigger", part: "button", "aria-haspopup": "dialog" });
+      this.trigger.append(el("img", { src: EID_LOGO_DATA_URI, alt: "", width: "20", height: "20" }), el("span", {}, this.t.button));
+      this.trigger.addEventListener("click", () => this.start());
+      this.root.append(style, this.darkStyle, this.trigger);
+    }
+    this.watchTheme();
+    this.applyTheme();
   }
 
-  attributeChangedCallback(): void {
+  attributeChangedCallback(name: string): void {
+    if (name === "theme") {
+      if (this.root) this.applyTheme();
+      return;
+    }
     const label = this.trigger?.querySelector("span");
     if (label) label.textContent = this.t.button;
   }
 
   disconnectedCallback(): void {
     this.close();
+    this.themeObs?.disconnect();
+    this.themeObs = null;
+    this.mq?.removeEventListener?.("change", this.onScheme);
+    this.mq = null;
+  }
+
+  /** Одоогийн бодит схем (`theme` + auto үед хуудас/OS). */
+  get scheme(): Scheme {
+    return resolveEidTheme(this.getAttribute("theme"));
+  }
+
+  private applyTheme(): void {
+    const css = this.scheme === "dark" ? DARK_CSS : "";
+    if (this.darkStyle.textContent !== css) this.darkStyle.textContent = css;
+  }
+
+  /** auto үед хуудасны html[data-theme]/class ба OS-ийн схемийн өөрчлөлтийг дагана. */
+  private watchTheme(): void {
+    if (!this.themeObs && typeof MutationObserver !== "undefined" && document.documentElement) {
+      this.themeObs = new MutationObserver(this.onScheme);
+      this.themeObs.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme", "class"] });
+    }
+    if (!this.mq && typeof matchMedia === "function") {
+      this.mq = matchMedia("(prefers-color-scheme: dark)");
+      this.mq.addEventListener?.("change", this.onScheme);
+    }
   }
 
   /** Товчны үйлдэл (программаар ч дуудаж болно). */
@@ -615,6 +679,7 @@ export function mountEidLoginButton(target: Element, opts: EidLoginButtonOptions
   b.setAttribute("status-url", opts.statusUrl);
   b.setAttribute("lang", opts.lang ?? "mn");
   if (opts.mode) b.setAttribute("mode", opts.mode);
+  if (opts.theme) b.setAttribute("theme", opts.theme);
   if (opts.successUrl) b.setAttribute("success-url", opts.successUrl);
   if (opts.onSuccess) b.addEventListener("eid-login-success", (e) => opts.onSuccess!((e as CustomEvent<EidLoginStatus>).detail));
   if (opts.onError) b.addEventListener("eid-login-error", (e) => opts.onError!((e as CustomEvent<{ error: string }>).detail.error));

@@ -61,6 +61,7 @@ export const eidLogin = createEidLogin({
   callbackUrl: "https://bank.example.mn/auth/eid/callback", // host нь RP-ийн callbackHosts-д; утасны урсгалд заавал
   async onSuccess(id) {
     // id.etsi (PNOMN-…) — хэрэглэгчийг ҮҮГЭЭР таньна; id.givenName/surname (латин), id.person (кирилл, байвал)
+    // id.sessionId, id.documentNumber, id.certificateDerB64 — дараагийн алхамд (гарын үсэг, гэрчилгээ холбох)
     const user = await users.findOrCreateByEtsi(id.etsi);
     const sid = await sessions.create(user.id); // ШИНЭ session (session fixation)
     return {
@@ -70,6 +71,7 @@ export const eidLogin = createEidLogin({
   },
   // store: redisStore,            // олон instance / serverless бол (анхдагч — процессын санах ой)
   // rateLimit: (key) => redisLimiter.allow(key), // "start:<ip>", "push:<idCode>"; анхдагч push 3/мин нэг дугаарт
+  trustProxy: 1, // handle(Request)-д клиент IP: nginx/LB нэг hop бол 1 (доор «Клиент IP»)
 });
 ```
 
@@ -81,6 +83,18 @@ export const dynamic = "force-dynamic";
 export const GET = (req: Request) => eidLogin.handle(req);
 export const POST = (req: Request) => eidLogin.handle(req);
 ```
+
+**Клиент IP** (`start:<ip>` хязгаар). Web-standard `Request`-д IP байдаггүй — `handle(req)` ашиглаж байвал аль нэгийг өг:
+
+- `trustProxy: n` — итгэмжит reverse proxy-ийн ард: `X-Forwarded-For`-ийн **баруунаас n** дахь утга (n = таны proxy-ийн тоо),
+  XFF байхгүй бол `X-Real-IP`. `true` = XFF-ийн зүүн утга (proxy нь клиентийн XFF-ийг дарж бичдэг үед л). Proxy-гүй
+  үед бүү асаа — header-ийг клиент хуурамчаар илгээнэ.
+- `getClientIp: (req) => …` — платформын IP (Bun `server.requestIP(req)?.address`, Deno `info.remoteAddr.hostname`,
+  Vercel `req.headers.get("x-real-ip")`). `trustProxy`-оос давуу.
+
+Аль нь ч үгүй бол IP-ээр хязгаарлахгүй (эхний хүсэлтэд `onError`-оор нэг удаа анхааруулна). `handleRequest`-д `req.ip`
+(Express `req.ip`, `app.set("trust proxy", …)`-тэй) шууд хэрэглэгдэнэ. Анхдагч `rateLimit` зөвхөн `push:`-ийг хязгаарладаг —
+`start:<ip>`-ийг өөрийн `rateLimit`-ээр (Redis г.м.) хязгаарлана. Go: `eidlogin.Config.ClientIP` (`eidlogin.ForwardedClientIP(n)`) — ижил дүрэм.
 
 Express:
 
@@ -103,11 +117,37 @@ app.use("/auth/eid", express.json(), async (req, res) => {
 </script>
 ```
 
-эсвэл `mountEidLoginButton(el, { startUrl, statusUrl, lang: "en", successUrl, onSuccess, onError })`.
-Атрибут: `lang` (`mn` | `en`), `mode` (`auto` анхдагч — утас → Web2App, бусад → QR цонх; `qr`; `app`), `success-url`.
+эсвэл `mountEidLoginButton(el, { startUrl, statusUrl, lang: "en", theme: "auto", successUrl, onSuccess, onError })`.
+Атрибут: `lang` (`mn` | `en`), `mode` (`auto` анхдагч — утас → Web2App, бусад → QR цонх; `qr`; `app`),
+`theme` (`auto` анхдагч | `light` | `dark`), `success-url`.
 Үйл явдал: `eid-login-success`, `eid-login-error` (`detail.error`: `USER_REFUSED…`, `VALIDATION`, `EXPIRED` …).
-Дизайн нь eID нэвтрэх хуудсынх (лого, өнгө, light/dark); `--eid-accent`, `--eid-bg` г.м. CSS хувьсагчаар, `::part(button)`-оор
-тохируулна. Гадны хамааралгүй (QR encoder дотроо), цонх нь focus trap, Esc, `aria-live` төлөвтэй.
+Гадны хамааралгүй (QR encoder дотроо), цонх нь focus trap, Esc, `aria-live` төлөвтэй.
+
+**Дизайн, theme.** Дизайн нь eID нэвтрэх хуудсынх (лого, өнгө). Фонт нь хуудаснаас өвлөгдөнө (товч, цонх, input бүгд).
+`theme="auto"` үед дараалал: хуудасны `html[data-theme="dark|light"]` → `html.dark` / `html.light` → OS
+(`prefers-color-scheme`); хуудас theme солиход (MutationObserver) шууд дагана. `theme="light|dark"` нь хуудсыг давна.
+Өнгө, радиусыг CSS хувьсагчаар (элемент дээр — shadow-ийн `:host`-оос давуу) дарна:
+
+```css
+eid-login-button {
+  --eid-accent: #0b5cff; --eid-accent-fg: #fff;   /* үндсэн товч, QR-ийн алхмын тоо (--eid-accent-subtle, --eid-accent-subtle-fg) */
+  --eid-bg: #fff; --eid-bg-subtle: …; --eid-bg-muted: …;  /* цонх, hover */
+  --eid-fg: …; --eid-fg-muted: …; --eid-fg-subtle: …;     /* текст */
+  --eid-border: …; --eid-border-strong: …; --eid-ring: …; /* хүрээ, focus */
+  --eid-warning-bg: …; --eid-warning-border: …; --eid-warning-fg: …; --eid-danger-fg: …;
+  --eid-radius: 6px; --eid-radius-lg: 8px;
+}
+html[data-theme="dark"] eid-login-button { --eid-accent: …; } /* dark-д өөр өнгө бол */
+eid-login-button::part(button) { width: 100%; }               /* part: button, backdrop, dialog */
+```
+
+**eID аппын доод хувилбар.** `flowType` бэхлэлт (device link v3) ба Web2App-ийн `userChallengeVerifier` нь
+**iOS 2.2.3 (build 59)**, **Android 2.2.3 (versionCode 60)**-аас эхэлсэн. eID сервер 2026-10-07-оос legacy холбоосыг
+бүрэн хассан (v3-гүй session-д утас `DEVICE_LINK_REQUIRED`) бөгөөд доод хувилбарыг `/mobile/app-config`-оор албадан
+шинэчлүүлдэг: Android 2026-10-07-оос ≥ 70 (төхөөрөмжийн баталгаатай), 2026-10-14-ний байдлаар iOS ≥ 2.2.7,
+Android ≥ 83 (`curl https://ca.eidmongolia.mn/mobile/app-config`). Иймд гарын үсэг зурж чадах бүх апп эдгээрийг дэмжинэ —
+RP талд нэмэлт шалгалт хэрэггүй. Эх сурвалж: eID CA-ийн `docs/DEVICE_LINK_V3.md` §5, §7; changelog
+`2026-10-02-ios-min-version-2-2-3`, `2026-10-07-android-min-70`.
 
 **Аюулгүй байдал.**
 
@@ -120,6 +160,33 @@ app.use("/auth/eid", express.json(), async (req, res) => {
   (store-ийн `delete` атомар байх ёстой — Redis `DEL`).
 - `onSuccess`-ийн `data` хөтөчид очно — нууц бүү оруул. Иргэний бүртгэлтэй эсэхийг push алдаагаар задлахгүй (`eid_unavailable`).
 - Олон instance / serverless (Vercel г.м.) дээр анхдагч санах ойн store ажиллахгүй — `EidLoginStore` (`get`/`set`/`delete`)-ийг Redis-ээр.
+- `onSuccess` дуудагдахаас ӨМНӨ tx store-оос атомар устгагдана (нэг удаагийн баталгаа) — `onSuccess` дотор store-оос бүү
+  унш; хэрэгтэй бүхэн `identity`-д (`sessionId`, `documentNumber`, `certificateDerB64`, …).
+
+**Redis store** (SDK нэмэлт хамааралгүй — жишээ нь `ioredis`):
+
+```ts
+import Redis from "ioredis";
+import type { EidLoginStore, EidLoginTx } from "@gerege-systems/eid-mongolia-sdk";
+
+const redis = new Redis(process.env.REDIS_URL!);
+const key = (sid: string) => `eid:login:${sid}`;
+
+export const redisStore: EidLoginStore = {
+  async get(sid) {
+    const v = await redis.get(key(sid));
+    return v ? (JSON.parse(v) as EidLoginTx) : undefined;
+  },
+  async set(sid, tx, ttlMs) {
+    await redis.set(key(sid), JSON.stringify(tx), "PX", ttlMs);
+  },
+  async delete(sid) {
+    return (await redis.del(key(sid))) === 1; // DEL атомар — зэрэг хоёр status-ийн зөвхөн нэг нь onSuccess дуудна
+  },
+};
+```
+
+Tx-д `sessionSecret` (QR угсрах материал) байдаг — Redis-ийг сүлжээнээс хаалттай, TLS/AUTH-тай ашигла.
 
 ## 2. Нэвтрэлт (push)
 
