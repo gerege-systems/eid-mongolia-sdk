@@ -10,14 +10,20 @@
 // eID сервер Web2App callback-ийн замыг үргэлж `/auth/eid/callback` болгож нормчилдог тул {base} = `/auth/eid`.
 // Төлөв (sessionToken, sessionSecret, rpChallenge, acsp) СЕРВЕРТ (store) хадгалагдана; хөтөчид зөвхөн HttpOnly cookie
 // (`<sessionId>.<binding>`) — status/callback нь session-ийг ЭХЛҮҮЛСЭН хөтөчид л хариулна (login CSRF, relay хаалт).
-// Иргэний мэдээлэл зөвхөн ResponseValidator-аар (гинж + ACSP_V2 + flowType + verifier) баталгаажсаны дараа onSuccess-д.
+// Иргэний мэдээлэл зөвхөн ResponseValidator-аар (гинж + ACSP_V2 + flowType + verifier) ба гэрчилгээний цуцлалтын
+// шалгалтаар (OCSP, `revocation`) баталгаажсаны дараа onSuccess-д.
+//
+// Push (регистрийн дугаараар) нь бүртгэлтэй эсэхийг задлахгүй: eID дугаарыг татгалзвал decoy session (бодит хариутай
+// ижил хэлбэр, хэн ч хариулаагүй мэт PENDING → EXPIRED), хариу бүр `pushFloorMs`-оос (анхдагч 1 с) хурдан гарахгүй.
 
-import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, randomBytes, randomInt, randomUUID, timingSafeEqual } from "node:crypto";
 import type { EidClient } from "./client.js";
 import { buildDeviceLink } from "./devicelinkv3.js";
+import { ocspRevocationChecker } from "./ocsp.js";
 import { ApiError, AuthenticationError, ForbiddenError, SessionFailedError, ValidationError } from "./errors.js";
 import { personMatchesCertificate } from "./session.js";
 import type { AcspContext, CertificateLevel, FlowType, PersonBlock, SessionResult } from "./types.js";
+import type { RevocationChecker, RevocationOutcome } from "./validator.js";
 
 /** Нэвтрэлтийн горим: desktop QR, регистрээр push, утасны хөтчөөс Web2App. */
 export type EidLoginMode = "qr" | "push" | "web2app";
@@ -44,6 +50,11 @@ export interface EidLoginIdentity {
   flowType: FlowType;
   /** Session-ийн `person` блок (кирилл нэр г.м.) — гэрчилгээтэй таарсан үед л, эс бөгөөс null. */
   person: PersonBlock | null;
+  /**
+   * Гэрчилгээний цуцлалтын шалгалтын дүн: "good" | "unchecked" (OCSP хариугүй, soft-fail-ээр зөвшөөрөв) | "skipped"
+   * (`revocation: false`). Аудитад хадгал.
+   */
+  revocation: RevocationOutcome;
 }
 
 /** Серверт хадгалах нэвтрэлтийн төлөв (JSON-д хувирна). */
@@ -57,6 +68,8 @@ export interface EidLoginTx {
   acsp: AcspContext;
   /** QR/Web2App: холбоос угсрах материал. sessionSecret — ЗӨВХӨН серверт. */
   link?: { base: string; token: string; secret: string; receivedAt: number; lang: string };
+  /** eID татгалзсан push-ийн оронд өгсөн хуурмаг session (eID-д байхгүй; хэзээ ч дуусахгүй). Зөвхөн серверт. */
+  decoy?: boolean;
 }
 
 /** Төлөвийн сан. Анхдагч — процессын санах ой ({@link memoryLoginStore}); олон instance бол Redis г.м. */
@@ -104,6 +117,35 @@ export interface EidLoginSuccess {
   /** QR/push-д status хариунд `data` болж хөтчид очно (JSON). Нууц бүү оруул. */
   data?: unknown;
   headers?: Record<string, string | string[]>;
+}
+
+/**
+ * Аудитын үйл явдал (`onEvent`):
+ * - `push_sent` — push start амжилттай хариулсан (meta: mode, pushKey, decoy). `decoy: true` бол eID дугаарыг татгалзаж
+ *   утас руу юу ч очоогүй — хөтөч рүү хэзээ ч илэрхийлэгдэхгүй, зөвхөн таны аудитад.
+ * - `push_limited` — push хязгаарт хүрсэн, 429 (meta: mode, pushKey; sessionId null).
+ * - `refused` — иргэн утсан дээрээ татгалзсан (endResult USER_REFUSED*).
+ * - `expired` — eID session хугацаа дууссан (endResult TIMEOUT эсвэл eID-д олдохгүй).
+ * - `unverified` — баталгаажуулалт унасан (meta.reason: "validation" | "revoked" | "revocation_unavailable").
+ * - `flow_refused` — Web2App callback эхлүүлсэн хөтчийн session-тэй холбогдоогүй (meta.reason: "unbound").
+ * - `success` — иргэн баталгаажиж onSuccess дуудагдсан (meta: mode, flow, revocation).
+ * - `failed` — бусад endResult (WRONG_VC, DOCUMENT_UNUSABLE г.м.; meta.endResult).
+ */
+export type EidLoginEventKind =
+  | "push_sent"
+  | "push_limited"
+  | "refused"
+  | "expired"
+  | "unverified"
+  | "flow_refused"
+  | "success"
+  | "failed";
+
+/** `onEvent`-ийн аргумент. meta-д токен/нууц, регистрийн дугаар (PII) орохгүй. */
+export interface EidLoginEvent {
+  kind: EidLoginEventKind;
+  sessionId: string | null;
+  meta: Record<string, unknown>;
 }
 
 /** Хязгаарлагч: true — зөвшөөрөх, false — 429. */
@@ -220,6 +262,40 @@ export interface EidLoginOptions {
   trustProxy?: boolean | number;
   /** Дотоод алдаа (eID API, store). Анхдагч console.error (мессеж л). */
   onError?: (err: unknown, ctx: EidLoginContext) => void;
+  /**
+   * eID push-ийг дугаарын шалтгаанаар татгалзвал (eID-ийн өөрийн JSON 4xx — танихгүй / ашиглах боломжгүй дугаар) decoy
+   * session-оор хариулна (анхдагч `true`). ⚠️ `false` бол `/start` нь «энэ регистр eID-д бүртгэлтэй эсэх»-ийг
+   * нэвтрээгүй хэнд ч хэлдэг oracle болно — зөвхөн дотоод/тестийн орчинд.
+   */
+  decoy?: boolean;
+  /**
+   * Push start-ийн хариу (бодит, decoy, 502) хамгийн багадаа энэ хугацаанд (мс) гарна: decoy микросекундэд, бодит push
+   * eID-ийн round trip-ээр бэлэн болдог тул цаг нь л ялгана. Анхдагч 1000; `0` — унтраана (⚠️ decoy-г хугацаагаар
+   * ялгаж болно). Хүсэлт тасарвал (`signal`) хүлээхгүй. 429 ба 400-д хамаарахгүй.
+   */
+  pushFloorMs?: number;
+  /**
+   * Иргэний гэрчилгээний цуцлалт шалгагч (onSuccess-ийн өмнө). Анхдагч {@link ocspRevocationChecker} — гэрчилгээний AIA
+   * OCSP. Цуцлагдсан / олгогч мэдэхгүй → FAILED "VALIDATION". ⚠️ `false` — шалгахгүй: цуцалсан (хулгайлагдсан утасны)
+   * гэрчилгээгээр нэвтэрнэ.
+   */
+  revocation?: RevocationChecker | false;
+  /**
+   * OCSP хариугүй үед (timeout, 5xx, AIA алга): "soft-fail" (анхдагч) — зөвшөөрч onError-оор анхааруулна,
+   * `identity.revocation = "unchecked"` (eID порталын EID_OCSP=soft: CA-ийн responder унавал бүх иргэн түгжигдэхгүй);
+   * "hard-fail" — FAILED "VALIDATION".
+   */
+  revocationMode?: "soft-fail" | "hard-fail";
+  /**
+   * Аудитын hook ({@link EidLoginEventKind}). Хариу өгөхөөс өмнө await хийгдэнэ — удаан ажлыг өөрөө async болго; алдаа нь
+   * onError руу (урсгалыг зогсоохгүй). Push-д регистр биш `pushKey` = HMAC-SHA256(auditKey, дугаар)-ын 32 hex.
+   */
+  onEvent?: (event: EidLoginEvent) => void | Promise<void>;
+  /**
+   * pushKey-ийн HMAC түлхүүр (≥ 32 байт санал болгоно). Алга бол санамсаргүй — pushKey зөвхөн процесс дотор тогтвортой;
+   * instance/restart хооронд харьцуулах бол тогтмол нууц өг.
+   */
+  auditKey?: string | Uint8Array;
 }
 
 /** Framework-аас хамааралгүй хүсэлт (Express: `req.headers`, `req.body`, `req.ip`). */
@@ -231,6 +307,8 @@ export interface EidLoginRequest {
   /** POST-ийн задалсан JSON (Express `express.json()`), эсвэл түүхий мөр. */
   body?: unknown;
   ip?: string;
+  /** Хүсэлт тасрахад (клиент холболтоо хаасан) — `pushFloorMs` ба decoy poll-ын хүлээлтийг таслана. */
+  signal?: AbortSignal;
 }
 
 export interface EidLoginResponse {
@@ -325,11 +403,53 @@ function safeEqualHex(a: string, b: string): boolean {
   return x.length === y.length && x.length > 0 && timingSafeEqual(x, y);
 }
 
+/** ms хүлээнэ, эсвэл signal тасрах хүртэл. */
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (ms <= 0 || signal?.aborted) return resolve();
+    const done = () => {
+      clearTimeout(t);
+      signal?.removeEventListener("abort", done);
+      resolve();
+    };
+    const t = setTimeout(done, ms);
+    signal?.addEventListener("abort", done, { once: true });
+  });
+}
+
+/**
+ * eID-ийн ӨӨРИЙН (JSON биетэй) 4xx: дугаарыг татгалзсан (танихгүй / ашиглах боломжгүй, хүсэлтийн параметр). JSON бус 4xx
+ * нь eID-ийн өмнөх proxy-ийнх (mTLS татгалзал г.м.) — тасалдал. 401/403 (AuthenticationError / ForbiddenError — RP-ийн
+ * нууц/эрх) ба 429 нь дугаараас хамаардаггүй тул decoy-гүй — тэдгээрийг нуувал тасалдал харагдахгүй.
+ */
+function isRefusal(e: unknown): boolean {
+  if (!(e instanceof ApiError) || e.status < 400 || e.status >= 500 || e.status === 401 || e.status === 403 || e.status === 429) {
+    return false;
+  }
+  try {
+    JSON.parse(e.body);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Гэрчилгээний цуцлалтын шалгалт унасан (ValidationError — FAILED "VALIDATION"). */
+class RevocationFailure extends ValidationError {
+  constructor(
+    message: string,
+    readonly revoked: boolean,
+  ) {
+    super(message);
+  }
+}
+
 function toIdentity(
   sessionId: string,
   r: SessionResult,
   v: ReturnType<EidClient["validator"]["validateAuth"]>,
   flowType: FlowType,
+  revocation: RevocationOutcome,
 ): EidLoginIdentity {
   const s = v.parsedSubject;
   const etsi = s.serialNumber ?? "";
@@ -347,6 +467,7 @@ function toIdentity(
     certificateDerB64: r.certificateDerB64 ?? "",
     flowType,
     person: personMatchesCertificate(r.person, s) ? (r.person ?? null) : null,
+    revocation,
   };
 }
 
@@ -374,6 +495,30 @@ export function createEidLogin(opts: EidLoginOptions): EidLogin {
   const failureRedirect = opts.failureRedirect ?? "/";
   const onError = opts.onError ?? ((e: unknown) => console.error("eid-login:", e instanceof Error ? e.message : e));
   const rateLimit = buildRateLimit(opts.rateLimit);
+  const decoyOn = opts.decoy !== false;
+  const pushFloorMs = opts.pushFloorMs ?? 1000;
+  const revocation = opts.revocation === false ? undefined : (opts.revocation ?? ocspRevocationChecker());
+  const revocationMode = opts.revocationMode ?? "soft-fail";
+  const auditKey = opts.auditKey ?? randomBytes(32);
+  const pushKey = (idCode: string) => createHmac("sha256", auditKey).update(`eid-push-audit:${idCode}`).digest("hex").slice(0, 32);
+
+  async function emit(kind: EidLoginEventKind, sessionId: string | null, meta: Record<string, unknown>, ctx: EidLoginContext) {
+    if (!opts.onEvent) return;
+    try {
+      await opts.onEvent({ kind, sessionId, meta });
+    } catch (e) {
+      onError(e, ctx);
+    }
+  }
+  /** COMPLETE, endResult != OK-ийн аудит. */
+  function endEvent(tx: EidLoginTx, endResult: string | null | undefined, ctx: EidLoginContext) {
+    const kind: EidLoginEventKind = endResult?.startsWith("USER_REFUSED") ? "refused" : endResult === "TIMEOUT" ? "expired" : "failed";
+    return emit(kind, tx.sessionId, { mode: tx.mode, endResult: endResult ?? "UNKNOWN" }, ctx);
+  }
+  function unverified(tx: EidLoginTx, e: unknown, ctx: EidLoginContext) {
+    const reason = e instanceof RevocationFailure ? (e.revoked ? "revoked" : "revocation_unavailable") : "validation";
+    return emit("unverified", tx.sessionId, { mode: tx.mode, reason }, ctx);
+  }
 
   const displayText = (opts.displayText ?? `${client.rpName}-д нэвтрэх`).slice(0, 60);
   const interactions = [{ type: "displayTextAndPIN" as const, displayText60: displayText }];
@@ -472,11 +617,25 @@ export function createEidLogin(opts: EidLoginOptions): EidLogin {
         });
       }
     }
+    return { ...(await save(tx)), appLink };
+  }
+
+  /** Cookie binding үүсгэж tx-ийг TTL-тэй хадгална. */
+  async function save(tx: Omit<EidLoginTx, "bindingHash" | "expiresAt">) {
     const binding = randomBytes(32).toString("base64url");
     const full: EidLoginTx = { ...tx, bindingHash: sha256hex(binding), expiresAt: Date.now() + ttl };
     await store.set(full.sessionId, full, ttl);
     const setCookie = `${cookieName}=${full.sessionId}.${binding}; ${cookieAttrs(Math.ceil(ttl / 1000))}`;
-    return { tx: full, setCookie, appLink };
+    return { tx: full, setCookie, appLink: undefined as string | undefined };
+  }
+
+  /**
+   * eID-д байхгүй, хэзээ ч дуусахгүй push session: санамсаргүй UUID v4, eID-тэй ижил 5 оронтой vc (CA: %05d), бодит
+   * push-ийн TTL. Status нь pollMs-ийн хугацаанд барьж PENDING, TTL-ийн дараа EXPIRED — утсаа аваагүй иргэнтэй ижил.
+   */
+  function startDecoy() {
+    const acsp = undefined as unknown as AcspContext; // decoy-д ACSP байхгүй (хэзээ ч баталгаажуулахгүй)
+    return save({ sessionId: randomUUID(), mode: "push", vc: String(randomInt(100000)).padStart(5, "0"), acsp, decoy: true });
   }
 
   async function start(req: EidLoginRequest): Promise<EidLoginResponse> {
@@ -509,20 +668,43 @@ export function createEidLogin(opts: EidLoginOptions): EidLogin {
     const idCode = typeof body.idCode === "string" ? body.idCode.replace(/\s+/g, "").toUpperCase() : "";
     if (mode === "push" && !ID_RE.test(idCode)) return json(400, { error: "invalid_id" });
 
-    const limited = () => json(429, { error: "rate_limited" }, { "Retry-After": "60" });
+    const limited = async () => {
+      if (mode === "push") await emit("push_limited", null, { mode, pushKey: pushKey(idCode) }, ctx);
+      return json(429, { error: "rate_limited" }, { "Retry-After": "60" });
+    };
     const ip = req.ip || (opts.trustProxy ? forwardedClientIp(req.headers, opts.trustProxy) : undefined);
     if (ip && !(await rateLimit(`start:${ip}`))) return limited();
     if (mode === "push" && !(await rateLimit(`push:${idCode}`))) return limited();
 
-    let r: Awaited<ReturnType<typeof begin>>;
+    const began = Date.now();
+    let r: Awaited<ReturnType<typeof begin>> | undefined;
+    let err: unknown;
+    let decoy = false;
     try {
       r = await begin(req, mode, idCode, lang);
     } catch (e) {
-      // Иргэн бүртгэлтэй эсэхийг задлахгүй: 4xx (танихгүй дугаар г.м.) → invalid_id биш, ерөнхий алдаа.
-      onError(e, ctx);
-      const status = e instanceof ApiError && e.status === 429 ? 429 : 502;
-      return json(status, { error: status === 429 ? "rate_limited" : "eid_unavailable" });
+      err = e;
     }
+    if (err !== undefined && mode === "push" && decoyOn && isRefusal(err)) {
+      // eID дугаарыг татгалзсан (танихгүй / ашиглах боломжгүй): ялгаатай хариу нь «энэ регистр бүртгэлтэй эсэх»-ийн
+      // oracle болно. Хэн ч хариулаагүй push-тэй ижил decoy өгнө; шалтгаан onError ба onEvent-д л үлдэнэ.
+      // Биеийг дамжуулахгүй (дугаарыг давтаж болзошгүй) — статус/код л.
+      const ae = err as ApiError;
+      onError(new Error(`eid-login: eID push-ийг татгалзав (${ae.status}${ae.code ? ` ${ae.code}` : ""}); decoy session-оор хариулав`), ctx);
+      err = undefined;
+      r = await startDecoy();
+      decoy = true;
+    }
+    // Decoy микросекундэд, бодит push eID-ийн round trip-ээр бэлэн болно — хоёуланг ижил доод хугацаанд барина.
+    if (mode === "push" && pushFloorMs > 0) await sleep(began + pushFloorMs - Date.now(), req.signal);
+    if (err !== undefined || !r) {
+      // eID-ийн 5xx / холболт / 401-403 — манай талын тасалдал (decoy-оор нуувал иргэн дуусахгүй spinner харна).
+      // Бүртгэлтэй ба бүртгэлгүй дугаар хоёулаа ижил 502 авна.
+      onError(err, ctx);
+      if (err instanceof ApiError && err.status === 429) return limited();
+      return json(502, { error: "eid_unavailable" });
+    }
+    if (mode === "push") await emit("push_sent", r.tx.sessionId, { mode, pushKey: pushKey(idCode), decoy }, ctx);
     if (mode === "web2app") {
       // iOS Universal Link зөвхөн хэрэглэгчийн tap-аас эхэлсэн redirect гинжид аппыг нээнэ — JS биш, 302.
       return { status: 302, headers: { Location: r.appLink!, "Cache-Control": "no-store", "Referrer-Policy": "no-referrer", "Set-Cookie": r.setCookie }, body: "" };
@@ -537,8 +719,20 @@ export function createEidLogin(opts: EidLoginOptions): EidLogin {
   /** COMPLETE/OK үр дүнг шалгаж, нэг удаа onSuccess дуудна. ValidationError-ийг дуудагч барина. */
   async function finish(req: EidLoginRequest, tx: EidLoginTx, r: SessionResult, flow: FlowType, verifier?: string) {
     const v = client.validator.validateAuth(r, tx.acsp, { expectedFlowType: flow, userChallengeVerifier: verifier });
+    const ctx: EidLoginContext = { request: req, mode: tx.mode };
+    let rev: RevocationOutcome;
+    let status: string | undefined;
+    const checker: RevocationChecker | undefined = revocation && (async (c, i) => (status = await revocation(c, i)));
+    try {
+      rev = await client.validator.checkRevocationWith(v.certificate, checker, revocationMode);
+    } catch (e) {
+      // revoked → ValidationError; checker-ийн өөрийн алдаа — итгэхгүй, гэхдээ 500 биш: баталгаажуулалт унасан.
+      throw new RevocationFailure(`revocation: ${e instanceof Error ? e.message : String(e)}`, status === "revoked");
+    }
+    if (rev === "unchecked") onError(new Error("eid-login: OCSP хариугүй — цуцлалт шалгалгүй зөвшөөрөв (soft-fail)"), ctx);
     if (!(await store.delete(tx.sessionId))) return undefined; // зэрэг хүсэлт аль хэдийн дуусгасан
-    const out = (await opts.onSuccess(toIdentity(tx.sessionId, r, v, flow), { request: req, mode: tx.mode })) ?? {};
+    const out = (await opts.onSuccess(toIdentity(tx.sessionId, r, v, flow, rev), ctx)) ?? {};
+    await emit("success", tx.sessionId, { mode: tx.mode, flow, revocation: rev }, ctx);
     return out;
   }
 
@@ -548,20 +742,30 @@ export function createEidLogin(opts: EidLoginOptions): EidLogin {
     if (!tx) return json(200, { state: "EXPIRED" }, { "Set-Cookie": clearCookie });
     const ctx: EidLoginContext = { request: req, mode: tx.mode };
     let r: SessionResult;
-    try {
-      r = await client.session.poll(tx.sessionId, pollMs);
-    } catch (e) {
-      if (e instanceof ApiError && e.status === 404) {
-        await store.delete(tx.sessionId);
-        return json(200, { state: "EXPIRED" }, { "Set-Cookie": clearCookie });
+    if (tx.decoy) {
+      // eID-ээс асуухгүй (асуувал 404 → EXPIRED болж ялгарна): бодит long-poll шиг pollMs-ийн хугацаанд барина.
+      await sleep(pollMs, req.signal);
+      r = { state: "RUNNING" } as SessionResult;
+    } else {
+      try {
+        r = await client.session.poll(tx.sessionId, pollMs);
+      } catch (e) {
+        if (e instanceof ApiError && e.status === 404) {
+          await store.delete(tx.sessionId);
+          await emit("expired", tx.sessionId, { mode: tx.mode }, ctx);
+          return json(200, { state: "EXPIRED" }, { "Set-Cookie": clearCookie });
+        }
+        onError(e, ctx);
+        return json(502, { error: "eid_unavailable" });
       }
-      onError(e, ctx);
-      return json(502, { error: "eid_unavailable" });
     }
     const expiresIn = Math.max(0, Math.ceil((tx.expiresAt - Date.now()) / 1000));
     if (r.state !== "COMPLETE") return json(200, { state: "PENDING", qr: qrLink(tx), vc: tx.vc, expiresIn });
     if (r.endResult !== "OK") {
       await store.delete(tx.sessionId);
+      await endEvent(tx, r.endResult, ctx);
+      // Хариугүй бодит push decoy-той ижил төгсөнө (EXPIRED) — FAILED/TIMEOUT нь «бүртгэлтэй» гэж хэлнэ.
+      if (tx.mode === "push" && r.endResult === "TIMEOUT") return json(200, { state: "EXPIRED" }, { "Set-Cookie": clearCookie });
       return json(200, { state: "FAILED", error: r.endResult ?? "UNKNOWN" }, { "Set-Cookie": clearCookie });
     }
     // Web2App-аар баталгаажсан session-ийг ЗӨВХӨН callback (userChallengeVerifier) дуусгана.
@@ -574,6 +778,7 @@ export function createEidLogin(opts: EidLoginOptions): EidLogin {
       onError(e, ctx);
       if (!(e instanceof ValidationError || e instanceof SessionFailedError)) return json(500, { error: "internal" });
       await store.delete(tx.sessionId);
+      await unverified(tx, e, ctx);
       return json(200, { state: "FAILED", error: "VALIDATION" }, { "Set-Cookie": clearCookie });
     }
   }
@@ -586,9 +791,12 @@ export function createEidLogin(opts: EidLoginOptions): EidLogin {
     const fail = (code: string) => redirect(failTo(code), { "Set-Cookie": clearCookie });
     const tx = await loadTx(req);
     // Эхлүүлсэн хөтчийн cookie заавал: өөр хөтчид нээгдсэн callback-ийг (хулгайлсан/илгээсэн URL) хүлээн авахгүй.
-    if (!tx || tx.sessionId !== sid || tx.mode !== "web2app") return fail(tx ? "unbound" : "expired");
-    if (!verifier) return fail("unbound");
+    if (!tx) return fail("expired");
     const ctx: EidLoginContext = { request: req, mode: tx.mode };
+    if (tx.sessionId !== sid || tx.mode !== "web2app" || !verifier) {
+      await emit("flow_refused", tx.sessionId, { mode: tx.mode, reason: "unbound" }, ctx);
+      return fail("unbound");
+    }
     let r: SessionResult;
     try {
       r = await client.session.poll(tx.sessionId, 10_000);
@@ -599,6 +807,7 @@ export function createEidLogin(opts: EidLoginOptions): EidLogin {
     if (r.state !== "COMPLETE") return fail("not_complete");
     if (r.endResult !== "OK") {
       await store.delete(tx.sessionId);
+      await endEvent(tx, r.endResult, ctx);
       return fail(r.endResult ?? "UNKNOWN");
     }
     try {
@@ -609,6 +818,7 @@ export function createEidLogin(opts: EidLoginOptions): EidLogin {
       onError(e, ctx);
       if (!(e instanceof ValidationError || e instanceof SessionFailedError)) return fail("internal");
       await store.delete(tx.sessionId);
+      await unverified(tx, e, ctx);
       return fail("VALIDATION");
     }
   }
@@ -641,7 +851,7 @@ export function createEidLogin(opts: EidLoginOptions): EidLogin {
         mode: "qr",
       });
     }
-    const r = await handleRequest({ method: req.method, url: req.url, headers, body, ip });
+    const r = await handleRequest({ method: req.method, url: req.url, headers, body, ip, signal: req.signal });
     const h = new Headers();
     for (const [k, v] of Object.entries(r.headers)) for (const x of [v].flat()) h.append(k, x);
     return new Response(r.status === 302 || r.status === 303 || r.body === "" ? null : r.body, { status: r.status, headers: h });

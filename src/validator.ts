@@ -506,13 +506,25 @@ export class ResponseValidator {
    * "skipped" (hook алга). "revoked", мөн hard-fail горимд "unknown" → ValidationError; hook-ийн алдаа дамжина.
    */
   async checkRevocationStatus(cert: X509Certificate): Promise<RevocationOutcome> {
-    if (!this.revocation) return "skipped"; // hook алга — RP-ийн үүрэг
-    const status = await this.revocation(cert, this.findIssuer(cert));
+    return this.checkRevocationWith(cert, this.revocation, this.revocationMode);
+  }
+
+  /**
+   * {@link checkRevocationStatus}-тэй ижил, гэхдээ TrustConfig-ийн биш өгсөн checker ба горимоор (issuer-ийг trust
+   * pool-оос олно). checker алга бол "skipped"; горим анхдагч "hard-fail".
+   */
+  async checkRevocationWith(
+    cert: X509Certificate,
+    checker: RevocationChecker | undefined,
+    mode: "hard-fail" | "soft-fail" = "hard-fail",
+  ): Promise<RevocationOutcome> {
+    if (!checker) return "skipped"; // hook алга — RP-ийн үүрэг
+    const status = await checker(cert, this.findIssuer(cert));
     if (status === "good") return "good";
     if (status === "revoked") {
       throw new ValidationError("Гэрчилгээ цуцлагдсан (revoked)");
     }
-    if (this.revocationMode === "hard-fail") {
+    if (mode === "hard-fail") {
       throw new ValidationError("Гэрчилгээний revocation төлөв тогтоогдсонгүй (hard-fail)");
     }
     return "unchecked";
