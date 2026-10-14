@@ -19,7 +19,94 @@ Node.js ≥ 22 (global `fetch`, `node:crypto`).
 
 `POST https://ca.eidmongolia.mn/v3/rp-applications` (эсвэл [developer.eidmongolia.mn](https://developer.eidmongolia.mn)) —
 оператор баталсны дараа **relyingPartyUUID** ба **API secret** (`rp_sk_…`) олгогдоно; secret **зөвхөн нэг удаа**
-харагдана. Дэлгэрэнгүй: <https://developer.eidmongolia.mn/#burtgel>.
+харагдана. Дэлгэрэнгүй: <https://developer.eidmongolia.mn/#registration>.
+
+## 1a. «eID-ээр нэвтрэх» (OpenID Connect)
+
+Хамгийн хялбар нэвтрэлт: таны вэбэд нэг товч, нэвтрэх хуудсыг (QR · утсан дээрх аппаар нээх · регистрээр
+мэдэгдэл) eID сервер өөрөө харуулж, гарын үсэг ба гэрчилгээний гинжийг шалгаад танд стандарт OpenID Connect
+(Authorization Code + PKCE `S256`) `id_token` өгнө — Google/Apple нэвтрэлттэй ижил. Утасны хөтчөөс дарахад
+хуудасгүйгээр шууд eID апп нээгдэнэ. Гэрээ: <https://developer.eidmongolia.mn/#oidc>.
+
+**Бүртгэл.** `client_id` = таны RP UUID (`relyingPartyUUID`), `client_secret` = RP API secret (`rp_sk_…`).
+RP-д `AUTH` эрх, OIDC асаалттай, `redirect_uri` (https, ≤ 10) бүртгэлтэй байна — authorize/token-ий `redirect_uri`
+бүртгэлтэйтэй **тэмдэгт бүрээрээ** таарах ёстой. Иргэний ETSI дугаар (`pnomn` claim) хэрэгтэй бол `PNOMN` эрх
+хүсэж, `scope: "openid pnomn"`. Token endpoint-д RP-ийн IP allowlist мөрдөгдөнө; `requireMtls` RP OIDC ашиглахгүй.
+
+```ts
+import { EidOidcClient, EidOidcError } from "@gerege-systems/eid-mongolia-sdk";
+
+const oidc = new EidOidcClient({
+  clientId: process.env.EID_RP_UUID!,
+  clientSecret: process.env.EID_SECRET!, // rp_sk_… — зөвхөн backend
+  redirectUri: "https://bank.example.mn/auth/eid/callback",
+  // issuer анхдагч https://login.eidmongolia.mn, scope анхдагч "openid"
+});
+
+const TX = "eid_oidc_tx";
+const cookieOpts = { httpOnly: true, secure: true, sameSite: "lax", path: "/auth/eid", maxAge: 600_000 } as const;
+
+// GET /auth/eid/login — товчны href
+app.get("/auth/eid/login", async (_req, res) => {
+  const a = await oidc.createAuthorization(); // { url, state, nonce, codeVerifier }
+  res.cookie(TX, JSON.stringify({ state: a.state, nonce: a.nonce, codeVerifier: a.codeVerifier }), cookieOpts);
+  res.set("Cache-Control", "no-store").redirect(302, a.url);
+});
+
+// GET /auth/eid/callback?code&state (эсвэл ?error) — бүртгэлтэй redirect_uri
+app.get("/auth/eid/callback", async (req, res) => {
+  const tx = JSON.parse(req.cookies[TX] ?? "null");
+  res.clearCookie(TX, { path: "/auth/eid" });
+  if (!tx) return res.redirect(303, "/login?error=state");
+  try {
+    const { claims } = await oidc.handleCallback(req.originalUrl, tx); // state → token → id_token (ES256)
+    const user = await users.findOrCreateBySub(claims.sub); // pairwise sub-аар таньна (нэрээр биш)
+    await startSession(res, user); // таны session-ийг шинээр үүсгэ (session fixation)
+    res.redirect(303, "/");
+  } catch (e) {
+    const code = e instanceof EidOidcError ? e.code : "server_error"; // access_denied → «дахин оролдоно уу»
+    res.redirect(303, `/login?error=${code}`);
+  }
+});
+```
+
+Next.js App Router-д ижил: `app/auth/eid/login/route.ts` → `NextResponse.redirect(a.url, 302)` + `res.cookies.set(…)`;
+callback → `oidc.handleCallback(request.nextUrl.searchParams, tx)` (зөвхөн query уншина — прокси ард host хамаагүй).
+
+**Товч** — энгийн холбоос (`<a href>` эсвэл form GET). `fetch`/XHR/JS redirect биш: iOS Universal Link зөвхөн
+хэрэглэгчийн tap-аас эхэлсэн redirect гинжид eID аппыг нээнэ.
+
+```html
+<a class="eid-login" href="/auth/eid/login">eID-ээр нэвтрэх</a>
+<style>
+  .eid-login { display: inline-flex; align-items: center; justify-content: center; min-height: 44px;
+    padding: 0 1.25rem; border-radius: 8px; background: #0b3d91; color: #fff; font: 600 1rem/1 system-ui, sans-serif;
+    text-decoration: none; }
+  .eid-login:focus-visible { outline: 2px solid #0b3d91; outline-offset: 2px; }
+</style>
+```
+
+`createAuthorization({ display: "page" })` — утсан дээр ч нэвтрэх хуудас (QR / push) харуулна (ж: таблет киоск).
+
+**`id_token` claims** (`EidIdTokenClaims`): `sub` (pairwise — RP тус бүрд өөр, иргэнд тогтмол), `acr`
+(`urn:eidmongolia:loa:qualified` | `…:advanced`), `auth_time`, `given_name` / `family_name` (латин, гэрчилгээнээс),
+`given_name_mn` / `family_name_mn` (кирилл, байвал), `pnomn` (`pnomn` scope + эрхтэй үед). `id_token` 5 минут
+хүчинтэй; access_token / refresh_token / userinfo байхгүй — нэвтрэлтийн дараа өөрийн session-оо хэрэглэнэ.
+
+**Аюулгүй байдал.**
+
+- `state`, `nonce`, `codeVerifier`-ийг **хөтчийн session-тэй** (httpOnly, Secure, SameSite=Lax cookie эсвэл server
+  session) холбож хадгална; `handleCallback` state-ийг timing-safe тулгаж, таарахгүй бол code-ийг солихгүй
+  (`state_mismatch`). Үүнгүйгээр «өөрийн бүртгэлд хохирогчийн eID-ийг холбуулах» (login CSRF) нээлттэй.
+- `handleCallback` / `verifyIdToken` нь ES256 гарын үсэг (JWKS `kid`, cache 1 цаг, танихгүй `kid` → нэг удаа дахин
+  татна), `iss`, `aud` (= `clientId`; олон aud бол `azp`), `exp` / `iat` (±60 сек), `nonce`-ийг шалгана.
+  `EidOidcError` (`invalid_id_token`) гарвал **итгэхгүй**.
+- Code нэг удаагийн, 60 секунд — callback-ийг дахин ачаалбал `invalid_grant`; хэрэглэгчийг дахин нэвтрүүлнэ.
+- `error_description` (`EidOidcError.description`)-ийг логт бичиж болно, хэрэглэгчид шууд харуулахгүй.
+- **Native апп (RFC 8252):** authorize-ийг системийн хөтчөөр нээнэ — iOS `ASWebAuthenticationSession`
+  (`prefersEphemeralWebBrowserSession = false`), Android Custom Tabs. **WebView хориотой.** `redirect_uri` = таны
+  https Universal Link / App Link (custom scheme дэмжихгүй). `state` / `nonce` / `codeVerifier` апп-ын санах ойд;
+  code-ийг таны backend `client_secret`-ээр солино (`client_secret`-ийг аппад хадгалахгүй).
 
 ## 2. Нэвтрэлт (push)
 
@@ -222,6 +309,7 @@ OK ирж болзошгүй. Иймд `ResponseValidator`:
 | `ValidationError` | cert chain/signature/level шалгалт бүтэлгүйтсэн |
 | `ApiError` | бусад HTTP алдаа (`.status`, `.body`, серверийн `.code` — ж: 404 `ORG_NOT_FOUND`) |
 | `NetworkError` | timeout/сүлжээ |
+| `EidOidcError` | «eID-ээр нэвтрэх» (OIDC) — `.code`: `access_denied`, `login_required`, `state_mismatch`, `invalid_grant`, `invalid_id_token`, `server_error` … |
 | `DeviceLinkError` | device-link холбоос угсрах боломжгүй (`deviceLinkBase` https биш, token/secret/lang хэлбэр, төрөлд хэрэгтэй талбар дутуу) |
 
 ## mTLS (eIDAS qualified орчин)

@@ -1,6 +1,6 @@
 {
   "name": "@gerege-systems/eid-mongolia-sdk",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "e-ID Mongolia Relying Party SDK — иргэнээр утсаар нь нэвтрэлт ба хууль ёсны цахим гарын үсэг (RP-API v3, Smart-ID нийцтэй).",
   "license": "MIT",
   "type": "module",
@@ -29,7 +29,7 @@
   },
   "scripts": {
     "build": "tsup src/index.ts src/browser.ts --format esm,cjs --dts --clean",
-    "test": "npm run build && node --test --experimental-strip-types test/sdk.test.ts",
+    "test": "npm run build && node --test --experimental-strip-types test/sdk.test.ts test/oidc.test.ts",
     "lint": "tsc --noEmit"
   },
   "keywords": [
