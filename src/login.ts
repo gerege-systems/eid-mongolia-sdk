@@ -1,0 +1,544 @@
+// «eID-ээр нэвтрэх» — RP backend-ийн бэлэн урсгал (RP-API v3 device link + push дээр). Браузерийн товч
+// (`@gerege-systems/eid-mongolia-sdk/button`) энэ handler-уудыг дуудна:
+//
+//   POST {base}/start   {mode:"qr"}                        → desktop QR session      → {mode, qr, vc, expiresIn}
+//   POST {base}/start   {mode:"push", idCode:"УБ12345678"} → утас руу мэдэгдэл       → {mode, vc, expiresIn}
+//   GET  {base}/start?mode=web2app                          → утасны хөтөч: 302 → eID апп (Web2App холбоос)
+//   GET  {base}/status                                      → PENDING (+шинэ QR) | WAIT_CALLBACK | OK | FAILED | EXPIRED
+//   GET  {base}/callback?sessionId&userChallengeVerifier    → Web2App буцалт: шалгаад 303 → таны хуудас
+//
+// eID сервер Web2App callback-ийн замыг үргэлж `/auth/eid/callback` болгож нормчилдог тул {base} = `/auth/eid`.
+// Төлөв (sessionToken, sessionSecret, rpChallenge, acsp) СЕРВЕРТ (store) хадгалагдана; хөтөчид зөвхөн HttpOnly cookie
+// (`<sessionId>.<binding>`) — status/callback нь session-ийг ЭХЛҮҮЛСЭН хөтөчид л хариулна (login CSRF, relay хаалт).
+// Иргэний мэдээлэл зөвхөн ResponseValidator-аар (гинж + ACSP_V2 + flowType + verifier) баталгаажсаны дараа onSuccess-д.
+
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import type { EidClient } from "./client.js";
+import { buildDeviceLink } from "./devicelinkv3.js";
+import { ApiError, AuthenticationError, ForbiddenError, SessionFailedError, ValidationError } from "./errors.js";
+import { personMatchesCertificate } from "./session.js";
+import type { AcspContext, CertificateLevel, FlowType, PersonBlock, SessionResult } from "./types.js";
+
+/** Нэвтрэлтийн горим: desktop QR, регистрээр push, утасны хөтчөөс Web2App. */
+export type EidLoginMode = "qr" | "push" | "web2app";
+
+/** Баталгаажсан иргэн — onSuccess-д. */
+export interface EidLoginIdentity {
+  /** Гэрчилгээний SERIALNUMBER (`PNOMN-<иргэний дугаар>`). Хэрэглэгчийг ҮҮГЭЭР таньна (нэрээр биш). */
+  etsi: string;
+  /** `PNOMN-`-гүй иргэний дугаар (цифр); ETSI өөр хэлбэртэй бол null. */
+  civilId: string | null;
+  /** Гэрчилгээний нэр (латин): GIVENNAME / SURNAME, харуулах нэр. */
+  givenName: string | null;
+  surname: string | null;
+  name: string | null;
+  country: string | null;
+  documentNumber: string;
+  certificateLevel: string;
+  /** Иргэний гэрчилгээ (DER, base64). */
+  certificateDerB64: string;
+  /** Гарын үсэг зурагдсан урсгал: QR | Notification | Web2App. */
+  flowType: FlowType;
+  /** Session-ийн `person` блок (кирилл нэр г.м.) — гэрчилгээтэй таарсан үед л, эс бөгөөс null. */
+  person: PersonBlock | null;
+}
+
+/** Серверт хадгалах нэвтрэлтийн төлөв (JSON-д хувирна). */
+export interface EidLoginTx {
+  sessionId: string;
+  /** Cookie-ийн binding-ийн SHA-256 (hex) — түүхий утга хөтчид л. */
+  bindingHash: string;
+  mode: EidLoginMode;
+  expiresAt: number;
+  vc: string | null;
+  acsp: AcspContext;
+  /** QR/Web2App: холбоос угсрах материал. sessionSecret — ЗӨВХӨН серверт. */
+  link?: { base: string; token: string; secret: string; receivedAt: number; lang: string };
+}
+
+/** Төлөвийн сан. Анхдагч — процессын санах ой ({@link memoryLoginStore}); олон instance бол Redis г.м. */
+export interface EidLoginStore {
+  get(sessionId: string): Promise<EidLoginTx | undefined> | EidLoginTx | undefined;
+  set(sessionId: string, tx: EidLoginTx, ttlMs: number): Promise<void> | void;
+  /** Устгана; байсан бол true. Амжилтыг нэг л удаа гаргахад ашиглана (атомар байх ёстой — Redis `DEL`). */
+  delete(sessionId: string): Promise<boolean> | boolean;
+}
+
+/** Нэг процессын санах ойн сан (TTL-тэй). Олон instance / serverless-д тохирохгүй. */
+export function memoryLoginStore(): EidLoginStore {
+  const m = new Map<string, { tx: EidLoginTx; exp: number }>();
+  return {
+    get(k) {
+      const e = m.get(k);
+      if (!e) return undefined;
+      if (e.exp <= Date.now()) {
+        m.delete(k);
+        return undefined;
+      }
+      return e.tx;
+    },
+    set(k, tx, ttl) {
+      const now = Date.now();
+      if (m.size > 1000) for (const [key, e] of m) if (e.exp <= now) m.delete(key);
+      m.set(k, { tx, exp: now + ttl });
+    },
+    delete(k) {
+      return m.delete(k);
+    },
+  };
+}
+
+/** Хүсэлтийн хүрээ — onSuccess / rateLimit / onError-д. */
+export interface EidLoginContext {
+  request: EidLoginRequest;
+  mode: EidLoginMode;
+}
+
+/** onSuccess-ийн хариу: хаашаа явуулах, хөтчид буцаах өгөгдөл, нэмэлт header (ж: таны session-ийн Set-Cookie). */
+export interface EidLoginSuccess {
+  /** Нэвтэрсний дараах хуудас (same-origin зам эсвэл URL). Callback (Web2App)-д анхдагч `successRedirect`. */
+  redirect?: string;
+  /** QR/push-д status хариунд `data` болж хөтчид очно (JSON). Нууц бүү оруул. */
+  data?: unknown;
+  headers?: Record<string, string | string[]>;
+}
+
+export interface EidLoginOptions {
+  client: EidClient;
+  /**
+   * RP-ийн session-ийг ЭНД үүсгэнэ (иргэн баталгаажсан). Хэрэглэгчийг `identity.etsi`-ээр таньж, шинэ session
+   * (session fixation-аас сэргийлж шинэ id) үүсгээд Set-Cookie-г `headers`-ээр буцаа.
+   */
+  onSuccess: (identity: EidLoginIdentity, ctx: EidLoginContext) => Promise<EidLoginSuccess | void> | EidLoginSuccess | void;
+  /**
+   * Web2App буцах https URL — host нь RP-ийн `callbackHosts`-д, зам нь ЗААВАЛ `/auth/eid/callback`. Өгөөгүй бол
+   * утасны хөтчийн урсгал (`mode=web2app`) 400 — QR/push л ажиллана.
+   */
+  callbackUrl?: string;
+  /** Callback амжилттай болоход (onSuccess redirect өгөөгүй бол). Анхдагч "/". */
+  successRedirect?: string;
+  /** Callback амжилтгүй болоход — `?eid_error=<код>` нэмэгдэнэ. Анхдагч "/". */
+  failureRedirect?: string;
+  /** Утсанд харагдах текст (≤60). Анхдагч «<rpName>-д нэвтрэх». */
+  displayText?: string;
+  certificateLevel?: CertificateLevel;
+  /** Нэвтрэлтийн хугацаа (мс). Анхдагч 120 000. */
+  ttlMs?: number;
+  /** Status-ийн нэг дуудлагад eID-ийг хүлээх (мс). Анхдагч 1000. */
+  pollMs?: number;
+  store?: EidLoginStore;
+  cookie?: { name?: string; path?: string; secure?: boolean; domain?: string };
+  /**
+   * Хязгаарлалт: `start:<ip>` (ip мэдэгдэж байвал) ба `push:<idCode>` түлхүүрээр дуудагдана; false → 429.
+   * Анхдагч: push-д нэг дугаарт 60 секундэд 3 (санах ойд) — хохирогчийн утсыг мэдэгдлээр дарахаас (MFA fatigue).
+   */
+  rateLimit?: (key: string) => boolean | Promise<boolean>;
+  /** Дотоод алдаа (eID API, store). Анхдагч console.error (мессеж л). */
+  onError?: (err: unknown, ctx: EidLoginContext) => void;
+}
+
+/** Framework-аас хамааралгүй хүсэлт (Express: `req.headers`, `req.body`, `req.ip`). */
+export interface EidLoginRequest {
+  method: string;
+  /** Зам + query (`/auth/eid/status?…`) эсвэл бүтэн URL. */
+  url: string;
+  headers: Record<string, string | string[] | undefined>;
+  /** POST-ийн задалсан JSON (Express `express.json()`), эсвэл түүхий мөр. */
+  body?: unknown;
+  ip?: string;
+}
+
+export interface EidLoginResponse {
+  status: number;
+  headers: Record<string, string | string[]>;
+  body: string;
+}
+
+export interface EidLogin {
+  /** Сүүлийн замын хэсгээр (`start` | `status` | `callback`) чиглүүлнэ. */
+  handleRequest(req: EidLoginRequest): Promise<EidLoginResponse>;
+  /** Web-standard (Next.js App Router, Hono, Bun, Deno). */
+  handle(req: Request): Promise<Response>;
+}
+
+const CALLBACK_PATH = "/auth/eid/callback";
+const ID_RE = /^(\p{L}{2}[0-9]{8}|[0-9]{8,14}|PNOMN-[0-9]{8,14})$/u;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const B64URL_RE = /^[A-Za-z0-9_-]{43}$/;
+
+// Апп approve-ийн дараа эхэлсэн хөтөч рүү буцах hint (ca-eidmongolia-mn docs/RP_GEREGE_INTEGRATION.md §1.1b).
+const IOS_BROWSERS: Array<[RegExp, string]> = [
+  [/CriOS/i, "googlechromes"],
+  [/EdgiOS/i, "microsoft-edge-https"],
+  [/FxiOS/i, "firefox"],
+  [/OPT\//i, "touch-https"],
+  [/OPiOS|OPR\//i, "opera-https"],
+  [/DuckDuckGo/i, "ddgQuickLink"],
+];
+const ANDROID_BROWSERS: Array<[RegExp, string]> = [
+  [/EdgA\//i, "com.microsoft.emmx"],
+  [/Opera Mini/i, "com.opera.mini.native"],
+  [/OPR\//i, "com.opera.browser"],
+  [/SamsungBrowser\//i, "com.sec.android.app.sbrowser"],
+  [/YaBrowser\//i, "com.yandex.browser"],
+  [/DuckDuckGo\//i, "com.duckduckgo.mobile.android"],
+  [/Vivaldi\//i, "com.vivaldi.browser"],
+  [/Firefox\//i, "org.mozilla.firefox"],
+  [/Chrome\//i, "com.android.chrome"],
+];
+
+/** `callbackUrl`-д буцах хөтчийн hint (`retScheme` iOS / `retPkg` Android) нэмнэ; танихгүй бол хэвээр. */
+export function withReturnHint(callbackUrl: string, userAgent: string): string {
+  const u = new URL(callbackUrl);
+  const pick = (t: Array<[RegExp, string]>) => t.find(([re]) => re.test(userAgent))?.[1];
+  if (/iPhone|iPad|iPod/i.test(userAgent)) {
+    const v = pick(IOS_BROWSERS);
+    if (v) u.searchParams.set("retScheme", v);
+  } else if (/Android/i.test(userAgent)) {
+    const v = pick(ANDROID_BROWSERS);
+    if (v) u.searchParams.set("retPkg", v);
+  }
+  return u.toString();
+}
+
+function header(h: EidLoginRequest["headers"], name: string): string {
+  const v = h[name] ?? h[name.toLowerCase()];
+  return (Array.isArray(v) ? v[0] : v) ?? "";
+}
+
+function readCookie(h: EidLoginRequest["headers"], name: string): string {
+  for (const part of header(h, "cookie").split(";")) {
+    const i = part.indexOf("=");
+    if (i > 0 && part.slice(0, i).trim() === name) return part.slice(i + 1).trim();
+  }
+  return "";
+}
+
+const sha256hex = (s: string) => createHash("sha256").update(s).digest("hex");
+
+function safeEqualHex(a: string, b: string): boolean {
+  const x = Buffer.from(a, "hex");
+  const y = Buffer.from(b, "hex");
+  return x.length === y.length && x.length > 0 && timingSafeEqual(x, y);
+}
+
+function toIdentity(r: SessionResult, v: ReturnType<EidClient["validator"]["validateAuth"]>, flowType: FlowType): EidLoginIdentity {
+  const s = v.parsedSubject;
+  const etsi = s.serialNumber ?? "";
+  const m = /^PNOMN-([0-9]+)$/.exec(etsi);
+  return {
+    etsi,
+    civilId: m ? m[1]! : null,
+    givenName: s.givenName ?? null,
+    surname: s.surname ?? null,
+    name: s.name,
+    country: s.country ?? null,
+    documentNumber: v.documentNumber,
+    certificateLevel: v.certificateLevel,
+    certificateDerB64: r.certificateDerB64 ?? "",
+    flowType,
+    person: personMatchesCertificate(r.person, s) ? (r.person ?? null) : null,
+  };
+}
+
+/**
+ * «eID-ээр нэвтрэх»-ийн backend handler-ууд. Нэг instance-ийг модулийн түвшинд үүсгээд бүх хүсэлтэд ашиглана.
+ *
+ * @throws Error `callbackUrl` https биш эсвэл зам нь `/auth/eid/callback` биш бол.
+ */
+export function createEidLogin(opts: EidLoginOptions): EidLogin {
+  const client = opts.client;
+  if (!opts.onSuccess) throw new Error("createEidLogin: onSuccess шаардлагатай");
+  if (opts.callbackUrl) {
+    const u = new URL(opts.callbackUrl);
+    if (u.protocol !== "https:" || u.pathname !== CALLBACK_PATH) {
+      throw new Error(`createEidLogin: callbackUrl нь https://<таны host>${CALLBACK_PATH} байх ёстой`);
+    }
+  }
+  const store = opts.store ?? memoryLoginStore();
+  const ttl = opts.ttlMs ?? 120_000;
+  const pollMs = opts.pollMs ?? 1000;
+  const cookieName = opts.cookie?.name ?? "eid_login";
+  const cookiePath = opts.cookie?.path ?? "/";
+  const secure = opts.cookie?.secure ?? true;
+  const successRedirect = opts.successRedirect ?? "/";
+  const failureRedirect = opts.failureRedirect ?? "/";
+  const onError = opts.onError ?? ((e: unknown) => console.error("eid-login:", e instanceof Error ? e.message : e));
+  const pushHits = new Map<string, number[]>();
+  const rateLimit =
+    opts.rateLimit ??
+    ((key: string) => {
+      if (!key.startsWith("push:")) return true;
+      const now = Date.now();
+      const hits = (pushHits.get(key) ?? []).filter((t) => now - t < 60_000);
+      if (pushHits.size > 10_000) pushHits.clear();
+      if (hits.length >= 3) return false;
+      hits.push(now);
+      pushHits.set(key, hits);
+      return true;
+    });
+
+  const displayText = (opts.displayText ?? `${client.rpName}-д нэвтрэх`).slice(0, 60);
+  const interactions = [{ type: "displayTextAndPIN" as const, displayText60: displayText }];
+
+  const json = (status: number, body: unknown, extra: Record<string, string | string[]> = {}): EidLoginResponse => ({
+    status,
+    headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store", ...extra },
+    body: JSON.stringify(body),
+  });
+  const cookieAttrs = (maxAge: number) =>
+    `Path=${cookiePath}; Max-Age=${maxAge}; HttpOnly; SameSite=Lax${secure ? "; Secure" : ""}` +
+    (opts.cookie?.domain ? `; Domain=${opts.cookie.domain}` : "");
+  const clearCookie = `${cookieName}=; ${cookieAttrs(0)}`;
+  const redirect = (to: string, extra: Record<string, string | string[]> = {}): EidLoginResponse => ({
+    status: 303,
+    headers: { Location: to, "Cache-Control": "no-store", "Referrer-Policy": "no-referrer", ...extra },
+    body: "",
+  });
+  const failTo = (code: string) => {
+    const u = new URL(failureRedirect, "http://x");
+    u.searchParams.set("eid_error", code);
+    return /^https?:/i.test(failureRedirect) ? u.toString() : u.pathname + u.search + u.hash;
+  };
+  const mergeHeaders = (a: Record<string, string | string[]>, b?: Record<string, string | string[]>) => {
+    const out: Record<string, string | string[]> = { ...a };
+    for (const [k, v] of Object.entries(b ?? {})) {
+      const key = Object.keys(out).find((x) => x.toLowerCase() === k.toLowerCase()) ?? k;
+      const prev = out[key];
+      out[key] = key.toLowerCase() === "set-cookie" && prev ? [...[prev].flat(), ...[v].flat()] : v;
+    }
+    return out;
+  };
+
+  /** Cookie → tx (binding таарсан, хугацаа дотор). */
+  async function loadTx(req: EidLoginRequest): Promise<EidLoginTx | undefined> {
+    const raw = readCookie(req.headers, cookieName);
+    const dot = raw.indexOf(".");
+    const sid = raw.slice(0, dot);
+    const binding = raw.slice(dot + 1);
+    if (dot < 0 || !UUID_RE.test(sid) || !B64URL_RE.test(binding)) return undefined;
+    const tx = await store.get(sid);
+    if (!tx || !safeEqualHex(tx.bindingHash, sha256hex(binding))) return undefined;
+    if (tx.expiresAt <= Date.now()) {
+      await store.delete(sid);
+      return undefined;
+    }
+    return tx;
+  }
+
+  function qrLink(tx: EidLoginTx): string | undefined {
+    if (tx.mode !== "qr" || !tx.link) return undefined;
+    return buildDeviceLink({
+      deviceLinkBase: tx.link.base,
+      deviceLinkType: "QR",
+      sessionToken: tx.link.token,
+      sessionSecret: tx.link.secret,
+      sessionType: "auth",
+      lang: tx.link.lang,
+      receivedAt: tx.link.receivedAt,
+      rpChallenge: tx.acsp.rpChallenge,
+      relyingPartyName: tx.acsp.relyingPartyName,
+      interactions: tx.acsp.interactions,
+    });
+  }
+
+  async function begin(req: EidLoginRequest, mode: EidLoginMode, idCode: string, lang: string) {
+    const level = opts.certificateLevel ? { certificateLevel: opts.certificateLevel } : {};
+    let tx: Omit<EidLoginTx, "bindingHash" | "expiresAt">;
+    let appLink: string | undefined;
+    if (mode === "push") {
+      const s = await client.auth.notificationByEtsi(idCode, interactions, level);
+      tx = { sessionId: s.sessionId, mode, vc: s.vc, acsp: s.acsp! };
+    } else {
+      const callbackUrl = mode === "web2app" ? withReturnHint(opts.callbackUrl!, header(req.headers, "user-agent")) : undefined;
+      const s = await client.auth.deviceLinkAnonymous(interactions, { ...level, callbackUrl });
+      if (!s.deviceLinkBase || !s.sessionToken || !s.sessionSecret || !s.acsp) throw new Error("eID хариунд device link талбар дутуу");
+      tx = {
+        sessionId: s.sessionId,
+        mode,
+        vc: s.vc,
+        acsp: s.acsp,
+        link: { base: s.deviceLinkBase, token: s.sessionToken, secret: s.sessionSecret, receivedAt: s.receivedAt, lang },
+      };
+      if (mode === "web2app") {
+        appLink = buildDeviceLink({
+          deviceLinkBase: s.deviceLinkBase,
+          deviceLinkType: "Web2App",
+          sessionToken: s.sessionToken,
+          sessionSecret: s.sessionSecret,
+          sessionType: "auth",
+          lang,
+          rpChallenge: s.acsp.rpChallenge,
+          relyingPartyName: s.acsp.relyingPartyName,
+          interactions: s.acsp.interactions,
+          initialCallbackUrl: s.acsp.initialCallbackUrl,
+        });
+      }
+    }
+    const binding = randomBytes(32).toString("base64url");
+    const full: EidLoginTx = { ...tx, bindingHash: sha256hex(binding), expiresAt: Date.now() + ttl };
+    await store.set(full.sessionId, full, ttl);
+    const setCookie = `${cookieName}=${full.sessionId}.${binding}; ${cookieAttrs(Math.ceil(ttl / 1000))}`;
+    return { tx: full, setCookie, appLink };
+  }
+
+  async function start(req: EidLoginRequest): Promise<EidLoginResponse> {
+    const url = new URL(req.url, "http://x");
+    // CSRF: cross-site хүсэлтээр session/push эхлүүлэхгүй. POST нь JSON (simple request биш → CORS preflight).
+    const site = header(req.headers, "sec-fetch-site");
+    if (site && site !== "same-origin" && site !== "same-site" && site !== "none") return json(403, { error: "cross_site" });
+    let body: Record<string, unknown> = {};
+    if (req.method === "GET") {
+      if (url.searchParams.get("mode") !== "web2app") return json(405, { error: "method_not_allowed" });
+      body = { mode: "web2app", lang: url.searchParams.get("lang") ?? undefined };
+    } else if (req.method === "POST") {
+      if (!header(req.headers, "content-type").toLowerCase().startsWith("application/json")) {
+        return json(415, { error: "json_required" });
+      }
+      try {
+        const b = typeof req.body === "string" ? JSON.parse(req.body) : req.body;
+        if (b && typeof b === "object") body = b as Record<string, unknown>;
+      } catch {
+        return json(400, { error: "invalid_body" });
+      }
+    } else {
+      return json(405, { error: "method_not_allowed" });
+    }
+    const mode = body.mode;
+    if (mode !== "qr" && mode !== "push" && mode !== "web2app") return json(400, { error: "invalid_mode" });
+    const lang = body.lang === "en" ? "eng" : "mon";
+    const ctx: EidLoginContext = { request: req, mode };
+    if (mode === "web2app" && !opts.callbackUrl) return json(400, { error: "web2app_not_configured" });
+    const idCode = typeof body.idCode === "string" ? body.idCode.replace(/\s+/g, "").toUpperCase() : "";
+    if (mode === "push" && !ID_RE.test(idCode)) return json(400, { error: "invalid_id" });
+
+    const limited = () => json(429, { error: "rate_limited" }, { "Retry-After": "60" });
+    if (req.ip && !(await rateLimit(`start:${req.ip}`))) return limited();
+    if (mode === "push" && !(await rateLimit(`push:${idCode}`))) return limited();
+
+    let r: Awaited<ReturnType<typeof begin>>;
+    try {
+      r = await begin(req, mode, idCode, lang);
+    } catch (e) {
+      // Иргэн бүртгэлтэй эсэхийг задлахгүй: 4xx (танихгүй дугаар г.м.) → invalid_id биш, ерөнхий алдаа.
+      onError(e, ctx);
+      const status = e instanceof ApiError && e.status === 429 ? 429 : 502;
+      return json(status, { error: status === 429 ? "rate_limited" : "eid_unavailable" });
+    }
+    if (mode === "web2app") {
+      // iOS Universal Link зөвхөн хэрэглэгчийн tap-аас эхэлсэн redirect гинжид аппыг нээнэ — JS биш, 302.
+      return { status: 302, headers: { Location: r.appLink!, "Cache-Control": "no-store", "Referrer-Policy": "no-referrer", "Set-Cookie": r.setCookie }, body: "" };
+    }
+    return json(
+      200,
+      { mode, vc: r.tx.vc, ...(mode === "qr" ? { qr: qrLink(r.tx) } : {}), expiresIn: Math.ceil(ttl / 1000) },
+      { "Set-Cookie": r.setCookie },
+    );
+  }
+
+  /** COMPLETE/OK үр дүнг шалгаж, нэг удаа onSuccess дуудна. ValidationError-ийг дуудагч барина. */
+  async function finish(req: EidLoginRequest, tx: EidLoginTx, r: SessionResult, flow: FlowType, verifier?: string) {
+    const v = client.validator.validateAuth(r, tx.acsp, { expectedFlowType: flow, userChallengeVerifier: verifier });
+    if (!(await store.delete(tx.sessionId))) return undefined; // зэрэг хүсэлт аль хэдийн дуусгасан
+    const out = (await opts.onSuccess(toIdentity(r, v, flow), { request: req, mode: tx.mode })) ?? {};
+    return out;
+  }
+
+  async function status(req: EidLoginRequest): Promise<EidLoginResponse> {
+    if (req.method !== "GET") return json(405, { error: "method_not_allowed" });
+    const tx = await loadTx(req);
+    if (!tx) return json(200, { state: "EXPIRED" }, { "Set-Cookie": clearCookie });
+    const ctx: EidLoginContext = { request: req, mode: tx.mode };
+    let r: SessionResult;
+    try {
+      r = await client.session.poll(tx.sessionId, pollMs);
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 404) {
+        await store.delete(tx.sessionId);
+        return json(200, { state: "EXPIRED" }, { "Set-Cookie": clearCookie });
+      }
+      onError(e, ctx);
+      return json(502, { error: "eid_unavailable" });
+    }
+    const expiresIn = Math.max(0, Math.ceil((tx.expiresAt - Date.now()) / 1000));
+    if (r.state !== "COMPLETE") return json(200, { state: "PENDING", qr: qrLink(tx), vc: tx.vc, expiresIn });
+    if (r.endResult !== "OK") {
+      await store.delete(tx.sessionId);
+      return json(200, { state: "FAILED", error: r.endResult ?? "UNKNOWN" }, { "Set-Cookie": clearCookie });
+    }
+    // Web2App-аар баталгаажсан session-ийг ЗӨВХӨН callback (userChallengeVerifier) дуусгана.
+    if (tx.mode === "web2app") return json(200, { state: "WAIT_CALLBACK" });
+    try {
+      const out = await finish(req, tx, r, tx.mode === "qr" ? "QR" : "Notification");
+      if (!out) return json(200, { state: "EXPIRED" }, { "Set-Cookie": clearCookie });
+      return json(200, { state: "OK", redirect: out.redirect, data: out.data }, mergeHeaders({ "Set-Cookie": clearCookie }, out.headers));
+    } catch (e) {
+      onError(e, ctx);
+      if (!(e instanceof ValidationError || e instanceof SessionFailedError)) return json(500, { error: "internal" });
+      await store.delete(tx.sessionId);
+      return json(200, { state: "FAILED", error: "VALIDATION" }, { "Set-Cookie": clearCookie });
+    }
+  }
+
+  async function callback(req: EidLoginRequest): Promise<EidLoginResponse> {
+    if (req.method !== "GET") return json(405, { error: "method_not_allowed" });
+    const q = new URL(req.url, "http://x").searchParams;
+    const sid = q.get("sessionId") ?? "";
+    const verifier = q.get("userChallengeVerifier") ?? "";
+    const fail = (code: string) => redirect(failTo(code), { "Set-Cookie": clearCookie });
+    const tx = await loadTx(req);
+    // Эхлүүлсэн хөтчийн cookie заавал: өөр хөтчид нээгдсэн callback-ийг (хулгайлсан/илгээсэн URL) хүлээн авахгүй.
+    if (!tx || tx.sessionId !== sid || tx.mode !== "web2app") return fail(tx ? "unbound" : "expired");
+    if (!verifier) return fail("unbound");
+    const ctx: EidLoginContext = { request: req, mode: tx.mode };
+    let r: SessionResult;
+    try {
+      r = await client.session.poll(tx.sessionId, 10_000);
+    } catch (e) {
+      onError(e, ctx);
+      return fail("eid_unavailable");
+    }
+    if (r.state !== "COMPLETE") return fail("not_complete");
+    if (r.endResult !== "OK") {
+      await store.delete(tx.sessionId);
+      return fail(r.endResult ?? "UNKNOWN");
+    }
+    try {
+      const out = await finish(req, tx, r, "Web2App", verifier);
+      if (!out) return fail("expired");
+      return redirect(out.redirect ?? successRedirect, mergeHeaders({ "Set-Cookie": clearCookie }, out.headers));
+    } catch (e) {
+      onError(e, ctx);
+      if (!(e instanceof ValidationError || e instanceof SessionFailedError)) return fail("internal");
+      await store.delete(tx.sessionId);
+      return fail("VALIDATION");
+    }
+  }
+
+  async function handleRequest(req: EidLoginRequest): Promise<EidLoginResponse> {
+    const seg = new URL(req.url, "http://x").pathname.replace(/\/+$/, "").split("/").pop();
+    try {
+      if (seg === "start") return await start(req);
+      if (seg === "status") return await status(req);
+      if (seg === "callback") return await callback(req);
+    } catch (e) {
+      // store/onSuccess алдаа — дотоод мэдээллийг хөтчид гаргахгүй.
+      onError(e, { request: req, mode: "qr" });
+      if (e instanceof AuthenticationError || e instanceof ForbiddenError) return json(502, { error: "eid_unavailable" });
+      return json(500, { error: "internal" });
+    }
+    return json(404, { error: "not_found" });
+  }
+
+  async function handle(req: Request): Promise<Response> {
+    const headers: Record<string, string> = {};
+    req.headers.forEach((v, k) => (headers[k] = v));
+    const body = req.method === "POST" ? await req.text() : undefined;
+    const r = await handleRequest({ method: req.method, url: req.url, headers, body });
+    const h = new Headers();
+    for (const [k, v] of Object.entries(r.headers)) for (const x of [v].flat()) h.append(k, x);
+    return new Response(r.status === 302 || r.status === 303 || r.body === "" ? null : r.body, { status: r.status, headers: h });
+  }
+
+  return { handleRequest, handle };
+}
