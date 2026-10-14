@@ -467,12 +467,12 @@ DSS-д), Adobe / EU DSS-д «LTV enabled», баталгаажуулах (QR) х
 
 | Функц | Хаана | Тайлбар |
 |---|---|---|
-| `prepare(pdf, { signerCert, claimedRole?, verifyPage?, fileName?, lang?, docId?, … })` | браузер / Node | `{ dtbs, digest, docId, state }` — сүлжээгүй |
+| `prepare(pdf, { signerCert, claimedRole?, verifyPage?, fileName?, lang?, docId?, appearance?, … })` | браузер / Node | `{ dtbs, digest, docId, state }` — сүлжээгүй |
 | `eid.signPdfDigest({ dtbs, fileName, signer, flow?, onBehalfOf? })` | RP backend | DTBS-д гарын үсгийн session (push эсвэл device-link) |
 | `complete(state, signature)` | браузер / Node | TSA + OCSP/CRL → `{ pdf, cms, docId, outSha256, inSha256, hasPage, pageSha256, … }` |
 | `eid.registerSignature(registrationFromCompleted(done, { fileName, sessionID }))` | RP backend | `POST /pdf/signatures` — `/verify/{docID}` бүртгэл |
 
-`/pades` хөтчийн bundle ~125 KB gzip (Noto Sans фонт asset-тэй, CI-д ≤ 300 KB); үндсэн entry үүнийг агуулахгүй. `/pades` (ба бүх багц) **Node ≥ 18** (CI: 18 / 20 / 22),
+`/pades` хөтчийн bundle ~127 KB gzip (Noto Sans фонт asset-тэй, CI-д ≤ 300 KB); үндсэн entry үүнийг агуулахгүй. `/pades` (ба бүх багц) **Node ≥ 18** (CI: 18 / 20 / 22),
 орчин үеийн хөтөч. Браузерийн CSP: `connect-src https://tsa.timeserver.mn https://ocsp.eidmongolia.mn
 https://crl.eidmongolia.mn`. Хөтөчид гэрчилгээний `http://` AIA/CDP-г зөвхөн эдгээр хостод `https://` болгоно; үндэсний
 CA-ийн CRL (`esign.gov.mn`) нь `crl.eidmongolia.mn` толин хуулбараас (бүх платформд). Шалгагч (`verify`) энд
@@ -527,6 +527,18 @@ reply({ verifyUrl: reg.verifyUrl });
   `complete().priorRevisionSha256`-ийг (`sha256(doc[0 : ByteRange[2]+ByteRange[3]])`) `registrationFromCompleted`
   `priorSignatures` болгож дамжуулна; `registerSignature` 409 `PRIOR_MISMATCH`-ийн дараа өөрөө revision-оор тааруулна
   (`priorRevisionSha256`-г гараар өгвөл оролдохгүй). Хөтчөөс JSON-оор дамжуулахдаа `priorRevisionSha256`-ийг ч явуул.
+
+**Харагдах гарын үсэг (сонголттой).** `appearance: { page?, x, y, width, height, lang? }` өгвөл гарын үсэг хуудсан дээр
+харагдана (QR + нэр, `claimedRole`, «eID Mongolia-аар зурсан», огноо `YYYY-MM-DD HH:MM (+08)`); байхгүй бол үл харагдах
+(өмнөхтэй байт-ижил). Координат pt-ээр, хуудасны CropBox-ийн `/Rotate`-ийн дараах (дэлгэцэнд харагдах) зүүн доод булангаас;
+`page` 1-ээс (байхгүй = оролтын сүүлийн хуудас; нэмэх verify хуудас тооцогдохгүй). Өндөр ≥ 45 pt; хуудаснаас гарах, бичвэр
+багтахгүй, docId-гүй (хуудасгүй гарын үсэгтэй баримт) бол `REQUEST_INVALID`. Харагдах бүр ~+90 KB. Дүрэм: Go репогийн
+`pades/APPEARANCE_SPEC.md`.
+
+```ts
+const p = await prepare(pdfBytes, { signerCert, verifyPage: true, fileName: "Гэрээ №12.pdf",
+  appearance: { page: 1, x: 340, y: 36, width: 220, height: 64 } });
+```
 
 ### Зөвхөн Node (backend бүгдийг хийнэ)
 
@@ -720,8 +732,8 @@ npm run size:pades    # /pades хөтчийн bundle gzip ≤ 300 KB
 
 `/pades`-ийн conformance fixture (golden: оролт, тестийн PKI-ийн гэрчилгээ, TSA/OCSP/CRL-ийн тогтмол хариу, хүлээгдэх
 sha256) ба фонт/гинжийн asset-ийг Go reference-ээс `node scripts/sync-pades-golden.mjs` хуулна (`GO_SDK_COMMIT` —
-tag `pades-golden-vN`); CI `--check`-ээр бэхэлсэн commit-тэй тулгана. Профайл: Go репогийн `pades/PROFILE.md`,
-`PAGE_SPEC.md`, `PRECHECKS.md`, `WIRE.md`.
+tag `pades-golden-vN`, одоо v3); CI `--check`-ээр бэхэлсэн commit-тэй тулгана. Профайл: Go репогийн `pades/PROFILE.md`,
+`PAGE_SPEC.md`, `PRECHECKS.md`, `WIRE.md`, `APPEARANCE_SPEC.md`.
 
 ### Гэрээний шалгалт
 

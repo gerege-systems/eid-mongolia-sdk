@@ -80,9 +80,9 @@ const COL2 = 297;
 const QR_MODULE = 2;
 const QR_TEXT_X = 136;
 const FILE_NAME_MAX = 3;
-const C_TEXT = "0.118 0.118 0.118";
-const C_MUTED = "0.431 0.431 0.431";
-const C_OK = "0.086 0.541 0.31";
+export const C_TEXT = "0.118 0.118 0.118";
+export const C_MUTED = "0.431 0.431 0.431";
+export const C_OK = "0.086 0.541 0.31";
 const C_BANNER = "0.863 0.961 0.902";
 const C_LINE = "0.863 0.863 0.863";
 const C_LINK = "0.118 0.431 0.863";
@@ -90,20 +90,20 @@ const BANNER =
   "48 800 m\n546 800 l\n549.31 800 552 797.31 552 794 c\n552 754 l\n552 750.69 549.31 748 546 748 c\n" +
   "48 748 l\n44.69 748 42 750.69 42 754 c\n42 794 l\n42 797.31 44.69 800 48 800 c\nh\nf";
 
-interface Font {
+export interface Font {
   a: FontAsset;
   gid: Map<number, number>;
 }
 
 let fonts: [Font, Font] | undefined;
-function loadFonts(): [Font, Font] {
+export function loadFonts(): [Font, Font] {
   fonts ??= [REGULAR, BOLD].map((a) => ({ a, gid: new Map(a.cmap) })) as [Font, Font];
   return fonts;
 }
 
 type Link = [number, number, number, number, string];
 
-class PageWriter {
+export class PageWriter {
   ops = "";
   links: Link[] = [];
   constructor(
@@ -137,9 +137,14 @@ class PageWriter {
     const str =
       id === 3
         ? "(" + s.replace(/\\/g, "\\\\").replace(/\(/g, "\\(").replace(/\)/g, "\\)") + ")"
-        : "<" + this.gids(id, s).map((g) => g.toString(16).toUpperCase().padStart(4, "0")).join("") + ">";
+        : this.glyphHex(id, s);
     this.op(`${color} rg`);
     this.op(`BT /F${id} ${size} Tf ${x} ${y} Td ${str} Tj ET`);
+  }
+
+  /** F1/F2 бичвэрийн `<GGGG…>` (PAGE_SPEC.md §2). */
+  glyphHex(id: number, s: string): string {
+    return "<" + this.gids(id, s).map((g) => g.toString(16).toUpperCase().padStart(4, "0")).join("") + ">";
   }
 
   link(id: number, size: number, x: number, y: number, s: string): void {
@@ -153,7 +158,11 @@ class PageWriter {
   }
 
   wrap(id: number, size: number, s: string, maxW: number, maxLines: number): string[] {
-    const limit = maxW * 1000;
+    return this.wrapLimit(id, size, s, maxW * 1000, maxLines);
+  }
+
+  /** wrap, өргөний хязгаар limit нь 1/1000 pt-ээр (харагдах гарын үсэгт: 1/100 pt × 10). */
+  wrapLimit(id: number, size: number, s: string, limit: number, maxLines: number): string[] {
     const fits = (t: string): boolean => this.width1000(id, size, t) <= limit;
     const lines: string[] = [];
     let cur = "";
@@ -209,7 +218,7 @@ function urlHost(u: string): string {
   return s;
 }
 
-function asciiURL(u: string): boolean {
+export function asciiURL(u: string): boolean {
   if (u === "") return false;
   for (let i = 0; i < u.length; i++) {
     const c = u.charCodeAt(i);
@@ -287,7 +296,7 @@ export function pageContent(p: PageData): { content: string; links: Link[] } {
 /** Content stream мөр (ASCII + glyph hex — бүгд latin1) → байт. */
 const asciiBytes = (s: string): Uint8Array => latin1(s);
 
-function streamObj(extra: string, data: Uint8Array): Uint8Array {
+export function streamObj(extra: string, data: Uint8Array): Uint8Array {
   return concat([latin1(`<< /Length ${data.length}${extra} >>\nstream\n`), data, latin1("\nendstream")]);
 }
 
@@ -338,18 +347,19 @@ export function appendVerifyPage(base: Uint8Array, p: PageData): Uint8Array {
 }
 
 function writeFont(inc: Incremental, ids: number[], f: Font): void {
+  fontBodies(ids, f).forEach((b, i) => inc.writeObject(ids[i]!, b));
+}
+
+/** writeFont-ийн 5 объектын бие (ids-ийн дарааллаар); verify хуудас ба харагдах гарын үсэгт ижил. */
+export function fontBodies(ids: number[], f: Font): (string | Uint8Array)[] {
   const a = f.a;
-  inc.writeObject(ids[0]!, `<< /Type /Font /Subtype /Type0 /BaseFont /${a.psName} /Encoding /Identity-H /DescendantFonts [${ids[1]} 0 R] /ToUnicode ${ids[4]} 0 R >>`);
-  inc.writeObject(
-    ids[1]!,
+  return [
+    `<< /Type /Font /Subtype /Type0 /BaseFont /${a.psName} /Encoding /Identity-H /DescendantFonts [${ids[1]} 0 R] /ToUnicode ${ids[4]} 0 R >>`,
     `<< /Type /Font /Subtype /CIDFontType2 /BaseFont /${a.psName} /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> /FontDescriptor ${ids[2]} 0 R /CIDToGIDMap /Identity /W [0 [${a.widths.join(" ")}]] >>`,
-  );
-  inc.writeObject(
-    ids[2]!,
     `<< /Type /FontDescriptor /FontName /${a.psName} /Flags 32 /FontBBox [${a.bbox.join(" ")}] /ItalicAngle 0 /Ascent ${a.ascent} /Descent ${a.descent} /CapHeight ${a.capHeight} /StemV 80 /FontFile2 ${ids[3]} 0 R >>`,
-  );
-  inc.writeObject(ids[3]!, streamObj(` /Length1 ${a.length1} /Filter /FlateDecode`, fromB64(a.stream)));
-  inc.writeObject(ids[4]!, streamObj("", latin1(toUnicode(f))));
+    streamObj(` /Length1 ${a.length1} /Filter /FlateDecode`, fromB64(a.stream)),
+    streamObj("", latin1(toUnicode(f))),
+  ];
 }
 
 function toUnicode(f: Font): string {
