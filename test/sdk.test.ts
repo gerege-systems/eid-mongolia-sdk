@@ -23,8 +23,6 @@ import {
   EidClient,
   DEFAULT_BASE_URL,
   resolveBaseUrl,
-  deviceLink,
-  openOrShowQR,
   isMobileUserAgent,
   DeviceLinkError,
   ResponseValidator,
@@ -225,28 +223,10 @@ const DL = {
   deviceLinkBase: "https://ca.eidmongolia.mn/dl",
 };
 
-test("deviceLink — CA гэрээ: {base}?sessionId=&vc=", () => {
-  assert.equal(deviceLink(DL), `https://ca.eidmongolia.mn/dl?sessionId=${DL.sessionId}&vc=04821`);
-  // суурийн бусад query хадгалагдана, sessionId/vc давхардахгүй
-  assert.equal(
-    deviceLink({ ...DL, deviceLinkBase: "https://x.test/dl?b=1&vc=99999" }),
-    `https://x.test/dl?b=1&vc=04821&sessionId=${DL.sessionId}`,
-  );
-  assert.equal(browser.deviceLink(DL), deviceLink(DL));
-});
-
-test("deviceLink — буруу оролт DeviceLinkError", () => {
-  assert.throws(() => deviceLink({ ...DL, deviceLinkBase: null }), DeviceLinkError);
-  assert.throws(() => deviceLink({ ...DL, deviceLinkBase: "  " }), DeviceLinkError);
-  assert.throws(() => deviceLink({ ...DL, deviceLinkBase: "eidmongolia://approve" }), DeviceLinkError);
-  assert.throws(() => deviceLink({ ...DL, deviceLinkBase: "geregesmartid://x" }), DeviceLinkError);
-  assert.throws(() => deviceLink({ ...DL, deviceLinkBase: "/dl" }), DeviceLinkError);
-  assert.throws(() => deviceLink({ ...DL, sessionId: "abc" }), DeviceLinkError);
-  assert.throws(() => deviceLink({ ...DL, sessionId: DL.sessionId.toUpperCase() }), DeviceLinkError);
-  assert.throws(() => deviceLink({ ...DL, vc: null }), DeviceLinkError);
-  assert.throws(() => deviceLink({ ...DL, vc: "1234" }), DeviceLinkError);
-  assert.throws(() => deviceLink({ ...DL, vc: "12345&x=1" }), DeviceLinkError);
+test("DeviceLinkError — EidError-ээс удамшина; browser entry legacy холбоосгүй", () => {
   assert.ok(new DeviceLinkError("x") instanceof browser.EidError);
+  assert.equal((browser as Record<string, unknown>).deviceLink, undefined);
+  assert.equal((browser as Record<string, unknown>).openOrShowQR, undefined);
 });
 
 test("isMobileUserAgent — Android/iPhone/iPadOS desktop UA/UA-CH", () => {
@@ -257,26 +237,6 @@ test("isMobileUserAgent — Android/iPhone/iPadOS desktop UA/UA-CH", () => {
   assert.equal(isMobileUserAgent({ userAgent: ipadUA, maxTouchPoints: 0 }), false);
   assert.equal(isMobileUserAgent({ userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64)", userAgentData: { mobile: true } }), true);
   assert.equal(isMobileUserAgent({ userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" }), false);
-});
-
-test("openOrShowQR — гар утсанд location.assign, desktop-д showQR", () => {
-  const g = globalThis as { location?: unknown };
-  const prev = g.location;
-  const assigned: string[] = [];
-  g.location = { assign: (u: string) => assigned.push(u) };
-  try {
-    const shown: string[] = [];
-    assert.equal(openOrShowQR(DL, { showQR: (l) => shown.push(l), isMobile: true }), "opened");
-    assert.deepEqual(assigned, [deviceLink(DL)]);
-    assert.deepEqual(shown, []);
-    assert.equal(openOrShowQR(DL, { showQR: (l) => shown.push(l), isMobile: () => false }), "qr");
-    assert.deepEqual(shown, [deviceLink(DL)]);
-    assert.equal(assigned.length, 1);
-    assert.throws(() => openOrShowQR({ ...DL, deviceLinkBase: null }, { showQR: () => {}, isMobile: true }), DeviceLinkError);
-    assert.equal(assigned.length, 1);
-  } finally {
-    g.location = prev;
-  }
 });
 
 test("auth.deviceLinkAnonymous — deviceLinkBase ба vc (мөр) задлагдана", async () => {
@@ -291,7 +251,6 @@ test("auth.deviceLinkAnonymous — deviceLinkBase ба vc (мөр) задлаг�
   const s = await eid.auth.deviceLinkAnonymous([{ type: "displayTextAndPIN", displayText60: "x" }]);
   assert.equal(s.vc, "04821");
   assert.equal(s.deviceLinkBase, DL.deviceLinkBase);
-  assert.equal(deviceLink(s), deviceLink(DL));
   assert.ok(Math.abs(s.receivedAt - Date.now()) < 5_000, "receivedAt = хариу хүлээн авсан мөч");
 });
 
