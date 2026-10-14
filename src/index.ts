@@ -93,6 +93,7 @@ export {
   createEidLogin,
   memoryLoginStore,
   withReturnHint,
+  forwardedClientIp,
   type EidLogin,
   type EidLoginOptions,
   type EidLoginIdentity,

@@ -24,6 +24,8 @@ export type EidLoginMode = "qr" | "push" | "web2app";
 
 /** Баталгаажсан иргэн — onSuccess-д. */
 export interface EidLoginIdentity {
+  /** RP-API session-ий id (`sessionId`) — аудит, эсвэл энэ нэвтрэлтийг дараагийн алхамтай (гарын үсэг г.м.) холбоход. */
+  sessionId: string;
   /** Гэрчилгээний SERIALNUMBER (`PNOMN-<иргэний дугаар>`). Хэрэглэгчийг ҮҮГЭЭР таньна (нэрээр биш). */
   etsi: string;
   /** `PNOMN-`-гүй иргэний дугаар (цифр); ETSI өөр хэлбэртэй бол null. */
@@ -33,9 +35,10 @@ export interface EidLoginIdentity {
   surname: string | null;
   name: string | null;
   country: string | null;
+  /** Иргэний баримтын дугаар (`PNOMN-…-MOBILE-Q` г.м.) — `client.sign.*ByDocument`-аар ижил төхөөрөмж рүү гарын үсэг. */
   documentNumber: string;
   certificateLevel: string;
-  /** Иргэний гэрчилгээ (DER, base64). */
+  /** Иргэний нэвтрэлтийн гэрчилгээ (DER, base64) — validateAuth-аар гинж шалгагдсан. */
   certificateDerB64: string;
   /** Гарын үсэг зурагдсан урсгал: QR | Notification | Web2App. */
   flowType: FlowType;
@@ -133,6 +136,19 @@ export interface EidLoginOptions {
    * Анхдагч: push-д нэг дугаарт 60 секундэд 3 (санах ойд) — хохирогчийн утсыг мэдэгдлээр дарахаас (MFA fatigue).
    */
   rateLimit?: (key: string) => boolean | Promise<boolean>;
+  /**
+   * `handle(Request)`-ийн клиент IP (`start:<ip>` хязгаарт). Web-standard `Request`-д IP байдаггүй тул эсвэл энийг, эсвэл
+   * {@link EidLoginOptions.trustProxy}-г өг; аль нь ч үгүй бол IP-ээр хязгаарлахгүй (анхны дуудлагад onError-оор анхааруулна).
+   * Ж: Vercel/Next `req.headers.get("x-real-ip")`, Bun `server.requestIP(req)?.address`, Deno `info.remoteAddr.hostname`.
+   */
+  getClientIp?: (req: Request) => string | undefined | null;
+  /**
+   * Итгэмжит reverse proxy-ийн ард: IP-г `X-Forwarded-For`-оос (байхгүй бол `X-Real-IP`) уншина.
+   * `true` — XFF-ийн хамгийн зүүн утга (бүх hop итгэмжит; зөвхөн proxy нь клиентийн XFF-ийг дарж бичдэг бол);
+   * тоо `n` — баруунаас n дахь утга (n = таны итгэмжит proxy-ийн тоо; nginx нэг бол 1). Proxy-гүй үед бүү асаа —
+   * header-ийг клиент хуурамчаар илгээж хязгаарыг тойрно. `handleRequest`-д `req.ip` өгөөгүй үед ч хэрэглэгдэнэ.
+   */
+  trustProxy?: boolean | number;
   /** Дотоод алдаа (eID API, store). Анхдагч console.error (мессеж л). */
   onError?: (err: unknown, ctx: EidLoginContext) => void;
 }
@@ -162,6 +178,24 @@ export interface EidLogin {
 }
 
 const CALLBACK_PATH = "/auth/eid/callback";
+
+/**
+ * Итгэмжит proxy-ийн header-ээс клиент IP (`trustProxy`-ийн дүрэм). XFF-д хангалттай hop байхгүй бол хамгийн зүүн
+ * утгыг (proxy-д ирсэн анхны) биш undefined буцаана — хуурамч header-ээр тойрохоос.
+ */
+export function forwardedClientIp(headers: EidLoginRequest["headers"], trustProxy: boolean | number): string | undefined {
+  if (trustProxy === false || trustProxy === 0) return undefined;
+  const xff = header(headers, "x-forwarded-for")
+    .split(",")
+    .map((x) => x.trim())
+    .filter(Boolean);
+  if (xff.length) {
+    if (trustProxy === true) return xff[0];
+    const n = Math.floor(trustProxy);
+    return n >= 1 && n <= xff.length ? xff[xff.length - n] : undefined;
+  }
+  return header(headers, "x-real-ip").trim() || undefined;
+}
 const ID_RE = /^(\p{L}{2}[0-9]{8}|[0-9]{8,14}|PNOMN-[0-9]{8,14})$/u;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const B64URL_RE = /^[A-Za-z0-9_-]{43}$/;
@@ -222,11 +256,17 @@ function safeEqualHex(a: string, b: string): boolean {
   return x.length === y.length && x.length > 0 && timingSafeEqual(x, y);
 }
 
-function toIdentity(r: SessionResult, v: ReturnType<EidClient["validator"]["validateAuth"]>, flowType: FlowType): EidLoginIdentity {
+function toIdentity(
+  sessionId: string,
+  r: SessionResult,
+  v: ReturnType<EidClient["validator"]["validateAuth"]>,
+  flowType: FlowType,
+): EidLoginIdentity {
   const s = v.parsedSubject;
   const etsi = s.serialNumber ?? "";
   const m = /^PNOMN-([0-9]+)$/.exec(etsi);
   return {
+    sessionId,
     etsi,
     civilId: m ? m[1]! : null,
     givenName: s.givenName ?? null,
@@ -413,7 +453,8 @@ export function createEidLogin(opts: EidLoginOptions): EidLogin {
     if (mode === "push" && !ID_RE.test(idCode)) return json(400, { error: "invalid_id" });
 
     const limited = () => json(429, { error: "rate_limited" }, { "Retry-After": "60" });
-    if (req.ip && !(await rateLimit(`start:${req.ip}`))) return limited();
+    const ip = req.ip || (opts.trustProxy ? forwardedClientIp(req.headers, opts.trustProxy) : undefined);
+    if (ip && !(await rateLimit(`start:${ip}`))) return limited();
     if (mode === "push" && !(await rateLimit(`push:${idCode}`))) return limited();
 
     let r: Awaited<ReturnType<typeof begin>>;
@@ -440,7 +481,7 @@ export function createEidLogin(opts: EidLoginOptions): EidLogin {
   async function finish(req: EidLoginRequest, tx: EidLoginTx, r: SessionResult, flow: FlowType, verifier?: string) {
     const v = client.validator.validateAuth(r, tx.acsp, { expectedFlowType: flow, userChallengeVerifier: verifier });
     if (!(await store.delete(tx.sessionId))) return undefined; // зэрэг хүсэлт аль хэдийн дуусгасан
-    const out = (await opts.onSuccess(toIdentity(r, v, flow), { request: req, mode: tx.mode })) ?? {};
+    const out = (await opts.onSuccess(toIdentity(tx.sessionId, r, v, flow), { request: req, mode: tx.mode })) ?? {};
     return out;
   }
 
@@ -530,11 +571,20 @@ export function createEidLogin(opts: EidLoginOptions): EidLogin {
     return json(404, { error: "not_found" });
   }
 
+  let warnedNoIp = false;
   async function handle(req: Request): Promise<Response> {
     const headers: Record<string, string> = {};
     req.headers.forEach((v, k) => (headers[k] = v));
     const body = req.method === "POST" ? await req.text() : undefined;
-    const r = await handleRequest({ method: req.method, url: req.url, headers, body });
+    const ip = opts.getClientIp?.(req) || undefined;
+    if (!ip && !opts.getClientIp && !opts.trustProxy && !warnedNoIp) {
+      warnedNoIp = true;
+      onError(new Error("eid-login: handle(Request)-д клиент IP алга — `start:<ip>` хязгаар ажиллахгүй; getClientIp эсвэл trustProxy өг"), {
+        request: { method: req.method, url: req.url, headers },
+        mode: "qr",
+      });
+    }
+    const r = await handleRequest({ method: req.method, url: req.url, headers, body, ip });
     const h = new Headers();
     for (const [k, v] of Object.entries(r.headers)) for (const x of [v].flat()) h.append(k, x);
     return new Response(r.status === 302 || r.status === 303 || r.body === "" ? null : r.body, { status: r.status, headers: h });
