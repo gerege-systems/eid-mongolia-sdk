@@ -4,8 +4,10 @@
 (authentication) ба хууль ёсны цахим гарын үсэг (qualified signature) хийлгэх Node.js/TypeScript сан.
 RP-API v3, Smart-ID нийцтэй. Бүрэн баримт: <https://developer.eidmongolia.mn/>.
 
-> ⚠️ Зөвхөн **backend**-д ажиллана (`@gerege-systems/eid-mongolia-sdk/browser`-ийн legacy device-link туслахаас бусад).
-> API secret (`rp_sk_…`) браузер/гар утсанд хэзээ ч задлахгүй.
+> ⚠️ SDK **backend**-д ажиллана: бүх дуудлага API secret (`rp_sk_…`)-ээр баталгаажна, secret-ийг браузер/гар утсанд
+> хэзээ ч задлахгүй. Браузерт зөвхөн таны backend-ийн өгсөн холбоос/QR/товч харагдана — «eID-ээр нэвтрэх» товч ч
+> энгийн холбоос, `code` → `id_token` солих нь backend-д (§1a). `@gerege-systems/eid-mongolia-sdk/browser`-ийн
+> legacy device-link туслахууд 2026-10-07-оос ажиллахгүй (§4).
 
 ## Суулгах
 
@@ -17,9 +19,11 @@ Node.js ≥ 22 (global `fetch`, `node:crypto`).
 
 ## 1. RP бүртгүүлэх
 
-`POST https://ca.eidmongolia.mn/v3/rp-applications` (эсвэл [developer.eidmongolia.mn](https://developer.eidmongolia.mn)) —
-оператор баталсны дараа **relyingPartyUUID** ба **API secret** (`rp_sk_…`) олгогдоно; secret **зөвхөн нэг удаа**
-харагдана. Дэлгэрэнгүй: <https://developer.eidmongolia.mn/#registration>.
+RP-г eID Mongolia-гийн оператор бүртгэнэ — хүсэлтээ <eIDsupport@gerege.com> эсвэл 7777-3773-аар гаргана
+(нийтийн `POST /v3/rp-applications` 2026-10-14-нөөс засвартай: `503 rp_applications_maintenance`). Оператор
+баталсны дараа **relyingPartyUUID** ба **API secret** (`rp_sk_…`) олгогдоно; secret **зөвхөн нэг удаа** харагдана.
+Шаардлагатай мэдээлэл (байгууллага, зорилго `AUTH`/`SIGN`, `callbackHosts`, OIDC redirect URI…):
+<https://developer.eidmongolia.mn/#registration>.
 
 ## 1a. «eID-ээр нэвтрэх» (OpenID Connect)
 
@@ -27,6 +31,11 @@ Node.js ≥ 22 (global `fetch`, `node:crypto`).
 мэдэгдэл) eID сервер өөрөө харуулж, гарын үсэг ба гэрчилгээний гинжийг шалгаад танд стандарт OpenID Connect
 (Authorization Code + PKCE `S256`) `id_token` өгнө — Google/Apple нэвтрэлттэй ижил. Утасны хөтчөөс дарахад
 хуудасгүйгээр шууд eID апп нээгдэнэ. Гэрээ: <https://developer.eidmongolia.mn/#oidc>.
+
+**Хаана юу ажиллах.** Товч нь браузерт (энгийн `<a href>` таны backend-ийн `/auth/eid/login` руу); `EidOidcClient`
+нь backend-д — authorize URL угсрах, callback-д `code`-ийг `client_secret`-ээр `id_token` болгон солих, гарын үсгийг
+шалгах. eID-ийн OIDC client нь одоогоор зөвхөн **confidential client** (`client_secret_basic`): backend-гүй SPA эсвэл
+native апп дангаараа token endpoint-ийг дуудаж чадахгүй — native апп ч `code`-ийг өөрийн backend-ээр солино (доор).
 
 **Бүртгэл.** `client_id` = таны RP UUID (`relyingPartyUUID`), `client_secret` = RP API secret (`rp_sk_…`).
 RP-д `AUTH` эрх, OIDC асаалттай, `redirect_uri` (https, ≤ 10) бүртгэлтэй байна — authorize/token-ий `redirect_uri`
@@ -77,14 +86,22 @@ callback → `oidc.handleCallback(request.nextUrl.searchParams, tx)` (зөвхө
 хэрэглэгчийн tap-аас эхэлсэн redirect гинжид eID аппыг нээнэ.
 
 ```html
-<a class="eid-login" href="/auth/eid/login">eID-ээр нэвтрэх</a>
+<a class="eid-login" href="/auth/eid/login">
+  <img src="/img/eid-mongolia.png" alt="" width="20" height="20">
+  eID Mongolia-аар нэвтрэх
+</a>
 <style>
-  .eid-login { display: inline-flex; align-items: center; justify-content: center; min-height: 44px;
-    padding: 0 1.25rem; border-radius: 8px; background: #0b3d91; color: #fff; font: 600 1rem/1 system-ui, sans-serif;
-    text-decoration: none; }
-  .eid-login:focus-visible { outline: 2px solid #0b3d91; outline-offset: 2px; }
+  .eid-login { display: inline-flex; align-items: center; justify-content: center; gap: .5rem; min-height: 44px;
+    padding: 0 1.25rem; border: 1px solid #d0d5dd; border-radius: 6px; background: #fff; color: #111827;
+    font: 500 1rem/1 system-ui, sans-serif; text-decoration: none; }
+  .eid-login:hover { background: #f5f7fa; }
+  .eid-login:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
 </style>
 ```
+
+Бичвэр «eID Mongolia-аар нэвтрэх», зүүн талд eID Mongolia лого (<https://developer.eidmongolia.mn/logo-96.png>-ийг
+татаж өөрийн хостоос үйлчил). Google/Apple-ийн товч шиг саармаг (цагаан, хүрээтэй) — таны сайтын бусад нэвтрэх
+товчтой зэрэгцэж болно. Жишээ: <https://demo.eidmongolia.mn>.
 
 `createAuthorization({ display: "page" })` — утсан дээр ч нэвтрэх хуудас (QR / push) харуулна (ж: таблет киоск).
 
@@ -123,7 +140,7 @@ const eid = new EidClient({
   trust: { trustAnchorsPem: [process.env.EID_NATIONAL_ROOT_CA_PEM!] }, // ← Mongolian National Root CA, production-д ЗААВАЛ
 });
 
-// ETSI (PNOMN-<иргэний дугаар>) / регистр / иргэний дугаар — аль нь ч болно (сервер таьна)
+// ETSI (PNOMN-<иргэний дугаар>) / регистр / иргэний дугаар — аль нь ч болно (сервер танина)
 const s = await eid.auth.notificationByEtsi("PNOMN-12345678", [
   { type: "displayTextAndPIN", displayText60: "Хаан Банк-д нэвтрэх" },
 ]);
@@ -226,7 +243,8 @@ import { buildDeviceLink, type DeviceLinkSession } from "@gerege-systems/eid-mon
 // backend — session эхлүүлээд бүх хариуг СЕРВЕРТ хадгална (sessionToken/sessionSecret/receivedAt/acsp)
 const s = await eid.auth.deviceLinkAnonymous(
   [{ type: "displayTextAndPIN", displayText60: "Хаан Банк-д нэвтрэх" }],
-  { callbackUrl: "https://bank.example.mn/eid/callback?state=…" }, // товч харуулах бол
+  { callbackUrl: "https://bank.example.mn/auth/eid/callback?state=…" }, // товч харуулах бол; host нь callbackHosts-д,
+  // зам нь үргэлж /auth/eid/callback болж нормчлогдоно (зөвхөн query хадгалагдана), https заавал
 );
 store.put(s.sessionId, s);
 res.json({ sessionId: s.sessionId, vc: s.vc }); // браузерт ЗӨВХӨН эдгээр
@@ -275,10 +293,9 @@ eid.validator.validateAuth(result, s.acsp, {
 QR ба товч хоёуланг харуулсан хуудсанд: callback-аар ирсэн үр дүнг `Web2App`/`App2App`-аар, poll-оор ирснийг
 `QR`-аар шалга (товчоор нээгдсэн session зөвхөн callback-аар дуусна).
 
-> ⚠️ **Шилжилт.** eID Mongolia 2.2.3 (build 59)-өөс өмнөх апп v3 холбоосыг танихгүй. RP-ийн v3 рүү шилжилтийг
-> тохиргооны унтраалгаар (анхдагч legacy) хийж, build 59 store-д гарч `min_version=59` тавигдах мөчид асаана.
-> Legacy `deviceLink(session)` (`{deviceLinkBase}?sessionId=…&vc=…`) болон `/browser` entry-ийн
-> `openOrShowQR` **deprecated** — тэр мөчөөс сервер статик холбоосыг хүлээн авахгүй.
+> ⚠️ **Legacy холбоос хасагдсан (2026-10-07).** Статик `deviceLink(session)` (`{deviceLinkBase}?sessionId=…&vc=…`)
+> болон `/browser` entry-ийн `openOrShowQR`-ээр нээгдсэн session-д сервер утасны үйлдлийг `DEVICE_LINK_REQUIRED`-аар
+> татгалзана — зөвхөн v3 (`buildDeviceLink`) ажиллана. Аппын доод хувилбар: iOS 2.2.3 (59), Android 70.
 
 ## Аюулгүй байдал — яагаад `validator` заавал
 
@@ -293,7 +310,7 @@ OK ирж болзошгүй. Иймд `ResponseValidator`:
    - **auth** → ACSP_V2 payload (`smart-id|ACSP_V2|serverRandom|rpChallenge|userChallenge|B64(rpName)|B64(brokeredRpName)|B64(SHA-256(interactions))|interactionTypeUsed|initialCallbackUrl|flowType`, hash = хүсэлтийн `hashAlgorithm`) дээр — `flowType`, `userChallenge`, `serverRandom` ба алгоритмын downgrade-ийг мөн шалгана;
      `expectedFlowType` өгвөл `flowType` эхлүүлсэн урсгалтай ЯГ таарах, Web2App/App2App-д `userChallengeVerifier` заавал
      `initialCallbackUrl`-ийг хариуны `signature.initialCallbackUrl`-аас авна (CA урсгалаар шийднэ: QR/Notification →
-     `""`, Web2App/App2App → таны callback; шилжилтийн үед legacy `/dl` ба push-д таны callback) — зөвхөн `""` эсвэл
+     `""`, Web2App/App2App → таны callback) — зөвхөн `""` эсвэл
      таны илгээсэн callback байхад, Web2App/App2App-д заавал таны callback; өөр утга → татгалзана
    - **sign** → RP-ийн өгсөн digest дээр
 
