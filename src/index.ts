@@ -25,6 +25,7 @@ export {
   verifyPrehashedSignature,
   userChallengeOf,
 } from "./validator.js";
+export { parseSubject, type CertSubject } from "./subject.js";
 export {
   sha256Base64,
   randomChallenge,

@@ -151,7 +151,18 @@ const result = await eid.session.waitForResult(s.sessionId); // long-poll
 const who = eid.validator.validateAuth(result, s.acsp); // ← гинж + ACSP_V2 крипто-баталгаажуулна
 
 console.log(who.documentNumber, who.subject); // баталгаажсан иргэн
+const { name, serialNumber } = who.parsedSubject; // "Болд Бат", "PNOMN-12345678" (givenName/surname/commonName/country…)
 ```
+
+Subject-ийн талбарууд (`parsedSubject`, `validateSign`-д ч мөн) нь `parseSubject(cert)`-ээс — OID 2.5.4.42/4/3/5/6/10/97,
+UTF8String/PrintableString/BMPString. `parseSubject` нь зөвхөн задлалт: баталгаажаагүй гэрчилгээний нэрэнд бүү итгэ.
+
+> **Ижил утсан дээр push хэрэглэхгүй.** Push (`notificationBy*`)-ийн хүсэлт eID аппад мэдэгдэл / «хүлээгдэж буй»
+> жагсаалтаар ирдэг; Smart-ID ба eID-д Notification төрлийн device link **байхгүй** (CA `docs/DEVICE_LINK_V3.md` §3).
+> Хуучин `/dl?sessionId&vc` холбоос (`deviceLink`) push session-д ч юу ч өгөхгүй (сервер `DEVICE_LINK_REQUIRED`).
+> Иргэн RP-ийг eID апптай ижил утсан дээр нээсэн бол push-ийн оронд **device-link Web2App** урсгал хэрэглэ
+> (`auth.deviceLink*` / `pdf.prepare({ flow: "device-link" })` + `buildDeviceLink(…, "Web2App")`, §4) — товч аппыг шууд
+> нээж, callback-аар буцна. Push-д «eID аппаа нээнэ үү» гэсэн текст л хангалттай.
 
 ## 3. Гарын үсэг (qualified signature)
 
@@ -198,7 +209,7 @@ try {
   // MUST: endResult OK, pdf.documentStatus READY, pdf.signer.onBehalfOf = хүссэн байгууллага,
   // татсан файлын SHA-256 = pdf.outSha256, validation.indication "valid", ltv true.
   if (r.pdf?.documentStatus !== "READY" || r.pdf.signer?.onBehalfOf !== "NTRMN-6235972") throw new Error("…");
-  const signed = await eid.pdf.document(s.sessionId);
+  const signed = await eid.pdf.documentVerified(s.sessionId, r.pdf); // SHA-256 ≠ pdf.outSha256 → ValidationError
   console.log(r.pdf.signer.claimedRole); // "Гүйцэтгэх захирал, Гэрэгэ Системс ХХК (NTRMN-6235972)"
 } catch (e) {
   if ((e instanceof ForbiddenError || e instanceof ApiError) && e.code) {
@@ -211,6 +222,10 @@ try {
 // Raw digest гарын үсэгт ч мөн: eid.sign.digestByEtsi(id, digest, interactions, { onBehalfOf: "NTRMN-6235972" })
 // — CMS/PDF-ийг та угсардаг тул мэдүүлсэн үүргийг (signer-attributes-v2) өөрөө нэмнэ.
 ```
+
+`prepare`-ийн хариу `digest` (DTBS, base64) — иргэний зурах 32 байт, push ба device-link хоёуланд (хуучин CA push-д
+`undefined`). Иргэний гарын үсгийг өөрөө шалгах бол: `eid.validator.validateSign(r, s.digest!)`. Гарын үсэгтэй PDF-ийг
+`pdf.document()`-ийн оронд `pdf.documentVerified(sessionId, r.pdf)`-аар тат — `READY` + `outSha256` тулгалтыг хийнэ.
 
 Олон талт гэрээ: А байгууллагын гаралтыг өөрчлөлтгүй Б-ийн `prepare`-д (`docID`, өөр `onBehalfOf`) илгээнэ.
 Session-ий `onBehalfOf` блок (`role`/`rightType`) нь хариу угсрах үеийн бүртгэл; `pdf.signer.onBehalfOf`/`claimedRole`
@@ -313,6 +328,11 @@ OK ирж болзошгүй. Иймд `ResponseValidator`:
      `""`, Web2App/App2App → таны callback) — зөвхөн `""` эсвэл
      таны илгээсэн callback байхад, Web2App/App2App-д заавал таны callback; өөр утга → татгалзана
    - **sign** → RP-ийн өгсөн digest дээр
+   - алгоритм нь гэрчилгээний түлхүүртэй уях: `ecdsa-with-SHA256` зөвхөн EC P-256 түлхүүрт, RSA алгоритмууд зөвхөн
+     RSA түлхүүрт (alg confusion хаалт). Hash нь үргэлж хүссэнтэй ЯГ тэнцүү. RP-API session-ий гарын үсэг CA дээр
+     SplitKey RSA (одоогийн бүх мобайл гэрчилгээ) эсвэл legacy threshold ECDSA P-256-аас гарна; ECDSA credential
+     зөвхөн SHA-256 digest зурдаг (өөр hash хүссэн session-д сервер гарын үсэг гаргахгүй), тиймээс SHA-384/512
+     хүссэн session-д `ecdsa-with-SHA256` хариу ирвэл хуурамч гэж татгалзана.
 
 Аль нэг алхам бүтэлгүйтвэл `ValidationError` шиднэ — хариунд **итгэхгүй**.
 

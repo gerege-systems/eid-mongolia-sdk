@@ -13,6 +13,7 @@
 import { X509Certificate, constants, createHash, publicDecrypt, verify, type KeyObject } from "node:crypto";
 import { buildAcspV2Payload, hashLen, nodeHash } from "./crypto.js";
 import { SessionFailedError, ValidationError } from "./errors.js";
+import { parseSubject, type CertSubject } from "./subject.js";
 import type { AcspContext, CertificateLevel, FlowType, SessionResult } from "./types.js";
 
 /**
@@ -89,6 +90,8 @@ export interface VerifiedIdentity {
   certificate: X509Certificate;
   /** Cert subject DN (түүхий). Ж: "C=MN, CN=..., SERIALNUMBER=PNOMN-...". */
   subject: string;
+  /** Subject-ийн задалсан талбарууд (нэр, ETSI `serialNumber`, улс) — {@link parseSubject}. */
+  parsedSubject: CertSubject;
   certificateLevel: string;
 }
 
@@ -99,6 +102,8 @@ export interface VerifiedSignature {
   signatureAlgorithm: string | null;
   certificate: X509Certificate;
   subject: string;
+  /** Subject-ийн задалсан талбарууд — {@link parseSubject}. */
+  parsedSubject: CertSubject;
 }
 
 export class ResponseValidator {
@@ -145,7 +150,7 @@ export class ResponseValidator {
       throw new ValidationError("userChallengeVerifier нь гарын үсэг зурагдсан userChallenge-тэй таарсангүй");
     }
     if (!interactionTypeUsed) throw new ValidationError("interactionTypeUsed алга");
-    const { alg, hash } = this.algorithmOf(result, acsp.signatureAlgorithm, acsp.hashAlgorithm);
+    const { alg, hash } = this.algorithmOf(result, leaf, acsp.signatureAlgorithm, acsp.hashAlgorithm);
     const payload = buildAcspV2Payload({
       serverRandom,
       rpChallenge: acsp.rpChallenge,
@@ -164,6 +169,7 @@ export class ResponseValidator {
       documentNumber: result.documentNumber!,
       certificate: leaf,
       subject: leaf.subject,
+      parsedSubject: parseSubject(leaf),
       certificateLevel: String(result.certificateLevel ?? ""),
     };
   }
@@ -175,7 +181,7 @@ export class ResponseValidator {
   validateSign(result: SessionResult, digestB64: string, hashAlgorithm = "SHA-256"): VerifiedSignature {
     const leaf = this.precheck(result, "RAW_DIGEST_SIGNATURE");
     const digest = Buffer.from(digestB64, "base64");
-    const { alg, hash } = this.algorithmOf(result, null, hashAlgorithm);
+    const { alg, hash } = this.algorithmOf(result, leaf, null, hashAlgorithm);
     if (digest.length !== hashLen(hash)) throw new ValidationError("digest урт hashAlgorithm-тай таарахгүй");
     if (!verifyPrehashedSignature(digest, result.signatureValueB64!, leaf.publicKey, alg, hash)) {
       throw new ValidationError("Гарын үсэг өгсөн digest-тэй таарсангүй");
@@ -186,27 +192,53 @@ export class ResponseValidator {
       signatureAlgorithm: result.signatureAlgorithm,
       certificate: leaf,
       subject: leaf.subject,
+      parsedSubject: parseSubject(leaf),
     };
   }
 
   /**
-   * Хариуны signatureAlgorithm + hashAlgorithm-ийг RP-ийн хүссэнтэй тулгана (downgrade хаалт).
-   * ecdsa-with-SHA256 (хуучин cert) хүссэн rsassa-pss-ийн оронд ирэхийг зөвшөөрнө — SHA-256-аар л.
+   * Хариуны signatureAlgorithm + hashAlgorithm-ийг RP-ийн хүссэнтэй ба иргэний түлхүүрийн төрөлтэй тулгана
+   * (downgrade / alg confusion хаалт).
+   *
+   * CA-ийн бодит зан (ca-eidmongolia-mn `service/memory/crypto_wired.go` `messageHash`, `domain/enums.go`):
+   * RP-API session-ий гарын үсэг хоёр замаас л гарна — SplitKey RSA (`rsassa-pss` / `shaNNNWithRSAEncryption`,
+   * hash = хүсэлтийн `hashAlgorithm`) ба legacy threshold ECDSA P-256 (ҮРГЭЛЖ `ecdsa-with-SHA256`). ECDSA credential
+   * зөвхөн 32 байт digest зурдаг: session-ий hash SHA-256 биш бол сервер гарын үсэг гаргахгүй (session OK болохгүй).
+   * Иймд:
+   *   - hash нь ҮРГЭЛЖ хүссэнтэй яг тэнцүү — `ecdsa-with-SHA256` хариу SHA-384/512 хүссэн session-д ирвэл хуурамч;
+   *   - `ecdsa-with-SHA256` нь хүссэн `rsassa-pss`-ийн оронд ирж болно (credential-ийн төрөл), ГЭХДЭЭ зөвхөн
+   *     EC P-256 түлхүүртэй гэрчилгээнд; RSA алгоритмууд зөвхөн RSA түлхүүрт (alg confusion үгүй).
    */
-  private algorithmOf(result: SessionResult, wantAlg: string | null, wantHash: string): { alg: string; hash: string } {
+  private algorithmOf(
+    result: SessionResult,
+    leaf: X509Certificate,
+    wantAlg: string | null,
+    wantHash: string,
+  ): { alg: string; hash: string } {
     const alg = result.signatureAlgorithm ?? "";
+    const keyType = leaf.publicKey.asymmetricKeyType;
     let hash: string;
     if (alg === "rsassa-pss") {
       hash = String(result.signatureAlgorithmParameters?.hashAlgorithm ?? "");
+      if (!HASHES.has(hash)) throw new ValidationError(`Дэмжигдээгүй hashAlgorithm: ${hash}`);
       const mgf = result.signatureAlgorithmParameters?.maskGenAlgorithm?.parameters?.hashAlgorithm;
       if (mgf && mgf !== hash) throw new ValidationError("MGF1 hash нь hashAlgorithm-аас өөр");
       if (result.signatureAlgorithmParameters?.saltLength != null && result.signatureAlgorithmParameters.saltLength !== hashLen(hash)) {
         throw new ValidationError("saltLength ≠ hLen");
       }
+      if (keyType !== "rsa" && keyType !== "rsa-pss") throw new ValidationError(`${alg} нь ${keyType} түлхүүртэй таарахгүй`);
     } else if (/^sha(256|384|512)WithRSAEncryption$/.test(alg)) {
       hash = "SHA-" + alg.slice(3, 6);
+      if (keyType !== "rsa") throw new ValidationError(`${alg} нь ${keyType} түлхүүртэй таарахгүй`);
     } else if (alg === "ecdsa-with-SHA256") {
       hash = "SHA-256";
+      if (keyType !== "ec" || leaf.publicKey.asymmetricKeyDetails?.namedCurve !== "prime256v1") {
+        throw new ValidationError(`${alg} нь EC P-256 бус түлхүүртэй таарахгүй`);
+      }
+      if (wantHash !== hash) {
+        // CA ECDSA credential-аар SHA-256-аас өөр hash зурдаггүй — ийм хариу серверээс гарахгүй.
+        throw new ValidationError(`ecdsa-with-SHA256 хариу ${wantHash} хүссэн session-д боломжгүй (ECDSA credential зөвхөн SHA-256)`);
+      }
     } else {
       throw new ValidationError(`Дэмжигдээгүй signatureAlgorithm: ${alg}`);
     }
@@ -429,6 +461,8 @@ function ecdsaP256VerifyPrehashed(digest: Buffer, sig: Buffer, key: KeyObject): 
   const R = ptAdd(ptMul(mod(z * w, n), [P256.gx, P256.gy]), ptMul(mod(r * w, n), Q));
   return R !== null && mod(R[0], n) === r;
 }
+
+const HASHES = new Set(["SHA-256", "SHA-384", "SHA-512"]);
 
 /** PKCS#1 v1.5 DigestInfo DER угтвар (RFC 8017 §9.2). */
 const DIGEST_INFO: Record<string, Buffer> = {

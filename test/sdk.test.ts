@@ -33,6 +33,7 @@ import {
   buildDeviceLink,
   qrDeviceLinkTicker,
   ON_BEHALF_ERROR_CODES,
+  parseSubject,
 } from "../dist/index.js";
 import * as browser from "../dist/browser.js";
 
@@ -740,4 +741,133 @@ test("parseSessionResult — pdf блок (signer.onBehalfOf / claimedRole, FAIL
   assert.equal(failed.pdf?.errorCode, "REPRESENTATION_REVOKED");
   assert.equal(failed.pdf?.signer, undefined);
   assert.equal(parseSessionResult({ state: "RUNNING" }).pdf, null);
+});
+
+// ── demo-гийн дутагдлууд (0.9.0) ──
+
+/** openssl-ээр түр self-signed cert (UTF-8 subject). keyArgs: ["-newkey","rsa:2048"] эсвэл EC. */
+function mkCert(subj: string, keyArgs: string[]) {
+  const dir = mkdtempSync(join(tmpdir(), "eid-sdk-"));
+  try {
+    execFileSync("openssl", [
+      "req", "-x509", ...keyArgs, "-nodes", "-days", "2", "-utf8",
+      "-keyout", join(dir, "k.pem"), "-out", join(dir, "c.pem"), "-subj", subj,
+    ], { stdio: "ignore" });
+    return { key: readFileSync(join(dir, "k.pem"), "utf8"), cert: new X509Certificate(readFileSync(join(dir, "c.pem"))) };
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+const CITIZEN_SUBJ = "/C=MN/SN=Бат/GN=Болд/serialNumber=PNOMN-12345678/CN=БОЛД Бат";
+const EC = mkCert(CITIZEN_SUBJ, ["-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256"]);
+const RSA_CITIZEN = mkCert(CITIZEN_SUBJ, ["-newkey", "rsa:2048"]);
+
+test("parseSubject — UTF8String (кирилл) + PrintableString; X509Certificate / DER / base64", () => {
+  const s = parseSubject(RSA_CITIZEN.cert);
+  assert.equal(s.givenName, "Болд");
+  assert.equal(s.surname, "Бат");
+  assert.equal(s.commonName, "БОЛД Бат");
+  assert.equal(s.serialNumber, "PNOMN-12345678");
+  assert.equal(s.country, "MN");
+  assert.equal(s.name, "Болд Бат");
+  assert.equal(s.attributes["2.5.4.5"], "PNOMN-12345678");
+  assert.deepEqual(parseSubject(RSA_CITIZEN.cert.raw), s);
+  assert.deepEqual(parseSubject(RSA_CITIZEN.cert.raw.toString("base64")), s);
+  // GN/SN байхгүй → CN; огт байхгүй → null
+  assert.equal(parseSubject(FIX.cert).name, "TEST");
+  assert.equal(parseSubject(FIX.cert).givenName, undefined);
+});
+
+test("parseSubject — гэмтсэн/таслагдсан DER → ValidationError (crash биш)", () => {
+  const raw = RSA_CITIZEN.cert.raw;
+  for (const bad of [new Uint8Array(0), new Uint8Array([0x30]), raw.subarray(0, 40), new Uint8Array([0x30, 0x84, 0xff, 0xff, 0xff, 0xff])]) {
+    assert.throws(() => parseSubject(bad), ValidationError);
+  }
+});
+
+/** ACSP_V2 auth хариу — дурын түлхүүр/алгоритмаар (ECDSA/alg confusion тест). */
+function authWith(o: { key: string; cert: X509Certificate; alg: string; reqHash: "SHA-256" | "SHA-512"; signHash: string; rsaPkcs1?: boolean }) {
+  const acsp = {
+    rpChallenge: randomChallenge(), relyingPartyName: "DEMO", brokeredRpName: "", interactions: SMART_ID_VECTOR.interactions,
+    initialCallbackUrl: "", flowTypes: ["QR"], signatureAlgorithm: "rsassa-pss", hashAlgorithm: o.reqHash,
+  } as const;
+  const userChallenge = userChallengeOf(VERIFIER);
+  const serverRandom = SMART_ID_VECTOR.serverRandom;
+  const payload = buildAcspV2Payload({
+    serverRandom, rpChallenge: acsp.rpChallenge, userChallenge, relyingPartyName: "DEMO", brokeredRpName: "",
+    interactions: acsp.interactions, interactionTypeUsed: "displayTextAndPIN", initialCallbackUrl: "", flowType: "QR",
+  });
+  const sig = o.rsaPkcs1
+    ? cryptoSign(o.signHash, payload, { key: o.key, padding: constants.RSA_PKCS1_PADDING })
+    : cryptoSign(o.signHash, payload, { key: o.key, dsaEncoding: "der" });
+  const result = parseSessionResult({
+    state: "COMPLETE", result: { endResult: "OK", documentNumber: "PNOMN-TEST" }, signatureProtocol: "ACSP_V2",
+    interactionTypeUsed: "displayTextAndPIN",
+    signature: { value: sig.toString("base64"), serverRandom, userChallenge, flowType: "QR", initialCallbackUrl: "", signatureAlgorithm: o.alg },
+    cert: { value: o.cert.raw.toString("base64"), certificateLevel: "QUALIFIED" },
+  });
+  return { result, acsp: acsp as unknown as Parameters<ResponseValidator["validateAuth"]>[1] };
+}
+
+test("validateAuth — ECDSA P-256 (legacy threshold): SHA-256 session-д OK + parsedSubject", () => {
+  const { result, acsp } = authWith({ ...EC, alg: "ecdsa-with-SHA256", reqHash: "SHA-256", signHash: "sha256" });
+  const who = V.validateAuth(result, acsp, { expectedFlowType: "QR" });
+  assert.equal(who.parsedSubject.serialNumber, "PNOMN-12345678");
+  assert.equal(who.parsedSubject.name, "Болд Бат");
+});
+
+test("validateAuth — ECDSA хариу SHA-512 session-д: сервер гаргадаггүй тул татгалзана (hash downgrade)", () => {
+  const { result, acsp } = authWith({ ...EC, alg: "ecdsa-with-SHA256", reqHash: "SHA-512", signHash: "sha256" });
+  assert.throws(() => V.validateAuth(result, acsp), (e: unknown) => e instanceof ValidationError && /зөвхөн SHA-256/.test(e.message));
+});
+
+test("validateAuth — alg confusion: RSA cert + ecdsa-with-SHA256, EC cert + RSA alg → татгалзана", () => {
+  // RSA PKCS#1 v1.5 SHA-256 гарын үсгийг «ecdsa» гэж мэдүүлбэл node verify RSA-аар зөвшөөрөх байсан.
+  const rsaAsEc = authWith({ ...RSA_CITIZEN, alg: "ecdsa-with-SHA256", reqHash: "SHA-256", signHash: "sha256", rsaPkcs1: true });
+  assert.throws(() => V.validateAuth(rsaAsEc.result, rsaAsEc.acsp), (e: unknown) => e instanceof ValidationError && /EC P-256/.test(e.message));
+  const ecAsRsa = authWith({ ...EC, alg: "rsassa-pss", reqHash: "SHA-256", signHash: "sha256" });
+  ecAsRsa.result.signatureAlgorithmParameters = { hashAlgorithm: "SHA-256" };
+  assert.throws(() => V.validateAuth(ecAsRsa.result, ecAsRsa.acsp), (e: unknown) => e instanceof ValidationError && /түлхүүртэй/.test(e.message));
+});
+
+test("validateSign — parsedSubject нэмэгдсэн; ECDSA prehashed SHA-256", () => {
+  const digest = createHash("sha256").update("баримт").digest();
+  const sig = cryptoSign("sha256", Buffer.from("баримт"), { key: EC.key, dsaEncoding: "der" });
+  const result = parseSessionResult({
+    state: "COMPLETE", result: { endResult: "OK", documentNumber: "PNOMN-TEST" }, signatureProtocol: "RAW_DIGEST_SIGNATURE",
+    signature: { value: sig.toString("base64"), signatureAlgorithm: "ecdsa-with-SHA256" },
+    cert: { value: EC.cert.raw.toString("base64"), certificateLevel: "QUALIFIED" },
+  });
+  const v = V.validateSign(result, digest.toString("base64"));
+  assert.equal(v.parsedSubject.givenName, "Болд");
+  assert.throws(() => V.validateSign(result, createHash("sha512").update("x").digest("base64"), "SHA-512"), ValidationError);
+});
+
+const pdfClient = (body: unknown) =>
+  new EidClient({ credentials: CREDS, fetchImpl: async () => new Response(JSON.stringify(body), { status: 200 }) });
+const PDF_IN = { pdf: new TextEncoder().encode("%PDF"), fileName: "a.pdf", signer: { etsi: "PNOMN-1" } } as const;
+
+test("pdf.prepare — digest (DTBS): push-д дээд түвшний digest; device-link-д deviceLink.digest; хуучин CA → undefined", async () => {
+  const push = await pdfClient({ sessionID: "s", docID: "d", vc: { value: "12345" }, digest: "REVOREI=" }).pdf.prepare(PDF_IN);
+  assert.equal(push.digest, "REVOREI=");
+  assert.equal(push.deviceLink, null);
+  const dl = await pdfClient({
+    sessionID: "s", docID: "d", vc: { value: "12345" },
+    deviceLink: { sessionToken: "t", sessionSecret: "x", deviceLinkBase: "https://ca.eidmongolia.mn/dl", digest: "ZA==", interactions: "W10=" },
+  }).pdf.prepare({ ...PDF_IN, flow: "device-link" });
+  assert.equal(dl.digest, "ZA==");
+  const old = await pdfClient({ sessionID: "s", docID: "d", vc: { value: "12345" } }).pdf.prepare(PDF_IN);
+  assert.equal(old.digest, undefined);
+  assert.equal("digest" in old, false);
+});
+
+test("pdf.documentVerified — outSha256 таарвал байт; зөрвөл / READY биш / hash алга → ValidationError", async () => {
+  const bytes = new TextEncoder().encode("%PDF-1.7 signed");
+  const sha = createHash("sha256").update(bytes).digest("hex");
+  const eid = new EidClient({ credentials: CREDS, fetchImpl: async () => new Response(bytes, { status: 200 }) });
+  assert.deepEqual(await eid.pdf.documentVerified("s", { docID: "d", documentStatus: "READY", outSha256: sha }), bytes);
+  assert.deepEqual(await eid.pdf.documentVerified("s", sha.toUpperCase()), bytes);
+  await assert.rejects(() => eid.pdf.documentVerified("s", { docID: "d", documentStatus: "READY", outSha256: "0".repeat(64) }), ValidationError);
+  await assert.rejects(() => eid.pdf.documentVerified("s", { docID: "d", documentStatus: "PENDING", outSha256: sha }), ValidationError);
+  await assert.rejects(() => eid.pdf.documentVerified("s", { docID: "d", documentStatus: "READY" }), ValidationError);
 });
