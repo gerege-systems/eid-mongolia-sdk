@@ -113,6 +113,7 @@ export class AuthApi {
       rpChallenge: acsp.rpChallenge,
       acsp,
       receivedAt: Date.now(),
+      sessionType: "auth",
     };
   }
 

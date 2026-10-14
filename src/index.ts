@@ -3,7 +3,7 @@
 export { EidClient, DEFAULT_BASE_URL, resolveBaseUrl, type ClientConfig } from "./client.js";
 export { Http, type HttpConfig } from "./http.js";
 export { AuthApi, type AuthOptions, type AuthDefaults } from "./auth.js";
-export { SignApi, type SignOptions, type SignDefaults } from "./sign.js";
+export { SignApi, type SignOptions, type SignDefaults, type CertChoiceOptions, type SignerRef } from "./sign.js";
 export { SessionApi, parseSessionResult, personMatchesCertificate } from "./session.js";
 export {
   PdfApi,
@@ -54,6 +54,7 @@ export {
   type VerifiedSignature,
   type ValidateAuthOptions,
   type ValidateSignOptions,
+  type Signer,
   type RevocationChecker,
   type RevocationStatus,
   type RevocationOutcome,
@@ -81,6 +82,7 @@ export {
 } from "./devicelink.js";
 export {
   buildDeviceLink,
+  deviceLinkInput,
   qrDeviceLinkTicker,
   type BuildDeviceLinkInput,
   type DeviceLinkType,
@@ -119,6 +121,7 @@ export {
   type RetryableErrorCode,
   type HttpErrorInit,
 } from "./errors.js";
+export { DEFAULT_SIGN_SESSION_TTL_MS, sessionExpiry } from "./types.js";
 export type {
   CertificateLevel,
   SignatureProtocol,
@@ -132,6 +135,7 @@ export type {
   EndResult,
   NotificationSession,
   DeviceLinkSession,
+  SignContext,
   SessionResult,
   RpCredentials,
   OrgResult,

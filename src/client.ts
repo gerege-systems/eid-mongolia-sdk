@@ -1,6 +1,6 @@
 // EidClient — SDK-ийн гол үүд. Бүх flow-г нэг газар цуглуулна:
 //   client.auth      — нэвтрэлт эхлүүлэх (push/QR)
-//   client.sign      — гарын үсэг эхлүүлэх (digest)
+//   client.sign      — гарын үсэг эхлүүлэх (digest; push / device link) ба гэрчилгээ сонгуулах (certificate-choice)
 //   client.pdf       — PDF гарын үсэг (PAdES, CA угсарна; onBehalfOf)
 //   client.organization — иргэний төлөөлөх байгууллагууд
 //   client.person    — иргэний PKI самбар (PKI_READ): гэрчилгээ, төхөөрөмж, үйл ажиллагаа, тоо, хүүхдүүд
@@ -58,6 +58,12 @@ export interface ClientConfig {
    * Анхдагч: илгээхгүй (сервер mn).
    */
   language?: string;
+  /**
+   * Sign / certificate-choice session-ий `expiresAt`-ийг тооцоолох хугацаа (мс). Анхдагч 600000
+   * ({@link DEFAULT_SIGN_SESSION_TTL_MS}, CA-ийн анхдагч); CA-ийн админ тохиргоог өөрчилсөн бол тааруул. CA session start
+   * хариунд хугацаа буцаадаггүй.
+   */
+  signSessionTtlMs?: number;
   /** Trust anchor (Root CA) — validator-д. Production-д ЗААВАЛ. */
   trust?: TrustConfig;
 }
@@ -113,7 +119,7 @@ export class EidClient {
     const level: CertificateLevel = cfg.defaultCertificateLevel ?? "QUALIFIED";
 
     this.auth = new AuthApi(http, cfg.credentials, { certificateLevel: level });
-    this.sign = new SignApi(http, cfg.credentials, { certificateLevel: level });
+    this.sign = new SignApi(http, cfg.credentials, { certificateLevel: level, sessionTtlMs: cfg.signSessionTtlMs });
     this.pdf = new PdfApi(http, cfg.credentials, {
       certificateLevel: level,
       timeoutMs: cfg.pdfTimeoutMs ?? DEFAULT_PDF_TIMEOUT_MS,
