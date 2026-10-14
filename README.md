@@ -182,6 +182,16 @@ const sig = eid.validator.validateSign(result, digest); // digest-ийн эср�
 console.log(sig.signatureValueB64, sig.subject);
 ```
 
+Device-link / push-оор эхлүүлсэн sign session-д эхлүүлсэн урсгалаа `expectedFlowType`-оор тулга (`validateAuth`-тай
+ижил: зөрвөл `ValidationError`). Гуравдах параметр нь `hashAlgorithm` мөр (хуучин хэлбэр) эсвэл объект:
+
+```ts
+eid.validator.validateSign(result, digest, { expectedFlowType: "QR" }); // эсвэл "Web2App" / "App2App" / "Notification"
+eid.validator.validateSign(result, digest384, { hashAlgorithm: "SHA-384", expectedFlowType: "Web2App" });
+```
+
+RAW_DIGEST_SIGNATURE-д `flowType` гарын үсэгт ордоггүй (зөвхөн digest зурагдана) — энэ нь RP-API хариуны тулгалт.
+
 ## 3a. Байгууллагын нэрийн өмнөөс гарын үсэг (onBehalfOf)
 
 Иргэн **өөрийн PIN2 гэрчилгээгээр** зурна; тухайн мөчид байгууллагыг төлөөлөх эрхтэйг eID **өөрийн бүртгэлээр**
@@ -224,7 +234,8 @@ try {
 ```
 
 `prepare`-ийн хариу `digest` (DTBS, base64) — иргэний зурах 32 байт, push ба device-link хоёуланд (хуучин CA push-д
-`undefined`). Иргэний гарын үсгийг өөрөө шалгах бол: `eid.validator.validateSign(r, s.digest!)`. Гарын үсэгтэй PDF-ийг
+`undefined`). Иргэний гарын үсгийг өөрөө шалгах бол: `eid.validator.validateSign(r, s.digest!, { expectedFlowType: "QR" })`
+(харуулсан урсгалаа). Гарын үсэгтэй PDF-ийг
 `pdf.document()`-ийн оронд `pdf.documentVerified(sessionId, r.pdf)`-аар тат — `READY` + `outSha256` тулгалтыг хийнэ.
 
 Олон талт гэрээ: А байгууллагын гаралтыг өөрчлөлтгүй Б-ийн `prepare`-д (`docID`, өөр `onBehalfOf`) илгээнэ.
@@ -327,7 +338,7 @@ OK ирж болзошгүй. Иймд `ResponseValidator`:
      `initialCallbackUrl`-ийг хариуны `signature.initialCallbackUrl`-аас авна (CA урсгалаар шийднэ: QR/Notification →
      `""`, Web2App/App2App → таны callback) — зөвхөн `""` эсвэл
      таны илгээсэн callback байхад, Web2App/App2App-д заавал таны callback; өөр утга → татгалзана
-   - **sign** → RP-ийн өгсөн digest дээр
+   - **sign** → RP-ийн өгсөн digest дээр; `expectedFlowType` өгвөл хариуны `flowType` ЯГ таарах (гарын үсэгт ордоггүй — хариуны тулгалт)
    - алгоритм нь гэрчилгээний түлхүүртэй уях: `ecdsa-with-SHA256` зөвхөн EC P-256 түлхүүрт, RSA алгоритмууд зөвхөн
      RSA түлхүүрт (alg confusion хаалт). Hash нь үргэлж хүссэнтэй ЯГ тэнцүү. RP-API session-ий гарын үсэг CA дээр
      SplitKey RSA (одоогийн бүх мобайл гэрчилгээ) эсвэл legacy threshold ECDSA P-256-аас гарна; ECDSA credential

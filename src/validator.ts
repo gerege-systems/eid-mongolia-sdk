@@ -43,6 +43,21 @@ export interface ValidateAuthOptions {
 }
 
 /**
+ * validateSign-ийн нэмэлт шалгалт. Гуравдах параметрт мөр (`hashAlgorithm`) эсвэл энэ объектыг өгнө.
+ */
+export interface ValidateSignOptions {
+  /** digest-ийг үүсгэсэн hash (хүсэлтэд илгээсэнтэй ижил; default SHA-256). */
+  hashAlgorithm?: string;
+  /**
+   * RP-ийн эхлүүлсэн урсгал (device-link: "QR" / "Web2App" / "App2App"; push → "Notification"). Өгвөл хариуны
+   * `flowType` ЯГ ИЖИЛ байх ёстой, эс бөгөөс `ValidationError` — validateAuth-ийн `expectedFlowType`-тэй ижил.
+   * ⚠️ RAW_DIGEST_SIGNATURE-д `flowType` гарын үсэгт ОРДОГГҮЙ (зөвхөн digest зурагдана) — энэ нь RP-API хариуны
+   * тулгалт, криптограф баталгаа биш.
+   */
+  expectedFlowType?: FlowType;
+}
+
+/**
  * RevocationChecker — иргэний cert revoke хийгдсэн эсэхийг шалгах hook (OCSP/CRL).
  * Сүлжээний I/O шаардсан тул async. RP нь cert доторх AIA (OCSP) / CDP (CRL) URL-аар
  * хэрэгжүүлнэ. "good" = хүчинтэй, "revoked" = цуцлагдсан, "unknown" = тогтоогдсонгүй.
@@ -176,10 +191,14 @@ export class ResponseValidator {
 
   /**
    * Sign session-ийн хариуг бүрэн шалгаж, баталгаажсан гарын үсгийг буцаана.
-   * @param hashAlgorithm — digest-ийг үүсгэсэн hash (хүсэлтэд илгээсэнтэй ижил; default SHA-256).
+   * @param opts — `hashAlgorithm` мөр (хуучин хэлбэр; default SHA-256) эсвэл {@link ValidateSignOptions}.
    */
-  validateSign(result: SessionResult, digestB64: string, hashAlgorithm = "SHA-256"): VerifiedSignature {
+  validateSign(result: SessionResult, digestB64: string, opts: string | ValidateSignOptions = {}): VerifiedSignature {
+    const { hashAlgorithm = "SHA-256", expectedFlowType } = typeof opts === "string" ? { hashAlgorithm: opts } : opts;
     const leaf = this.precheck(result, "RAW_DIGEST_SIGNATURE");
+    if (expectedFlowType && result.flowType !== expectedFlowType) {
+      throw new ValidationError(`flowType ${result.flowType} ≠ эхлүүлсэн урсгал ${expectedFlowType} (relay байж болзошгүй)`);
+    }
     const digest = Buffer.from(digestB64, "base64");
     const { alg, hash } = this.algorithmOf(result, leaf, null, hashAlgorithm);
     if (digest.length !== hashLen(hash)) throw new ValidationError("digest урт hashAlgorithm-тай таарахгүй");
