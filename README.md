@@ -40,7 +40,24 @@ native апп дангаараа token endpoint-ийг дуудаж чадахг
 **Бүртгэл.** `client_id` = таны RP UUID (`relyingPartyUUID`), `client_secret` = RP API secret (`rp_sk_…`).
 RP-д `AUTH` эрх, OIDC асаалттай, `redirect_uri` (https, ≤ 10) бүртгэлтэй байна — authorize/token-ий `redirect_uri`
 бүртгэлтэйтэй **тэмдэгт бүрээрээ** таарах ёстой. Иргэний ETSI дугаар (`pnomn` claim) хэрэгтэй бол `PNOMN` эрх
-хүсэж, `scope: "openid pnomn"`. Token endpoint-д RP-ийн IP allowlist мөрдөгдөнө; `requireMtls` RP OIDC ашиглахгүй.
+хүсэж, `scope: "openid pnomn"`. Token endpoint-д RP-ийн IP allowlist мөрдөгдөнө.
+
+**mTLS-тэй RP (`require_mtls`).** `login.` хост mTLS хийдэггүй тул ийм RP-ийн code солих хүсэлт
+`login.eidmongolia.mn/oauth2/token` дээр `401 invalid_client` авна. Discovery-ийн `mtls_endpoint_aliases.token_endpoint`
+(RFC 8705 §5, `https://rp.eidmongolia.mn/oauth2/token`) руу RP-API-д хэрэглэдэг **ижил client cert**-ээр явуулна:
+`useMtlsEndpointAliases: true` + `dispatcher` (RP-API client-ийнхтэй ижил undici `Agent`). Discovery-д alias байхгүй
+бол `token_endpoint` руу буцна; alias https биш бол `discovery_failed`. mTLS-гүй RP флаг тавихгүй.
+
+```ts
+import { Agent } from "undici";
+const oidc = new EidOidcClient({
+  clientId: process.env.EID_RP_UUID!,
+  clientSecret: process.env.EID_SECRET!,
+  redirectUri: "https://bank.example.mn/auth/eid/callback",
+  dispatcher: new Agent({ connect: { cert: clientCertPem, key: clientKeyPem } }), // RP-API-ийн cert
+  useMtlsEndpointAliases: true, // token → https://rp.eidmongolia.mn/oauth2/token
+});
+```
 
 ```ts
 import { EidOidcClient, EidOidcError } from "@gerege-systems/eid-mongolia-sdk";
