@@ -150,7 +150,9 @@ test("desktop: ачаалж байна → QR (svg) + VC + алхмууд → OK
   assert.equal(dlg.getAttribute("aria-modal"), "true");
   assert.match(text(), /Ачаалж байна/);
   await until(() => !!sr.querySelector(".qr svg path"));
-  assert.match(text(), /Утсан дээрх код: 12345/);
+  assert.match(text(), /Баталгаажуулах код/);
+  assert.equal(sr.querySelector(".qr-vc .vc")!.textContent, "12345");
+  assert.match(sr.querySelector(".meta")!.textContent!, /^Хүсэлтийн хугацаа: \d:\d\d$/);
   assert.match(text(), /PIN1 кодоо оруулна/);
   assert.deepEqual(requests[0], { url: "/auth/eid/start", method: "POST", body: { mode: "qr", lang: "mn" } });
   await until(() => navs.length > 0, 5000);
@@ -194,13 +196,80 @@ test("push: регистр шалгалт (латин, хоосон) → илг�
   input.value = "уб 12345678";
   statusReplies = [{ state: "FAILED", error: "USER_REFUSED_DISPLAYTEXTANDPIN" }];
   form.dispatchEvent(new (dom.window.Event)("submit", { cancelable: true }));
-  await until(() => !!sr.querySelector(".vc"));
+  await until(() => !sr.querySelector(".qr"));
   assert.equal(sr.querySelector(".vc")!.textContent, "54321");
+  assert.match(sr.querySelector(".meta")!.textContent!, /^Хүсэлтийн хугацаа: \d:\d\d$/);
   assert.deepEqual(requests.find((r) => (r.body as { mode?: string })?.mode === "push")!.body, { mode: "push", idCode: "УБ12345678", lang: "mn" });
   await until(() => /татгалзсан/.test(text()), 5000);
   assert.deepEqual(errs, ["USER_REFUSED_DISPLAYTEXTANDPIN"]);
   assert.ok(sr.querySelector(".end button"), "дахин оролдох товч");
   b.close();
+});
+
+test("push хэсэг: «Регистрийн дугаараар нэвтрэх» товч → ижил цонхонд дэлгэгдэнэ (aria-expanded, focus input) → дахин дарахад хураагдана; QR хэвээр", async () => {
+  startReplies = [{ status: 200, body: { mode: "qr", qr: QR, vc: "12345", expiresIn: 120 } }];
+  const { sr, b } = make();
+  (sr.querySelector("button.trigger") as HTMLButtonElement).click();
+  await until(() => !!sr.querySelector(".disc-btn"));
+  const toggle = sr.querySelector(".disc-btn") as HTMLButtonElement;
+  const disc = sr.getElementById("eid-push")!;
+  const inner = disc.firstElementChild!;
+  assert.equal(toggle.textContent, "Регистрийн дугаараар нэвтрэх");
+  assert.equal(toggle.getAttribute("aria-controls"), "eid-push");
+  assert.equal(toggle.getAttribute("aria-expanded"), "false");
+  assert.ok(inner.hasAttribute("inert"), "хураасан үед input-д focus очихгүй");
+  assert.ok(!disc.classList.contains("open"));
+  toggle.click();
+  assert.equal(toggle.getAttribute("aria-expanded"), "true");
+  assert.ok(disc.classList.contains("open"));
+  assert.ok(!inner.hasAttribute("inert"));
+  assert.equal(sr.activeElement, sr.querySelector("#eid-id"));
+  assert.ok(sr.querySelector(".qr svg path"), "QR харагдсаар");
+  assert.equal(sr.querySelector(".qr-vc .vc")!.textContent, "12345");
+  toggle.click();
+  assert.equal(toggle.getAttribute("aria-expanded"), "false");
+  assert.ok(!disc.classList.contains("open"));
+  assert.ok(inner.hasAttribute("inert"));
+  const css = sr.querySelector("style:not([data-eid-theme])")!.textContent ?? "";
+  assert.match(css, /\.disc \{[^}]*transition: grid-template-rows/);
+  assert.match(css, /prefers-reduced-motion: reduce\) \{ \*, \*::before, \*::after \{ transition: none !important; \}/);
+  b.setAttribute("lang", "en");
+  b.close();
+  startReplies = [{ status: 200, body: { mode: "qr", qr: QR, vc: "1", expiresIn: 120 } }];
+  (sr.querySelector("button.trigger") as HTMLButtonElement).click();
+  await until(() => !!sr.querySelector(".disc-btn"));
+  assert.equal(sr.querySelector(".disc-btn")!.textContent, "Log in with registration number");
+  b.close();
+});
+
+test("countdown: VC-ийн доор m:ss; минут тутам л зарлана; сүүлийн 30с анхааруулах өнгө", async () => {
+  startReplies = [{ status: 200, body: { mode: "qr", qr: QR, vc: "12345", expiresIn: 61 } }];
+  statusReplies = Array.from({ length: 10 }, () => ({ state: "PENDING", qr: QR }));
+  let m = make();
+  m.click();
+  await until(() => !!m.sr.querySelector(".qr-vc"));
+  const meta = () => m.sr.querySelector(".meta") as HTMLElement;
+  assert.equal(m.sr.querySelector(".qr-vc")!.nextElementSibling, meta(), "countdown VC-ийн шууд доор");
+  assert.equal(meta().textContent, "Хүсэлтийн хугацаа: 1:01");
+  assert.equal(meta().querySelector('[role="timer"]')!.getAttribute("aria-live"), "off");
+  const live = () => m.sr.querySelector('[aria-live="polite"]')!.textContent;
+  assert.equal(live(), "", "эхэнд зарлахгүй");
+  await until(() => /1:00$/.test(meta().textContent!), 2500);
+  assert.equal(live(), "1 минут үлдлээ");
+  assert.ok(!meta().classList.contains("low"));
+  m.b.close();
+
+  startReplies = [{ status: 200, body: { mode: "qr", qr: QR, vc: "1", expiresIn: 31 } }];
+  m = make({ lang: "en" });
+  m.click();
+  await until(() => !!m.sr.querySelector(".meta"));
+  assert.equal(meta().textContent, "Request expires in: 0:31");
+  assert.ok(!meta().classList.contains("low"));
+  await until(() => /0:30$/.test(meta().textContent!), 2500);
+  assert.ok(meta().classList.contains("low"), "≤30с → --eid-warning-fg");
+  const css = m.sr.querySelector("style:not([data-eid-theme])")!.textContent ?? "";
+  assert.match(css, /\.meta\.low, \.meta\.low \.mono \{ color: var\(--_eid-warning-fg\); \}/);
+  m.b.close();
 });
 
 test("push 429 → алдааны мессеж (цонх хэвээр)", async () => {
@@ -262,7 +331,7 @@ test("Esc цонхыг хааж, poll зогсоно; Tab focus цонхонд �
   click();
   await until(() => !!sr.querySelector("form"));
   const dlg = sr.querySelector(".backdrop")!;
-  const focusables = Array.from(dlg.querySelectorAll<HTMLElement>("button:not([disabled]), input")).filter((n) => !n.closest("[hidden]"));
+  const focusables = Array.from(dlg.querySelectorAll<HTMLElement>("button:not([disabled]), input")).filter((n) => !n.closest("[hidden], [inert]"));
   focusables.at(-1)!.focus();
   dlg.dispatchEvent(new (dom.window.KeyboardEvent)("keydown", { key: "Tab", bubbles: true, cancelable: true }));
   assert.equal(sr.activeElement, focusables[0]);

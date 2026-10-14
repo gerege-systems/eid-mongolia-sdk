@@ -3,7 +3,7 @@
 //   <eid-login-button start-url="/auth/eid/start" status-url="/auth/eid/status" lang="mn"></eid-login-button>
 //
 // Backend нь `createEidLogin` (эсвэл Go `eidlogin.Handler`). Товч дарахад:
-//   • desktop  → цонх (modal): QR (секунд тутам шинэчлэгдэнэ) + «регистрийн дугаараар утас руу мэдэгдэл», шууд төлөв;
+//   • desktop  → цонх (modal): QR (секунд тутам шинэчлэгдэнэ) + «Регистрийн дугаараар нэвтрэх» товч (ижил цонхонд дэлгэгдэх push хэсэг), шууд төлөв;
 //   • утасны хөтөч → `start-url?mode=web2app` руу шилжинэ (сервер 302 → eID апп; апп буцаахад backend callback дуусгана).
 // Амжилттай бол `eid-login-success` (detail = backend-ийн {state, redirect, data}) — preventDefault хийгээгүй бол
 // `redirect` (эсвэл `success-url`) руу шилжинэ. Алдаа: `eid-login-error` (detail = {error}).
@@ -23,8 +23,9 @@ const T = {
     loading: "Ачаалж байна",
     qrAlt: "Нэвтрэх QR код — утсан дээрх eID Mongolia аппаар уншуулна",
     steps: ["Утсан дээрх eID Mongolia аппыг нээнэ", "QR кодыг уншуулна", "PIN1 кодоо оруулна"],
-    code: "Утсан дээрх код:",
+    vcLabel: "Баталгаажуулах код",
     or: "эсвэл",
+    usePush: "Регистрийн дугаараар нэвтрэх",
     idLabel: "Регистрийн дугаар",
     idHint: "Утсанд тань мэдэгдэл очно. Иргэний 12 оронтой дугаараар ч болно.",
     idEmpty: "Регистрийн дугаар оруулна уу",
@@ -37,7 +38,7 @@ const T = {
     waitText: "Утсан дээрх код ижил бол PIN1 оруулна уу. Ижил биш бол татгалзана уу.",
     waiting: "Хүлээж байна",
     back: "Буцах",
-    left: "Үлдсэн хугацаа",
+    left: "Хүсэлтийн хугацаа:",
     stale: "QR код хуучирсан",
     refresh: "Шинэчлэх",
     offline: "Холболт тасарсан. Интернэтээ шалгана уу — дахин холбогдохыг оролдож байна.",
@@ -51,7 +52,7 @@ const T = {
     retry: "Дахин оролдох",
     success: "Амжилттай нэвтэрлээ",
     sent: (vc: string) => `Мэдэгдэл илгээлээ. Утсан дээрх код ${vc.split("").join(" ")}`,
-    minute: "1 минут үлдлээ",
+    minutes: (n: number) => `${n} минут үлдлээ`,
   },
   en: {
     button: "Log in with eID",
@@ -60,8 +61,9 @@ const T = {
     loading: "Loading",
     qrAlt: "Login QR code — scan it with the eID Mongolia app on your phone",
     steps: ["Open the eID Mongolia app on your phone", "Scan the QR code", "Enter your PIN1"],
-    code: "Code on your phone:",
+    vcLabel: "Verification code",
     or: "or",
+    usePush: "Log in with registration number",
     idLabel: "Registration number",
     idHint: "A notification will be sent to your phone. The 12-digit civil ID also works.",
     idEmpty: "Enter your registration number",
@@ -74,7 +76,7 @@ const T = {
     waitText: "If the code on your phone matches, enter PIN1. Otherwise decline.",
     waiting: "Waiting",
     back: "Back",
-    left: "Time left",
+    left: "Request expires in:",
     stale: "QR code expired",
     refresh: "Refresh",
     offline: "Connection lost. Check your internet — reconnecting.",
@@ -88,7 +90,7 @@ const T = {
     retry: "Try again",
     success: "Logged in",
     sent: (vc: string) => `Notification sent. Code on your phone ${vc.split("").join(" ")}`,
-    minute: "1 minute left",
+    minutes: (n: number) => `${n} minute${n === 1 ? "" : "s"} left`,
   },
 } as const;
 
@@ -191,7 +193,8 @@ h2, p, ol { margin: 0; }
 .qr.stale svg { opacity: 0.12; }
 .qr-stale { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px;
   color: hsl(222 47% 11%); font-weight: 500; }
-.qr-vc { margin-top: 8px; text-align: center; font-size: 0.8125rem; color: var(--_eid-fg-subtle); }
+.qr-vc { margin-top: 12px; text-align: center; }
+.vc-label { font-size: 0.8125rem; color: var(--_eid-fg-subtle); }
 .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-variant-numeric: tabular-nums; letter-spacing: 0.08em; color: var(--_eid-fg-muted); }
 .steps { margin-top: 16px; padding: 0; list-style: none; counter-reset: st; display: grid; gap: 8px; }
 .steps li { counter-increment: st; display: flex; align-items: center; gap: 12px; }
@@ -199,6 +202,13 @@ h2, p, ol { margin: 0; }
   color: var(--_eid-accent-subtle-fg); display: flex; align-items: center; justify-content: center; font-size: 0.75rem; font-weight: 600; }
 .or { display: flex; align-items: center; gap: 12px; margin: 24px 0; color: var(--_eid-fg-subtle); font-size: 0.8125rem; }
 .or::before, .or::after { content: ""; flex: 1; height: 1px; background: var(--_eid-border); }
+.disc-btn .chev { width: 16px; height: 16px; flex: none; transition: transform 200ms cubic-bezier(0,0,0.2,1); }
+.disc-btn[aria-expanded="true"] .chev { transform: rotate(180deg); }
+.disc { margin: 0 -4px; display: grid; grid-template-rows: 0fr; transition: grid-template-rows 200ms cubic-bezier(0,0,0.2,1); }
+.disc.open { grid-template-rows: 1fr; }
+.disc > div { min-height: 0; overflow: hidden; visibility: hidden; transition: visibility 0s linear 200ms; }
+.disc.open > div { visibility: visible; transition-delay: 0s; }
+.disc form { padding: 16px 4px 4px; }
 .field { display: grid; gap: 8px; }
 .field label { font-weight: 500; }
 .field input { width: 100%; height: 44px; padding: 0 12px; border: 1px solid var(--_eid-border-strong); border-radius: var(--_eid-radius);
@@ -209,7 +219,8 @@ h2, p, ol { margin: 0; }
 .err { font-size: 0.8125rem; color: var(--_eid-danger-fg); font-weight: 500; }
 .push { margin-top: 16px; }
 .center { text-align: center; }
-.vc { font: 600 2.25rem/2.5rem ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: 0.16em; padding-left: 0.16em; }
+.vc { font: 700 2rem/2.5rem ui-monospace, SFMono-Regular, Menlo, monospace; font-variant-numeric: tabular-nums; letter-spacing: 0.16em;
+  padding-left: 0.16em; color: var(--_eid-fg); }
 .vc:focus, h2:focus { outline: none; }
 .text { margin-top: 12px; color: var(--_eid-fg-muted); }
 .pending { margin-top: 16px; display: inline-flex; align-items: center; gap: 8px; color: var(--_eid-fg-muted); }
@@ -218,7 +229,8 @@ h2, p, ol { margin: 0; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .netwarn { margin-top: 16px; padding: 8px 12px; border: 1px solid var(--_eid-warning-border); border-radius: var(--_eid-radius); background: var(--_eid-warning-bg);
   color: var(--_eid-warning-fg); font-size: 0.8125rem; }
-.meta { margin-top: 16px; font-size: 0.8125rem; color: var(--_eid-fg-subtle); }
+.meta { margin-top: 4px; text-align: center; font-size: 0.8125rem; color: var(--_eid-fg-subtle); }
+.meta.low, .meta.low .mono { color: var(--_eid-warning-fg); }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; }
   .spinner { animation: none; border-right-color: currentColor; opacity: 0.6; } }
 `;
@@ -247,6 +259,18 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, attrs: Record<string,
   for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
   if (text != null) e.textContent = text;
   return e;
+}
+
+/** Доош заасан сум (lucide chevron-down) — дэлгэгдэх товчинд. */
+function chevron(): SVGSVGElement {
+  const NS = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(NS, "svg");
+  for (const [k, v] of Object.entries({ class: "chev", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", "stroke-width": "2",
+    "stroke-linecap": "round", "stroke-linejoin": "round", "aria-hidden": "true" })) svg.setAttribute(k, v);
+  const path = document.createElementNS(NS, "path");
+  path.setAttribute("d", "m6 9 6 6 6-6");
+  svg.append(path);
+  return svg;
 }
 
 const Base: typeof HTMLElement = typeof HTMLElement === "undefined" ? (class {} as unknown as typeof HTMLElement) : HTMLElement;
@@ -394,7 +418,7 @@ export class EidLoginButton extends Base {
       return;
     }
     if (e.key !== "Tab" || !this.backdrop) return;
-    const items = Array.from(this.backdrop.querySelectorAll<HTMLElement>(FOCUSABLE)).filter((n) => !n.closest("[hidden]"));
+    const items = Array.from(this.backdrop.querySelectorAll<HTMLElement>(FOCUSABLE)).filter((n) => !n.closest("[hidden], [inert]"));
     if (items.length === 0) return;
     const first = items[0]!;
     const last = items[items.length - 1]!;
@@ -483,15 +507,16 @@ export class EidLoginButton extends Base {
     if (s.qr) this.drawQr(s.qr);
     const nodes: Node[] = [this.qrBox];
     if (s.vc) {
-      const vc = el("p", { class: "qr-vc" }, t.code + " ");
-      vc.append(el("span", { class: "mono" }, s.vc));
+      const vc = el("div", { class: "qr-vc" });
+      vc.append(el("p", { class: "vc-label", id: "eid-vc-label" }, t.vcLabel), el("p", { class: "vc" }, s.vc));
       nodes.push(vc);
     }
+    nodes.push(this.meta());
     const steps = el("ol", { class: "steps" });
     for (const st of t.steps) steps.append(el("li", {}, st));
-    nodes.push(steps, el("div", { class: "or", role: "separator", "aria-label": t.or }, t.or), this.pushForm());
+    nodes.push(steps, el("div", { class: "or", role: "separator", "aria-label": t.or }, t.or), ...this.pushToggle());
     this.netwarn = el("p", { class: "netwarn", role: "status", hidden: "" }, t.offline);
-    nodes.push(this.netwarn, this.meta());
+    nodes.push(this.netwarn);
     this.view(...nodes);
   }
 
@@ -499,7 +524,7 @@ export class EidLoginButton extends Base {
 
   private meta(): HTMLElement {
     const p = el("p", { class: "meta" }, this.t.left + " ");
-    this.leftEl = el("span", { class: "mono", role: "timer", "aria-live": "off" }, "--:--");
+    this.leftEl = el("span", { class: "mono", role: "timer", "aria-live": "off" }, "-:--");
     p.append(this.leftEl);
     if (this.left < 0) p.hidden = true;
     return p;
@@ -513,8 +538,10 @@ export class EidLoginButton extends Base {
       this.leftEl.parentElement!.hidden = false;
       const m = Math.floor(this.left / 60);
       const s = this.left % 60;
-      this.leftEl.textContent = `${m < 10 ? "0" : ""}${m}:${s < 10 ? "0" : ""}${s}`;
-      if (this.left === 60) this.say(this.t.minute);
+      this.leftEl.textContent = `${m}:${s < 10 ? "0" : ""}${s}`;
+      this.leftEl.parentElement!.classList.toggle("low", this.left <= 30);
+      // Дэлгэц уншигчид минут тутам л (секунд тутам биш).
+      if (this.left > 0 && s === 0 && this.left !== seconds) this.say(this.t.minutes(m));
     };
     render();
     if (seconds < 0) return;
@@ -523,6 +550,25 @@ export class EidLoginButton extends Base {
       render();
       if (this.left <= 0) this.end("expired");
     }, 1000) as unknown as number;
+  }
+
+  /** «Регистрийн дугаараар нэвтрэх» товч + ижил цонхонд доошоо дэлгэгдэх push хэсэг (QR, код харагдсаар; QR poll үргэлжилнэ). */
+  private pushToggle(): [HTMLButtonElement, HTMLDivElement] {
+    const toggle = el("button", { type: "button", class: "btn btn-outline disc-btn", "aria-expanded": "false", "aria-controls": "eid-push" });
+    toggle.append(el("span", {}, this.t.usePush), chevron());
+    const disc = el("div", { class: "disc", id: "eid-push" });
+    const inner = el("div", { inert: "" });
+    const form = this.pushForm();
+    inner.append(form);
+    disc.append(inner);
+    toggle.addEventListener("click", () => {
+      const open = toggle.getAttribute("aria-expanded") !== "true";
+      toggle.setAttribute("aria-expanded", String(open));
+      disc.classList.toggle("open", open);
+      inner.toggleAttribute("inert", !open);
+      if (open) form.querySelector("input")?.focus();
+    });
+    return [toggle, disc];
   }
 
   private pushForm(): HTMLFormElement {
@@ -586,14 +632,14 @@ export class EidLoginButton extends Base {
   private showWait(s: EidLoginStatus): void {
     const t = this.t;
     const c = el("div", { class: "center" });
-    c.append(el("h2", { class: "sr-only" }, t.waiting));
-    const vc = el("p", { class: "vc", tabindex: "-1", "aria-describedby": "eid-wait" }, s.vc ?? "");
+    c.append(el("h2", { class: "sr-only" }, t.waiting), el("p", { class: "vc-label", id: "eid-vc-label" }, t.vcLabel));
+    const vc = el("p", { class: "vc", tabindex: "-1", "aria-labelledby": "eid-vc-label", "aria-describedby": "eid-wait" }, s.vc ?? "");
     const pending = el("p", { class: "pending" });
     pending.append(el("span", { class: "spinner", "aria-hidden": "true" }), el("span", {}, t.waiting));
     const back = el("button", { type: "button", class: "btn btn-outline" }, t.back);
     back.addEventListener("click", () => this.open());
     this.netwarn = el("p", { class: "netwarn", role: "status", hidden: "" }, t.offline);
-    c.append(vc, el("p", { class: "text", id: "eid-wait" }, t.waitText), pending, back, this.netwarn, this.meta());
+    c.append(vc, this.meta(), el("p", { class: "text", id: "eid-wait" }, t.waitText), pending, back, this.netwarn);
     this.view(c);
     this.startTimer(s.expiresIn ?? -1);
     vc.focus();
