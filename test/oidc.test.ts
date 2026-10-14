@@ -42,8 +42,15 @@ function claims(over: Record<string, unknown> = {}): Record<string, unknown> {
   };
 }
 
-function mock(opts: { keys: () => unknown[]; token?: (init: RequestInit) => Response; issuer?: string }) {
-  const calls = { jwks: 0, discovery: 0, token: [] as RequestInit[] };
+const MTLS_TOKEN = "https://rp.eidmongolia.mn/oauth2/token";
+
+function mock(opts: {
+  keys: () => unknown[];
+  token?: (init: RequestInit) => Response;
+  issuer?: string;
+  aliases?: Record<string, string>;
+}) {
+  const calls = { jwks: 0, discovery: 0, token: [] as RequestInit[], tokenUrls: [] as string[] };
   const fetchImpl = (async (url: string | URL, init?: RequestInit) => {
     const u = String(url);
     if (u === ISS + "/.well-known/openid-configuration") {
@@ -53,14 +60,16 @@ function mock(opts: { keys: () => unknown[]; token?: (init: RequestInit) => Resp
         authorization_endpoint: ISS + "/oauth2/authorize",
         token_endpoint: ISS + "/oauth2/token",
         jwks_uri: ISS + "/oauth2/jwks",
+        ...(opts.aliases ? { mtls_endpoint_aliases: opts.aliases } : {}),
       });
     }
     if (u === ISS + "/oauth2/jwks") {
       calls.jwks++;
       return Response.json({ keys: opts.keys() });
     }
-    if (u === ISS + "/oauth2/token") {
+    if (u === ISS + "/oauth2/token" || u === MTLS_TOKEN || u === "http://rp.eidmongolia.mn/oauth2/token") {
       calls.token.push(init!);
+      calls.tokenUrls.push(u);
       return opts.token ? opts.token(init!) : new Response("{}", { status: 500 });
     }
     return new Response("not found", { status: 404 });
@@ -247,4 +256,42 @@ test("verifyIdToken — буруу гарын үсэг, солигдсон paylo
 test("EidOidcClient — тохиргооны шалгалт", () => {
   assert.throws(() => new EidOidcClient({ clientId: "", clientSecret: "s", redirectUri: REDIRECT }));
   assert.throws(() => new EidOidcClient({ clientId: "c", clientSecret: "s", redirectUri: "http://x/cb" }));
+});
+
+test("mtls_endpoint_aliases (RFC 8705) — флагтай бол alias, флаггүй бол token_endpoint; dispatcher дамжина", async () => {
+  const k = newKey("k1");
+  const run = async (over: Record<string, unknown>, aliases?: Record<string, string>) => {
+    const m = mock({
+      keys: () => [k.jwk],
+      aliases,
+      token: () => Response.json({ id_token: jwt(k, claims()), token_type: "Bearer", expires_in: 300 }),
+    });
+    await client(m.fetchImpl, over).handleCallback(`${REDIRECT}?code=abc&state=s-1`, {
+      state: "s-1",
+      nonce: "n-123",
+      codeVerifier: "v".repeat(43),
+    });
+    return m.calls;
+  };
+  const aliases = { token_endpoint: MTLS_TOKEN };
+  const dispatcher = { tag: "mtls-agent" };
+
+  const on = await run({ useMtlsEndpointAliases: true, dispatcher }, aliases);
+  assert.deepEqual(on.tokenUrls, [MTLS_TOKEN]);
+  assert.equal((on.token[0] as Record<string, unknown>).dispatcher, dispatcher);
+
+  assert.deepEqual((await run({ dispatcher }, aliases)).tokenUrls, [ISS + "/oauth2/token"]); // анхдагч off
+  assert.deepEqual((await run({ useMtlsEndpointAliases: true })).tokenUrls, [ISS + "/oauth2/token"]); // alias алга → fallback
+
+  // alias https биш → discovery_failed, token хүсэлт явахгүй
+  const m = mock({ keys: () => [k.jwk], aliases: { token_endpoint: "http://rp.eidmongolia.mn/oauth2/token" } });
+  await rejectsCode(
+    client(m.fetchImpl, { useMtlsEndpointAliases: true }).handleCallback(`${REDIRECT}?code=abc&state=s-1`, {
+      state: "s-1",
+      nonce: "n-123",
+      codeVerifier: "v".repeat(43),
+    }),
+    "discovery_failed",
+  );
+  assert.equal(m.calls.token.length, 0);
 });

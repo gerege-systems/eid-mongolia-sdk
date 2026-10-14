@@ -91,6 +91,17 @@ export interface EidOidcClientConfig {
   scope?: string;
   /** HTTP timeout (мс), анхдагч 10000. */
   timeoutMs?: number;
+  /**
+   * undici Dispatcher (mTLS client cert) — RP-API client-ийн `dispatcher`-тэй ижил:
+   * `new Agent({ connect: { cert, key } })`. Дамжуулсан бол OIDC-ийн бүх fetch-д хэрэглэнэ. Зөвхөн Node орчинд.
+   */
+  dispatcher?: unknown;
+  /**
+   * RFC 8705 §5: `true` бол code солих хүсэлт discovery-ийн `mtls_endpoint_aliases.token_endpoint` руу явна
+   * (`require_mtls`-тэй RP — `dispatcher`-т RP-ийн client cert заавал). Discovery-д alias байхгүй бол
+   * `token_endpoint` руу буцна; alias https биш бол `discovery_failed`. Анхдагч `false`.
+   */
+  useMtlsEndpointAliases?: boolean;
   /** fetch орлуулагч (тест). */
   fetchImpl?: typeof fetch;
 }
@@ -100,6 +111,8 @@ export interface EidOidcDiscovery {
   authorization_endpoint: string;
   token_endpoint: string;
   jwks_uri: string;
+  /** RFC 8705 §5 — mTLS-тэй client-ийн endpoint-ууд (ж: `token_endpoint` → `https://rp.eidmongolia.mn/oauth2/token`). */
+  mtls_endpoint_aliases?: Record<string, string>;
   [k: string]: unknown;
 }
 
@@ -266,7 +279,7 @@ export class EidOidcClient {
   private async exchangeCode(code: string, codeVerifier: string): Promise<string> {
     const d = await this.discover();
     const basic = Buffer.from(formEncode(this.cfg.clientId) + ":" + formEncode(this.cfg.clientSecret)).toString("base64");
-    const res = await this.fetch(d.token_endpoint, {
+    const res = await this.fetch(this.tokenEndpoint(d), {
       method: "POST",
       headers: {
         Authorization: "Basic " + basic,
@@ -298,6 +311,17 @@ export class EidOidcClient {
       throw new EidOidcError("server_error", "OIDC token хариунд id_token алга");
     }
     return j.id_token;
+  }
+
+  /** Code солих endpoint: `useMtlsEndpointAliases` + alias байвал alias (RFC 8705 §5), эс бөгөөс `token_endpoint`. */
+  private tokenEndpoint(d: EidOidcDiscovery): string {
+    if (!this.cfg.useMtlsEndpointAliases) return d.token_endpoint;
+    const alias = d.mtls_endpoint_aliases?.token_endpoint;
+    if (alias === undefined) return d.token_endpoint;
+    if (typeof alias !== "string" || !alias.startsWith("https://")) {
+      throw new EidOidcError("discovery_failed", "OIDC discovery: mtls_endpoint_aliases.token_endpoint буруу");
+    }
+    return alias;
   }
 
   /**
@@ -389,12 +413,15 @@ export class EidOidcClient {
 
   private async fetch(url: string, init: RequestInit): Promise<Response> {
     const f = this.cfg.fetchImpl ?? fetch;
+    // undici-ийн `dispatcher` (mTLS) стандарт RequestInit-д байхгүй — http.ts-тэй ижил cast.
+    const req: Record<string, unknown> = {
+      ...init,
+      redirect: "error",
+      signal: AbortSignal.timeout(this.cfg.timeoutMs ?? DEFAULT_TIMEOUT_MS),
+    };
+    if (this.cfg.dispatcher) req.dispatcher = this.cfg.dispatcher;
     try {
-      return await f(url, {
-        ...init,
-        redirect: "error",
-        signal: AbortSignal.timeout(this.cfg.timeoutMs ?? DEFAULT_TIMEOUT_MS),
-      });
+      return await f(url, req as RequestInit);
     } catch (e) {
       const err = e as Error;
       if (err.name === "TimeoutError" || err.name === "AbortError") {
