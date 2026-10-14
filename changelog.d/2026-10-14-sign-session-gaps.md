@@ -23,4 +23,5 @@
 - Шалгасан: `test/sign-gaps.test.ts` (device-link body/зам/deviceLinkInput байт-ижил, expiresAt, cert choice body
   түлхүүрүүд, validateCertificateChoice, digestForSigner linked/document/device-link + буруу оролтод хүсэлт явахгүй,
   expectedAlgorithm/expectedCertificate). `npm run lint`, `npm test` (104/104), `npm run test:contract` — RP-API зам
-  ✔ (OIDC discovery шалгалт main дээр ч live 404-өөр унадаг, энэ PR-тэй хамааралгүй).
+  ✔. OIDC шалгалт улаан: live `login.eidmongolia.mn/.well-known/openid-configuration` 2026-10-14 ~13:30 UTC-аас 404
+  (CA талын төлөв — main-ийн 11:48 UTC-ийн run ногоон байсан; энэ PR OIDC-д хүрээгүй).
