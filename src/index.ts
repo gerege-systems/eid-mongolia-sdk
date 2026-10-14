@@ -50,6 +50,22 @@ export {
   type QrDeviceLinkTickerOptions,
 } from "./devicelinkv3.js";
 export {
+  EidOidcClient,
+  EidOidcError,
+  EID_OIDC_ISSUER,
+  EID_ACR_QUALIFIED,
+  EID_ACR_ADVANCED,
+  pkceChallenge,
+  type EidOidcClientConfig,
+  type EidOidcDiscovery,
+  type EidOidcErrorCode,
+  type CreateAuthorizationOptions,
+  type EidAuthorization,
+  type EidCallbackChecks,
+  type EidCallbackResult,
+  type EidIdTokenClaims,
+} from "./oidc.js";
+export {
   EidError,
   AuthenticationError,
   ForbiddenError,

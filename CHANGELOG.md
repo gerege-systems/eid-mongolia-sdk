@@ -1,4 +1,25 @@
 # Changelog
+## 0.8.0 — 2026-10-14
+
+- **«eID-ээр нэвтрэх» — OpenID Connect client** (ca-eidmongolia-mn `docs/OIDC.md`; issuer `https://login.eidmongolia.mn`):
+  `new EidOidcClient({ clientId, clientSecret, redirectUri, issuer?, scope?, timeoutMs?, fetchImpl? })`.
+  - `discover()` — discovery (1 цаг cache, `issuer` яг тулгалт, endpoint-ууд https).
+  - `createAuthorization({ scope?, display? })` → `{ url, state, nonce, codeVerifier }` (crypto-random base64url,
+    PKCE `S256`).
+  - `handleCallback(url | URLSearchParams, { state, nonce, codeVerifier })` → `{ claims, idToken }`: state timing-safe
+    тулгалт (таарахгүй бол code солихгүй), RFC 9207 `iss` (байвал), `error` → `EidOidcError`, token солих
+    (`client_secret_basic`, RFC 6749 §2.3.1 form-urlencode), id_token шалгах.
+  - `verifyIdToken(idToken, { nonce })` — JWKS (`kid`, 1 цаг cache, танихгүй `kid` → нэг удаа дахин татна), ES256
+    WebCrypto (JOSE r||s), `iss`, `aud` (олон aud → `azp`), `exp`/`iat` ±60 сек, `nonce`, `sub`.
+  - `EidOidcError.code` (`EidOidcErrorCode`): authorize/token-ий стандарт кодууд + `state_mismatch`,
+    `invalid_callback`, `invalid_id_token`, `discovery_failed`; `.description` = `error_description`.
+  - `EidIdTokenClaims`, `pkceChallenge`, `EID_OIDC_ISSUER`, `EID_ACR_QUALIFIED`, `EID_ACR_ADVANCED`.
+  - Шинэ хамааралгүй (global `fetch` + `globalThis.crypto.subtle`).
+- README: «eID-ээр нэвтрэх (OpenID Connect)» — бүртгэл, Express login/callback жишээ, `<a href>` товч, аюулгүй
+  байдал (state ↔ session, native апп RFC 8252); developer сайтын зангуу `#burtgel` → `#registration`.
+- Тест: PKCE RFC 7636 вектор, authorize URL, discovery issuer, state буруу, `access_denied`/`invalid_grant`, Basic
+  urlencode, id_token зөв / aud / azp / exp / iat / nonce / iss / буруу гарын үсэг / alg none / танихгүй kid → refetch.
+
 ## 0.7.0 — 2026-10-09
 
 - **Байгууллагын нэрийн өмнөөс PDF гарын үсэг (onBehalfOf)** (ca-eidmongolia-mn !283 / 0a997bf9; `docs/RP_INTEGRATION.md`
