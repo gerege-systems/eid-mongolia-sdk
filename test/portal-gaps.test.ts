@@ -529,3 +529,38 @@ test("pdf.tokenPrepare / tokenFinalize / tokenDocument (USB токены PAdES)"
   await assert.rejects(() => bad.eid.pdf.tokenPrepare({ pdf: new Uint8Array([1]), fileName: "a.pdf", signerEtsi: "PNOMN-1", certificate: new Uint8Array([1]) }),
     (e: unknown) => e instanceof ValidationError && /hashToSign/.test(e.message));
 });
+
+// ── 0.12.0: roleLabel (CA !339) + language → Accept-Language ──
+
+test("roleLabel — representations ба session onBehalfOf; хуучин CA-д байхгүй", async () => {
+  const { eid } = client({ body: { personEtsi: "PNOMN-1", representations: [
+    { orgEtsi: "NTRMN-1", role: "ceo", roleLabel: "Гүйцэтгэх захирал", rightType: "ADMIN", source: "REGISTRY", validFrom: "2026-10-01T00:00:00Z" },
+    { orgEtsi: "NTRMN-2", role: "Нягтлан", rightType: "MANAGER", source: "MANUAL", validFrom: "2026-10-01T00:00:00Z" },
+  ] } });
+  const r = await eid.organization.getRepresentations("PNOMN-1");
+  assert.equal(r.representations[0].roleLabel, "Гүйцэтгэх захирал");
+  assert.equal(r.representations[1].roleLabel, undefined);
+
+  const base = { state: "COMPLETE", result: { endResult: "OK" } };
+  const s = parseSessionResult({ ...base, onBehalfOf: { orgEtsi: "NTRMN-1", orgName: "Х ХХК", role: "ceo", roleLabel: "Chief Executive Officer", rightType: "ADMIN" } });
+  assert.equal(s.onBehalfOf?.roleLabel, "Chief Executive Officer");
+  assert.equal(s.onBehalfOf?.role, "ceo");
+  const old = parseSessionResult({ ...base, onBehalfOf: { orgEtsi: "NTRMN-1", role: "ceo", rightType: "ADMIN" } });
+  assert.equal(old.onBehalfOf?.roleLabel, undefined);
+  assert.ok(!("roleLabel" in (old.onBehalfOf ?? {})));
+});
+
+test("language → Accept-Language; анхдагч илгээхгүй", async () => {
+  const seen: (string | null)[] = [];
+  const mk = (extra: Record<string, unknown>) => new EidClient({
+    credentials: CREDS, trust: { allowUntrusted: true }, ...extra,
+    fetchImpl: async (_url, init) => {
+      seen.push(new Headers(init?.headers).get("accept-language"));
+      return new Response(JSON.stringify({ personEtsi: "PNOMN-1", representations: [] }), { status: 200 });
+    },
+  });
+  await mk({}).organization.getRepresentations("PNOMN-1");
+  await mk({ language: "en" }).organization.getRepresentations("PNOMN-1");
+  await mk({ language: " " }).organization.getRepresentations("PNOMN-1");
+  assert.deepEqual(seen, [null, "en", null]);
+});

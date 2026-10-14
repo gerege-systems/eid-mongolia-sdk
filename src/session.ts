@@ -140,10 +140,12 @@ function parseOrg(raw: unknown): OrgResult | null {
   const o = asRecord(raw);
   const etsi = str(o.orgEtsi);
   if (!etsi) return null;
+  const roleLabel = str(o.roleLabel);
   return {
     orgEtsi: etsi,
     orgName: str(o.orgName),
     role: str(o.role),
+    ...(roleLabel ? { roleLabel } : {}),
     rightType: str(o.rightType),
   };
 }

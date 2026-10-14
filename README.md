@@ -218,7 +218,8 @@ import { ForbiddenError, ApiError, ON_BEHALF_ERROR_CODES } from "@gerege-systems
 
 // 1. Иргэн сүүлийн 24 цагт танай RP-ээр нэвтэрсэн байх ёстой.
 const { representations } = await eid.organization.getRepresentations("PNOMN-12345678");
-// → [{ orgEtsi: "NTRMN-6235972", orgName: "Гэрэгэ Системс ХХК", role: "ceo", rightType: "ADMIN", … }]
+// → [{ orgEtsi: "NTRMN-6235972", orgName: "Гэрэгэ Системс ХХК", role: "ceo", roleLabel: "Гүйцэтгэх захирал",
+//      rightType: "ADMIN", … }]
 
 // 2. PDF (PAdES, CA угсарна) — санал болгох урсгал.
 try {
@@ -258,8 +259,12 @@ prepare 429 `PDF_PREPARE_BUSY`, 503 `LTV_UNAVAILABLE` / `TSA_UNAVAILABLE`; docum
 хүртэл уншина; хэтэрвэл `ResponseTooLargeError`. JSON хариу 4 MiB-ээс хэтэрвэл мөн `ResponseTooLargeError` (таслахгүй).
 `getRepresentations`-ийн `raw` — серверийн түүхий JSON.
 
+**Албан тушаал харуулахдаа `roleLabel` ашигла** (representations болон session-ий `onBehalfOf`) — `role` нь машин
+утга (`ceo` / `founder` / `stakeholder` эсвэл MANAGER-т бичсэн текст), өөрөө орчуулахгүй. Хэл: `new EidClient({ …,
+language: "en" })` → дуудлага бүрд `Accept-Language`; анхдагч илгээхгүй (сервер mn). Хуучин CA-д `roleLabel` байхгүй.
+
 Олон талт гэрээ: А байгууллагын гаралтыг өөрчлөлтгүй Б-ийн `prepare`-д (`docID`, өөр `onBehalfOf`) илгээнэ.
-Session-ий `onBehalfOf` блок (`role`/`rightType`) нь хариу угсрах үеийн бүртгэл; `pdf.signer.onBehalfOf`/`claimedRole`
+Session-ий `onBehalfOf` блок (`role`/`roleLabel`/`rightType`) нь хариу угсрах үеийн бүртгэл; `pdf.signer.onBehalfOf`/`claimedRole`
 нь баримтад бичигдсэн утга.
 
 ## 3b. Иргэний PKI самбар (`PKI_READ` эрх)
