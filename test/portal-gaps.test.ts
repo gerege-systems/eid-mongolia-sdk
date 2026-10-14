@@ -50,6 +50,20 @@ function client(reply: Reply | ((url: string) => Reply), extra: Record<string, u
   return { eid, calls };
 }
 
+/**
+ * fetch-ийн оронд: signal abort хүртэл хүлээнэ. AbortSignal.timeout-ийн timer unref тул (Node 22) event loop-ийг
+ * ref-тэй timer-ээр амьд байлгана.
+ */
+function hangUntilAbort(_url: unknown, init?: RequestInit): Promise<Response> {
+  return new Promise((_resolve, reject) => {
+    const keepAlive = setTimeout(() => reject(new Error("abort ирсэнгүй")), 5_000);
+    init?.signal?.addEventListener("abort", () => {
+      clearTimeout(keepAlive);
+      reject(init.signal!.reason);
+    });
+  });
+}
+
 // ── тестийн PKI (openssl — репод түлхүүр хадгалахгүй) ──
 const DIR = mkdtempSync(join(tmpdir(), "eid-gaps-"));
 process.on("exit", () => rmSync(DIR, { recursive: true, force: true }));
@@ -194,10 +208,7 @@ test("pdfTimeoutMs — анхдагч 80с, тохируулж болно", asyn
   const eid = new EidClient({
     credentials: CREDS,
     pdfTimeoutMs: 50,
-    fetchImpl: (_url, init) =>
-      new Promise((_resolve, reject) => {
-        init?.signal?.addEventListener("abort", () => reject(init.signal!.reason));
-      }),
+    fetchImpl: hangUntilAbort,
   });
   await assert.rejects(() => eid.pdf.document("s1"), (e: unknown) => e instanceof NetworkError && e.timeout === true);
 });
@@ -405,7 +416,7 @@ test("PII — NetworkError замд PNOMN/РД/documentNumber орохгүй (op
   );
   const slow = new EidClient({
     credentials: CREDS, timeoutMs: 20,
-    fetchImpl: (_u, init) => new Promise((_r, reject) => init?.signal?.addEventListener("abort", () => reject(init.signal!.reason))),
+    fetchImpl: hangUntilAbort,
   });
   await assert.rejects(() => slow.organization.getRepresentations("PNOMN-12345678"), (e: unknown) => e instanceof NetworkError && e.timeout === true && noPII(e));
 });
