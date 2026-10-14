@@ -3,6 +3,8 @@
 //   client.sign      — гарын үсэг эхлүүлэх (digest)
 //   client.pdf       — PDF гарын үсэг (PAdES, CA угсарна; onBehalfOf)
 //   client.organization — иргэний төлөөлөх байгууллагууд
+//   client.person    — иргэний PKI самбар (PKI_READ): гэрчилгээ, төхөөрөмж, үйл ажиллагаа, тоо, хүүхдүүд
+//   client.token     — USB токены гэрчилгээ олголт (TOKEN_ISSUE) ба токеноор нэвтрэлт (AUTH)
 //   client.session   — үр дүн poll хийх (long-poll)
 //   client.validator — хариуг крипто-баталгаажуулах (cert chain + signature)
 //
@@ -21,8 +23,10 @@ import { Http } from "./http.js";
 import { AuthApi } from "./auth.js";
 import { SignApi } from "./sign.js";
 import { SessionApi } from "./session.js";
-import { PdfApi } from "./pdf.js";
+import { PdfApi, DEFAULT_PDF_TIMEOUT_MS } from "./pdf.js";
 import { OrganizationApi } from "./organization.js";
+import { PersonApi } from "./person.js";
+import { TokenApi } from "./token.js";
 import { ResponseValidator, type TrustConfig } from "./validator.js";
 import type { CertificateLevel, RpCredentials } from "./types.js";
 
@@ -38,6 +42,8 @@ export interface ClientConfig {
   defaultCertificateLevel?: CertificateLevel;
   /** HTTP timeout (мс). */
   timeoutMs?: number;
+  /** PAdES prepare / баримт татах дуудлагын хугацаа (мс). Анхдагч 80000 ({@link DEFAULT_PDF_TIMEOUT_MS}). */
+  pdfTimeoutMs?: number;
   /** undici Dispatcher (mTLS client cert). */
   dispatcher?: unknown;
   /** fetch орлуулагч (тест). */
@@ -75,6 +81,8 @@ export class EidClient {
   readonly sign: SignApi;
   readonly pdf: PdfApi;
   readonly organization: OrganizationApi;
+  readonly person: PersonApi;
+  readonly token: TokenApi;
   readonly session: SessionApi;
   readonly validator: ResponseValidator;
 
@@ -93,8 +101,10 @@ export class EidClient {
 
     this.auth = new AuthApi(http, cfg.credentials, { certificateLevel: level });
     this.sign = new SignApi(http, cfg.credentials, { certificateLevel: level });
-    this.pdf = new PdfApi(http, cfg.credentials, { certificateLevel: level });
+    this.pdf = new PdfApi(http, cfg.credentials, { certificateLevel: level, timeoutMs: cfg.pdfTimeoutMs ?? DEFAULT_PDF_TIMEOUT_MS });
     this.organization = new OrganizationApi(http);
+    this.person = new PersonApi(http);
+    this.token = new TokenApi(http, cfg.credentials);
     this.session = new SessionApi(http);
     this.validator = new ResponseValidator(cfg.trust ?? {});
   }

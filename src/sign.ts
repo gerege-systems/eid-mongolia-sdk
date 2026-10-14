@@ -36,6 +36,11 @@ export interface SignOptions {
    * өөрөө иргэний PIN2 гэрчилгээгээр — байгууллага нь digest-д ОРОХГҮЙ.
    */
   onBehalfOf?: string;
+  /**
+   * Гарын үсэг зурагдах баримтын нэр — CA-ийн /verify хуудас ба иргэний түүхэнд харагдана. Заавал биш: өгөөгүй бол CA
+   * interaction текстээс таамаглана.
+   */
+  fileName?: string;
 }
 
 function rec(v: unknown): Record<string, unknown> {
@@ -64,6 +69,7 @@ export class SignApi {
     };
     if (opts?.callbackUrl?.trim()) body.initialCallbackUrl = opts.callbackUrl.trim();
     if (opts?.onBehalfOf?.trim()) body.onBehalfOf = opts.onBehalfOf.trim();
+    if (opts?.fileName?.trim()) body.fileName = opts.fileName.trim();
     return body;
   }
 

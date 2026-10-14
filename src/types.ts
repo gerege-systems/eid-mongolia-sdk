@@ -161,6 +161,49 @@ export interface SessionResult {
    * угсарсан объект). {@link PdfSessionBlock}.
    */
   pdf?: PdfSessionBlock | null;
+  /**
+   * COMPLETE+OK auth session-ий `person` блок (CA бүртгэлээс: кирилл нэр, төрсөн огноо, хүйс — гэрчилгээнд байдаггүй).
+   * Зөвхөн session эзэмшигч RP-д; CA иргэнийг олоогүй бол null. ГАРЫН ҮСЭГТ ОРДОГГҮЙ — validateAuth-ийн дараа
+   * {@link personMatchesCertificate}-ээр гэрчилгээний SERIALNUMBER (`PNOMN-<civilId>`)-тэй тулгаж л хэрэглэнэ.
+   */
+  person?: PersonBlock | null;
+  /** USB токены гэрчилгээ олголтын session-ий `tokenCertificate` блок (`token.issueCertificate`); бусад урсгалд null. */
+  tokenCertificate?: TokenCertSessionBlock | null;
+  /** Серверийн хариуны түүхий JSON (`parseSessionResult`-ийн оролт) — SDK задлаагүй талбарт. */
+  raw?: unknown;
+}
+
+/**
+ * Session-ий `person` блок (CA `dto.PersonBlock`). Нэршил core.gerege.mn-тэй нэг мөр — гурван нэр ӨӨР ойлголт:
+ * `firstName` = нэр, `lastName` = ЭЦГИЙН нэр (гэрчилгээнд ордог), `familyName` = УРГИЙН овог (гэрчилгээнд ОРОХГҮЙ).
+ * Мэдэгдэхгүй талбар undefined — RP заавал байх талбар гэж үзэхгүй.
+ */
+export interface PersonBlock {
+  firstName?: string;
+  lastName?: string;
+  familyName?: string;
+  firstNameEn?: string;
+  lastNameEn?: string;
+  civilId?: string;
+  regNo?: string;
+  /** YYYY-MM-DD (цаг/бүсгүй). */
+  birthDate?: string;
+  /** M | F | X. */
+  gender?: string;
+  /** core.gerege.mn-ий дотоод дугаар; байхгүй = тулгагдаагүй. */
+  geID?: number;
+}
+
+/** Токены гэрчилгээ олголтын төлөв. */
+export type TokenCertStatus = "PENDING" | "ISSUED" | "FAILED" | "EXPIRED";
+
+/** GET /session/{id}-ийн `tokenCertificate` (TOKEN_CERT §Төлөв). */
+export interface TokenCertSessionBlock {
+  status: TokenCertStatus | string;
+  /** FAILED үед: endResult (USER_REFUSED, TIMEOUT …) эсвэл CSR_DIGEST_MISMATCH, TOKEN_LIMIT_REACHED г.м. */
+  errorCode?: string;
+  authSerialHex?: string;
+  signSerialHex?: string;
 }
 
 /** PDF баримтын төлөв: PENDING → READY (эсвэл FAILED / EXPIRED). */

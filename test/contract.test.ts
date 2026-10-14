@@ -5,7 +5,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { DEFAULT_BASE_URL, EID_ACR_ADVANCED, EID_ACR_QUALIFIED, EID_OIDC_ISSUER } from "../dist/index.js";
-import { ID_TOKEN_CLAIMS, OIDC_EXPECT, RP_ROUTES } from "../src/contract.ts";
+import { ID_TOKEN_CLAIMS, OIDC_EXPECT, RP_ROUTES, RP_ROUTES_UNDISCOVERED } from "../src/contract.ts";
 
 const EID_DISCOVERY = "https://rp.eidmongolia.mn/.well-known/eid";
 
@@ -58,6 +58,17 @@ test("RP-API: SDK-ийн зам бүр /.well-known/eid-д бий", async () => 
     covered.add(k);
     if (!rp.has(k)) missing.push(`${r.method} ${r.path}`);
   }
+
+  // CA-ийн гэрээнд (код + docs) байгаа ч discovery-д жагсаагдаагүй замууд — WARN; discovery-д орсон бол шилжүүлэх сануулга.
+  const undiscovered: string[] = [];
+  const nowDiscovered: string[] = [];
+  for (const r of Object.values(RP_ROUTES_UNDISCOVERED)) {
+    const k = normRoute(r.method, r.path);
+    covered.add(k);
+    (rp.has(k) ? nowDiscovered : undiscovered).push(`${r.method} ${r.path}`);
+  }
+  warn("SDK зам CA-д бий ч discovery-д алга", undiscovered);
+  warn("discovery-д орсон — RP_ROUTES_UNDISCOVERED-оос RP_ROUTES руу шилжүүл", nowDiscovered);
 
   const uncovered = eps
     .filter((e) => {

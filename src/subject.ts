@@ -37,14 +37,14 @@ const OIDS = {
   "2.5.4.97": "organizationIdentifier",
 } as const;
 
-interface Tlv {
+export interface Tlv {
   tag: number;
   start: number; // агуулгын эхлэл
   end: number; // агуулгын төгсгөл (exclusive)
 }
 
 /** Нэг TLV — буферийн хилээс гарвал, indefinite/хэт урт length бол ValidationError. */
-function tlv(buf: Uint8Array, pos: number, limit: number): Tlv {
+export function tlv(buf: Uint8Array, pos: number, limit: number): Tlv {
   if (pos + 2 > limit) throw new ValidationError("subject: DER толгой богино");
   const tag = buf[pos]!;
   if ((tag & 0x1f) === 0x1f) throw new ValidationError("subject: олон байт tag дэмжигдээгүй");
@@ -61,7 +61,7 @@ function tlv(buf: Uint8Array, pos: number, limit: number): Tlv {
   return { tag, start: i, end: i + len };
 }
 
-function oidOf(buf: Uint8Array, t: Tlv): string {
+export function oidOf(buf: Uint8Array, t: Tlv): string {
   if (t.tag !== 0x06 || t.end === t.start) throw new ValidationError("subject: OID биш");
   const parts: number[] = [];
   let v = 0;
@@ -149,4 +149,35 @@ export function parseSubject(cert: X509Certificate | Uint8Array | string): CertS
   const full = [out.givenName, out.surname].filter((s) => s).join(" ");
   out.name = full || out.commonName || null;
   return out;
+}
+
+/**
+ * Гэрчилгээний extension-ийн `extnValue` (OCTET STRING-ийн агуулга = доторх DER) — `oid`-оор; байхгүй бол undefined.
+ * Гэмтсэн DER → {@link ValidationError}. (Node `X509Certificate` нь KeyUsage битүүд, SKI/AKI-г өгдөггүй.)
+ */
+export function certExtension(der: Uint8Array, oid: string): Uint8Array | undefined {
+  const top = tlv(der, 0, der.length);
+  const tbs = tlv(der, top.start, top.end);
+  let f = tlv(der, tbs.start, tbs.end);
+  if (f.tag === 0xa0) f = tlv(der, f.end, tbs.end); // [0] version
+  // serial → signature → issuer → validity → subject → spki, дараа нь [1]/[2]/[3]
+  for (let k = 0; k < 5; k++) f = tlv(der, f.end, tbs.end);
+  for (let pos = f.end; pos < tbs.end; ) {
+    const t = tlv(der, pos, tbs.end);
+    if (t.tag === 0xa3) {
+      const seq = tlv(der, t.start, t.end);
+      for (let ep = seq.start; ep < seq.end; ) {
+        const ext = tlv(der, ep, seq.end);
+        const id = tlv(der, ext.start, ext.end);
+        let v = tlv(der, id.end, ext.end);
+        if (v.tag === 0x01) v = tlv(der, v.end, ext.end); // critical BOOLEAN
+        if (v.tag !== 0x04) throw new ValidationError("extension: extnValue OCTET STRING биш");
+        if (oidOf(der, id) === oid) return der.subarray(v.start, v.end);
+        ep = ext.end;
+      }
+      return undefined;
+    }
+    pos = t.end;
+  }
+  return undefined;
 }

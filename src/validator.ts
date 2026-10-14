@@ -13,7 +13,7 @@
 import { X509Certificate, constants, createHash, publicDecrypt, verify, type KeyObject } from "node:crypto";
 import { buildAcspV2Payload, hashLen, nodeHash } from "./crypto.js";
 import { SessionFailedError, ValidationError } from "./errors.js";
-import { parseSubject, type CertSubject } from "./subject.js";
+import { certExtension, oidOf, parseSubject, tlv, type CertSubject } from "./subject.js";
 import type { AcspContext, CertificateLevel, FlowType, SessionResult } from "./types.js";
 
 /**
@@ -63,6 +63,17 @@ export interface ValidateSignOptions {
  * хэрэгжүүлнэ. "good" = хүчинтэй, "revoked" = цуцлагдсан, "unknown" = тогтоогдсонгүй.
  */
 export type RevocationStatus = "good" | "revoked" | "unknown";
+/**
+ * {@link ResponseValidator.checkRevocationStatus}-ийн амжилттай дүн: "good" — issuer хүчинтэй гэж хариулсан;
+ * "unchecked" — "unknown", soft-fail горимд зөвшөөрөв; "skipped" — revocation hook тохируулаагүй.
+ */
+export type RevocationOutcome = "good" | "unchecked" | "skipped";
+
+/**
+ * eID Mongolia Issuing CA (04)-ийн Subject Key Identifier — иргэний утасны болон USB токены AUTH/SIGN гэрчилгээг
+ * гаргадаг цорын ганц CA. `TrustConfig.allowedIssuerSkis`-д.
+ */
+export const CITIZEN_ISSUING_CA_SKI = "b8a37f2c64ad677912db7d9e34f246358a2fb909";
 export type RevocationChecker = (
   cert: X509Certificate,
   issuer: X509Certificate | undefined,
@@ -96,6 +107,19 @@ export interface TrustConfig {
    * revocation тохируулсан үед); "soft-fail" — "unknown"-г зөвшөөрнө.
    */
   revocationMode?: "hard-fail" | "soft-fail";
+  /**
+   * Иргэний гэрчилгээг шууд гаргасан CA-ийн Subject Key Identifier (hex, ":" зөвшөөрнө) жагсаалт. Хоосон/алга бол trust
+   * anchor хүртэл гинжлэгдсэн дурын CA зөвшөөрөгдөнө (хуучин зан). Ижил root-ийн доорх өөр CA (ж: байгууллагын Issuing
+   * CA) иргэний гэрчилгээ гаргахаас хамгаалахад: `[CITIZEN_ISSUING_CA_SKI]`.
+   */
+  allowedIssuerSkis?: string[];
+  /**
+   * true бол гэрчилгээний зориулалтыг CA-ийн профайлаар шалгана: auth → KeyUsage digitalSignature + ExtKeyUsage
+   * clientAuth (P-CITIZEN-AUTH); sign → KeyUsage contentCommitment / nonRepudiation (P-CITIZEN-SIGN). Анхдагч false.
+   */
+  checkKeyUsage?: boolean;
+  /** ACSP_V2 payload-ийн scheme нэр (CA-ийн `capabilities.acsp_scheme_name`); анхдагч "smart-id". */
+  schemeName?: string;
 }
 
 /** Баталгаажсан иргэний таних мэдээлэл (auth). */
@@ -129,6 +153,9 @@ export class ResponseValidator {
   private readonly allowUntrusted: boolean;
   private readonly revocation?: RevocationChecker;
   private readonly revocationMode: "hard-fail" | "soft-fail";
+  private readonly allowedIssuers?: Set<string>;
+  private readonly checkKeyUsage: boolean;
+  private readonly schemeName?: string;
 
   constructor(trust: TrustConfig = {}) {
     this.anchors = (trust.trustAnchorsPem ?? []).map((p) => new X509Certificate(p));
@@ -138,6 +165,17 @@ export class ResponseValidator {
     this.allowUntrusted = trust.allowUntrusted ?? false;
     this.revocation = trust.revocation;
     this.revocationMode = trust.revocationMode ?? "hard-fail";
+    if (trust.allowedIssuerSkis?.length) {
+      this.allowedIssuers = new Set(
+        trust.allowedIssuerSkis.map((s) => {
+          const ski = s.trim().replace(/:/g, "").toLowerCase();
+          if (!/^(?:[0-9a-f]{2})+$/.test(ski)) throw new Error(`ResponseValidator: allowedIssuerSkis: "${s}" hex key identifier биш`);
+          return ski;
+        }),
+      );
+    }
+    this.checkKeyUsage = trust.checkKeyUsage ?? false;
+    this.schemeName = trust.schemeName;
   }
 
   // ── нийтийн API ──
@@ -167,6 +205,7 @@ export class ResponseValidator {
     if (!interactionTypeUsed) throw new ValidationError("interactionTypeUsed алга");
     const { alg, hash } = this.algorithmOf(result, leaf, acsp.signatureAlgorithm, acsp.hashAlgorithm);
     const payload = buildAcspV2Payload({
+      ...(this.schemeName ? { schemeName: this.schemeName } : {}),
       serverRandom,
       rpChallenge: acsp.rpChallenge,
       userChallenge,
@@ -284,6 +323,7 @@ export class ResponseValidator {
     const leaf = new X509Certificate(Buffer.from(result.certificateDerB64, "base64"));
     this.checkValidity(leaf);
     this.checkLevel(String(result.certificateLevel ?? ""));
+    this.checkPurpose(leaf, protocol);
     // Trust anchor ЗААВАЛ — хоосон бол fail-closed (allowUntrusted-аар л үл тоомсорлоно).
     // Өмнө нь anchor хоосон үед chain ЧИМЭЭГҮЙ алгасч, self-asserted leaf-д итгэдэг байсан.
     if (this.anchors.length === 0) {
@@ -295,7 +335,36 @@ export class ResponseValidator {
     } else {
       this.verifyChain(leaf);
     }
+    this.checkIssuer(leaf);
     return leaf;
+  }
+
+  /**
+   * checkKeyUsage үед гэрчилгээний зориулалт протоколд тохирох эсэх (CA crypto/ca_profile.go): ACSP_V2 (auth) → KU
+   * digitalSignature + EKU clientAuth (эсвэл anyExtendedKeyUsage); RAW_DIGEST_SIGNATURE (sign) → KU contentCommitment.
+   */
+  private checkPurpose(leaf: X509Certificate, protocol: string): void {
+    if (!this.checkKeyUsage) return;
+    const ku = keyUsageBits(leaf);
+    if (protocol === "ACSP_V2") {
+      if (!(ku & 0x80)) throw new ValidationError("Нэвтрэлтийн гэрчилгээнд KeyUsage digitalSignature алга");
+      const eku = extKeyUsage(leaf);
+      if (!eku.includes("1.3.6.1.5.5.7.3.2") && !eku.includes("2.5.29.37.0")) {
+        throw new ValidationError("Нэвтрэлтийн гэрчилгээнд ExtKeyUsage clientAuth алга (гарын үсгийн гэрчилгээ байж болзошгүй)");
+      }
+      return;
+    }
+    if (!(ku & 0x40)) throw new ValidationError("Гарын үсгийн гэрчилгээнд KeyUsage nonRepudiation (contentCommitment) алга");
+  }
+
+  /** allowedIssuerSkis үед leaf-ийн шууд issuer-ийн SKI (issuer-т алга бол leaf-ийн AKI) жагсаалтад байх ёстой. */
+  private checkIssuer(leaf: X509Certificate): void {
+    if (!this.allowedIssuers) return;
+    const issuer = this.findIssuer(leaf);
+    const ski = (issuer && subjectKeyId(issuer)) ?? authorityKeyId(leaf);
+    if (!ski || !this.allowedIssuers.has(ski)) {
+      throw new ValidationError("Гэрчилгээг гаргасан CA зөвшөөрөгдсөн иргэний issuer биш (allowedIssuerSkis)");
+    }
   }
 
   private checkValidity(cert: X509Certificate): void {
@@ -347,14 +416,24 @@ export class ResponseValidator {
    * дуудна (тэдгээр нь sync; revocation нь сүлжээ I/O тул async).
    */
   async checkRevocation(cert: X509Certificate): Promise<void> {
-    if (!this.revocation) return; // hook алга — RP-ийн үүрэг (warn доор аль хэдийн баримтжсан)
+    await this.checkRevocationStatus(cert);
+  }
+
+  /**
+   * {@link checkRevocation} + юу шийдсэнийг буцаана (лог/аудитад): "good" | "unchecked" (unknown, soft-fail) |
+   * "skipped" (hook алга). "revoked", мөн hard-fail горимд "unknown" → ValidationError; hook-ийн алдаа дамжина.
+   */
+  async checkRevocationStatus(cert: X509Certificate): Promise<RevocationOutcome> {
+    if (!this.revocation) return "skipped"; // hook алга — RP-ийн үүрэг
     const status = await this.revocation(cert, this.findIssuer(cert));
+    if (status === "good") return "good";
     if (status === "revoked") {
       throw new ValidationError("Гэрчилгээ цуцлагдсан (revoked)");
     }
-    if (status === "unknown" && this.revocationMode === "hard-fail") {
+    if (this.revocationMode === "hard-fail") {
       throw new ValidationError("Гэрчилгээний revocation төлөв тогтоогдсонгүй (hard-fail)");
     }
+    return "unchecked";
   }
 
 }
@@ -524,6 +603,47 @@ function emsaPssVerify(mHash: Buffer, em: Buffer, emBits: number, hash: string):
   const salt = db.subarray(psLen + 1);
   const h2 = createHash(nodeHash(hash)).update(Buffer.alloc(8)).update(mHash).update(salt).digest();
   return h.equals(h2);
+}
+
+/** KeyUsage (2.5.29.15) BIT STRING-ийн эхний байт (digitalSignature 0x80, nonRepudiation 0x40); алга бол 0. */
+function keyUsageBits(cert: X509Certificate): number {
+  const v = certExtension(cert.raw, "2.5.29.15");
+  if (!v) return 0;
+  const bs = tlv(v, 0, v.length);
+  if (bs.tag !== 0x03 || bs.end - bs.start < 2) return 0;
+  return v[bs.start + 1]!;
+}
+
+/** ExtKeyUsage (2.5.29.37) OID-ууд; алга бол []. */
+function extKeyUsage(cert: X509Certificate): string[] {
+  const v = certExtension(cert.raw, "2.5.29.37");
+  if (!v) return [];
+  const seq = tlv(v, 0, v.length);
+  const out: string[] = [];
+  for (let p = seq.start; p < seq.end; ) {
+    const t = tlv(v, p, seq.end);
+    out.push(oidOf(v, t));
+    p = t.end;
+  }
+  return out;
+}
+
+/** SubjectKeyIdentifier (2.5.29.14), жижиг үсгийн hex. */
+function subjectKeyId(cert: X509Certificate): string | undefined {
+  const v = certExtension(cert.raw, "2.5.29.14");
+  if (!v) return undefined;
+  const o = tlv(v, 0, v.length);
+  return o.tag === 0x04 && o.end > o.start ? Buffer.from(v.subarray(o.start, o.end)).toString("hex") : undefined;
+}
+
+/** AuthorityKeyIdentifier (2.5.29.35)-ийн keyIdentifier [0], жижиг үсгийн hex. */
+function authorityKeyId(cert: X509Certificate): string | undefined {
+  const v = certExtension(cert.raw, "2.5.29.35");
+  if (!v) return undefined;
+  const seq = tlv(v, 0, v.length);
+  if (seq.start >= seq.end) return undefined;
+  const k = tlv(v, seq.start, seq.end);
+  return k.tag === 0x80 && k.end > k.start ? Buffer.from(v.subarray(k.start, k.end)).toString("hex") : undefined;
 }
 
 /** isCa — cert нь CA мөн эсэх (basicConstraints CA:TRUE). Node X509Certificate.ca getter. */

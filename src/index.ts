@@ -4,15 +4,46 @@ export { EidClient, DEFAULT_BASE_URL, resolveBaseUrl, type ClientConfig } from "
 export { Http, type HttpConfig } from "./http.js";
 export { AuthApi, type AuthOptions, type AuthDefaults } from "./auth.js";
 export { SignApi, type SignOptions, type SignDefaults } from "./sign.js";
-export { SessionApi, parseSessionResult } from "./session.js";
+export { SessionApi, parseSessionResult, personMatchesCertificate } from "./session.js";
 export {
   PdfApi,
+  DEFAULT_PDF_TIMEOUT_MS,
   type PdfDefaults,
   type PdfPrepareInput,
   type PdfPrepareSession,
   type PdfSignerRef,
 } from "./pdf.js";
 export { OrganizationApi } from "./organization.js";
+export {
+  PersonApi,
+  type TokenOrganization,
+  type PersonCertificate,
+  type PersonCertificates,
+  type CertCounts,
+  type PersonDevice,
+  type PersonDevices,
+  type ActivityItem,
+  type ActivityCounts,
+  type ActivityQuery,
+  type PersonActivity,
+  type PersonSummary,
+  type PersonChild,
+  type PersonChildren,
+} from "./person.js";
+export {
+  TokenApi,
+  verifyTokenCertificates,
+  tokenAuthDigest,
+  tokenLimitOf,
+  type TokenCertInput,
+  type TokenCertStart,
+  type TokenCertItem,
+  type TokenCertResult,
+  type TokenAuthChallenge,
+  type TokenIdentity,
+  type TokenAuthResult,
+  type TokenLimit,
+} from "./token.js";
 export {
   ResponseValidator,
   type TrustConfig,
@@ -22,6 +53,8 @@ export {
   type ValidateSignOptions,
   type RevocationChecker,
   type RevocationStatus,
+  type RevocationOutcome,
+  CITIZEN_ISSUING_CA_SKI,
   verifyPayloadSignature,
   verifyPrehashedSignature,
   userChallengeOf,
@@ -77,7 +110,11 @@ export {
   ValidationError,
   DeviceLinkError,
   ON_BEHALF_ERROR_CODES,
+  RETRYABLE_ERROR_CODES,
+  parseRetryAfter,
   type OnBehalfErrorCode,
+  type RetryableErrorCode,
+  type HttpErrorInit,
 } from "./errors.js";
 export type {
   CertificateLevel,
@@ -100,4 +137,7 @@ export type {
   PdfSessionBlock,
   Representation,
   RepresentationsResponse,
+  PersonBlock,
+  TokenCertStatus,
+  TokenCertSessionBlock,
 } from "./types.js";

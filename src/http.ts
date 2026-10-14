@@ -1,7 +1,7 @@
 // HTTP давхарга — бүх RP-API дуудлагад Bearer secret хавсаргаж, timeout тавьж, HTTP статусыг
 // typed алдаа руу буулгана. mTLS (eIDAS qualified орчин)-д RP undici Dispatcher өгч болно.
 
-import { AuthenticationError, ForbiddenError, ApiError, NetworkError } from "./errors.js";
+import { AuthenticationError, ForbiddenError, ApiError, NetworkError, maskPath, parseRetryAfter } from "./errors.js";
 
 export interface HttpConfig {
   /** RP-API-ийн бүтэн суурь URL. Ж: https://rp.eidmongolia.mn */
@@ -79,27 +79,34 @@ export class Http {
     if (this.cfg.dispatcher) init.dispatcher = this.cfg.dispatcher;
 
     let res: Response;
+    // Алдааны текст/op-д иргэний дугаар (замын /etsi/{…}) орохгүй.
+    const op = `${method} ${maskPath(path)}`;
     try {
       res = await f(url, init as RequestInit);
     } catch (e) {
       const err = e as Error;
       if (err.name === "TimeoutError" || err.name === "AbortError") {
-        throw new NetworkError(`Хүсэлт хугацаа хэтэрлээ: ${method} ${path}`);
+        throw new NetworkError(`Хүсэлт хугацаа хэтэрлээ: ${op}`, { op, timeout: true });
       }
-      throw new NetworkError(`Сүлжээний алдаа (${method} ${path}): ${err.message}`);
+      throw new NetworkError(`Сүлжээний алдаа (${op}): ${err.message.split(url).join(op)}`, { op, timeout: false });
     }
     if (res.status < 300) return res;
 
     const text = await res.text();
     const { error, code } = errorBody(text);
-    if (res.status === 401) throw new AuthenticationError("API secret буруу эсвэл байхгүй (401)");
+    const headers = res.headers;
+    const retryAfterMs = parseRetryAfter(headers.get("Retry-After"));
+    if (res.status === 401) {
+      throw new AuthenticationError(`API secret буруу эсвэл байхгүй (401${code ? ` ${code}` : ""})`, { code, body: text, headers });
+    }
     if (res.status === 403) {
       throw new ForbiddenError(
         error ? `RP-API 403${code ? ` ${code}` : ""}: ${error}` : "IP allowlist эсвэл mTLS зөвшөөрөөгүй (403)",
         code,
+        { headers, retryAfterMs },
       );
     }
-    throw new ApiError(res.status, text, code);
+    throw new ApiError(res.status, text, code, { headers, retryAfterMs });
   }
 }
 

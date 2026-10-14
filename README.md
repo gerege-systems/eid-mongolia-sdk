@@ -154,6 +154,17 @@ console.log(who.documentNumber, who.subject); // баталгаажсан ирг
 const { name, serialNumber } = who.parsedSubject; // "Болд Бат", "PNOMN-12345678" (givenName/surname/commonName/country…)
 ```
 
+Session-ий `person` блок (CA бүртгэлээс — гэрчилгээнд байдаггүй кирилл нэр, төрсөн огноо, хүйс) гарын үсэгт **ордоггүй** —
+гэрчилгээний `SERIALNUMBER`-тэй тулгаж байж итгэнэ:
+
+```ts
+import { personMatchesCertificate } from "@gerege-systems/eid-mongolia-sdk";
+if (personMatchesCertificate(result.person, who.parsedSubject)) {
+  const { firstName, lastName /* ЭЦГИЙН нэр */, familyName /* УРГИЙН овог */, civilId, regNo, birthDate, gender, geID } = result.person!;
+}
+// result.raw — серверийн түүхий JSON (SDK задлаагүй талбарт)
+```
+
 Subject-ийн талбарууд (`parsedSubject`, `validateSign`-д ч мөн) нь `parseSubject(cert)`-ээс — OID 2.5.4.42/4/3/5/6/10/97,
 UTF8String/PrintableString/BMPString. `parseSubject` нь зөвхөн задлалт: баталгаажаагүй гэрчилгээний нэрэнд бүү итгэ.
 
@@ -181,6 +192,8 @@ const sig = eid.validator.validateSign(result, digest); // digest-ийн эср�
 
 console.log(sig.signatureValueB64, sig.subject);
 ```
+
+`SignOptions.fileName` — баримтын нэр CA-ийн /verify хуудас, иргэний түүхэнд харагдана (заавал биш).
 
 Device-link / push-оор эхлүүлсэн sign session-д эхлүүлсэн урсгалаа `expectedFlowType`-оор тулга (`validateAuth`-тай
 ижил: зөрвөл `ValidationError`). Гуравдах параметр нь `hashAlgorithm` мөр (хуучин хэлбэр) эсвэл объект:
@@ -238,9 +251,37 @@ try {
 (харуулсан урсгалаа). Гарын үсэгтэй PDF-ийг
 `pdf.document()`-ийн оронд `pdf.documentVerified(sessionId, r.pdf)`-аар тат — `READY` + `outSha256` тулгалтыг хийнэ.
 
+Түр алдаа — `ApiError.retryable` үнэн, `retryAfterMs`-ийн (CA-ийн `Retry-After`, секунд эсвэл огноо) дараа давтана:
+prepare 429 `PDF_PREPARE_BUSY`, 503 `LTV_UNAVAILABLE` / `TSA_UNAVAILABLE`; document 503 `DOCUMENT_PENDING`,
+`TSA_UNAVAILABLE`, `LTV_UNAVAILABLE` (`RETRYABLE_ERROR_CODES`). `headers` — хариуны header. PDF дуудлагын хугацаа
+`pdfTimeoutMs` (анхдагч 80000).
+
 Олон талт гэрээ: А байгууллагын гаралтыг өөрчлөлтгүй Б-ийн `prepare`-д (`docID`, өөр `onBehalfOf`) илгээнэ.
 Session-ий `onBehalfOf` блок (`role`/`rightType`) нь хариу угсрах үеийн бүртгэл; `pdf.signer.onBehalfOf`/`claimedRole`
 нь баримтад бичигдсэн утга.
+
+## 3b. Иргэний PKI самбар (`PKI_READ` эрх)
+
+`eid.person.certificates(etsi)` · `devices` · `activity(etsi, { flow, limit, offset })` · `summary` · `children` — иргэн
+сүүлийн 24 цагт танай RP-ээр нэвтэрсэн байх ёстой (эс бөгөөс `ForbiddenError`). Хариу бүрт `raw`.
+
+## 3c. USB токен
+
+```ts
+import { verifyTokenCertificates, tokenAuthDigest, tokenLimitOf } from "@gerege-systems/eid-mongolia-sdk";
+
+// гэрчилгээ олголт (TOKEN_ISSUE эрх) — иргэн утсаараа PIN2-оор батална
+const st = await eid.token.issueCertificate({ signerEtsi, csrAuth, csrSign, tokenSerial: "EP2003-0042A1" }); // onBehalfOf алга = хувийн
+// … eid.session.poll(st.sessionId) → result.tokenCertificate?.status === "ISSUED"
+const res = await eid.token.certificateResult(st.sessionId);
+verifyTokenCertificates(res, csrAuth, csrSign); // гэрчилгээ бүр CSR-ийн түлхүүртэй
+// 409 TOKEN_LIMIT_REACHED → tokenLimitOf(err): { kind, limit, organization? }
+
+// токеноор нэвтрэх (AUTH эрх)
+const ch = await eid.token.authChallenge();
+const digest = tokenAuthDigest(ch.rpUUID, ch.challenge); // токен CKM_ECDSA → түүхий r||s
+const who = await eid.token.authVerify(ch.challengeId, authCertDer, rs);
+```
 
 ## 4. QR ба ижил төхөөрөмж — device link v3
 
@@ -345,18 +386,25 @@ OK ирж болзошгүй. Иймд `ResponseValidator`:
      зөвхөн SHA-256 digest зурдаг (өөр hash хүссэн session-д сервер гарын үсэг гаргахгүй), тиймээс SHA-384/512
      хүссэн session-д `ecdsa-with-SHA256` хариу ирвэл хуурамч гэж татгалзана.
 
-Аль нэг алхам бүтэлгүйтвэл `ValidationError` шиднэ — хариунд **итгэхгүй**.
+5. Цуцлалт — `trust.revocation` (OCSP/CRL hook) → `checkRevocation`, эсвэл `checkRevocationStatus` (`"good"` /
+   `"unchecked"` (soft-fail) / `"skipped"` (hook алга)).
+6. Нэмэлт (сонголттой): `allowedIssuerSkis: [CITIZEN_ISSUING_CA_SKI]` — зөвхөн иргэний Issuing CA (04)-ийн гэрчилгээ;
+   `checkKeyUsage: true` — auth → clientAuth, sign → nonRepudiation (CA-ийн профайл); `schemeName` — CA-ийн
+   `acsp_scheme_name` (анхдагч `smart-id`).
+
+Аль нэг алхам бүтэлгүйтвэл `ValidationError` шиднэ — хариунд **итгэхгүй**. Алдааны текстэд иргэний нэр, PNOMN, РД
+ордоггүй (`NetworkError.op`-д замыг `/etsi/…` болгоно) — шууд лог руу бичиж болно.
 
 ## Алдааны төрлүүд
 
 | Алдаа | Утга |
 |---|---|
-| `AuthenticationError` | 401 — API secret буруу/байхгүй |
+| `AuthenticationError` | 401 — API secret буруу/байхгүй; CA-ийн JSON бол `.code`, proxy-ийнх бол алга (`.body`, `.headers`) |
 | `ForbiddenError` | 403 — IP allowlist / mTLS / RP-ийн эрх; onBehalfOf татгалзвал `.code` (`OnBehalfErrorCode`) |
 | `SessionFailedError` | endResult ≠ OK (TIMEOUT, USER_REFUSED…) — `.endResult`-оор салга |
 | `ValidationError` | cert chain/signature/level шалгалт бүтэлгүйтсэн |
-| `ApiError` | бусад HTTP алдаа (`.status`, `.body`, серверийн `.code` — ж: 404 `ORG_NOT_FOUND`) |
-| `NetworkError` | timeout/сүлжээ |
+| `ApiError` | бусад HTTP алдаа (`.status`, `.body`, серверийн `.code`, `.retryAfterMs`, `.headers`, `.retryable` — ж: 404 `ORG_NOT_FOUND`) |
+| `NetworkError` | timeout/сүлжээ (`.op` — таних тэмдэггүй зам, `.timeout`) |
 | `EidOidcError` | «eID-ээр нэвтрэх» (OIDC) — `.code`: `access_denied`, `login_required`, `state_mismatch`, `invalid_grant`, `invalid_id_token`, `server_error` … |
 | `DeviceLinkError` | device-link холбоос угсрах боломжгүй (`deviceLinkBase` https биш, token/secret/lang хэлбэр, төрөлд хэрэгтэй талбар дутуу) |
 
