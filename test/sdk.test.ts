@@ -391,7 +391,10 @@ test("qrDeviceLinkTicker — шууд нэг, дараа нь interval бүрд 
   const stop = qrDeviceLinkTicker(input, (l) => links.push(l), { intervalMs: 5, clock: () => (clock += 1000) - 1000 });
   assert.equal(links.length, 1);
   assert.ok(links[0]!.includes("elapsedSeconds=0&"));
-  await new Promise((r) => setTimeout(r, 30));
+  // Тогтмол 30 мс хүлээлт ачаалалтай CI runner дээр 2 tick-ээр тасардаг байв — 3 tick хүртэл (≤ 2 с) хүлээнэ.
+  for (const deadline = Date.now() + 2_000; links.length < 3 && Date.now() < deadline; ) {
+    await new Promise((r) => setTimeout(r, 5));
+  }
   stop();
   const n = links.length;
   assert.ok(n >= 3, `ticks ${n}`);
