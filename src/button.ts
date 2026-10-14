@@ -7,7 +7,7 @@
 //   • утасны хөтөч → `start-url?mode=web2app` руу шилжинэ (сервер 302 → eID апп; апп буцаахад backend callback дуусгана).
 // Амжилттай бол `eid-login-success` (detail = backend-ийн {state, redirect, data}) — preventDefault хийгээгүй бол
 // `redirect` (эсвэл `success-url`) руу шилжинэ. Алдаа: `eid-login-error` (detail = {error}).
-// Дизайн: eID нэвтрэх хуудасны токен (ca-eidmongolia-mn oidc_login.html) — `--eid-*` CSS хувьсагчаар дарж болно.
+// Дизайн: `--eid-*` CSS хувьсагчаар дарж болно (README-ийн хүснэгт).
 
 import { isMobileUserAgent } from "./devicelink.js";
 import { EID_LOGO_DATA_URI } from "./logo.js";

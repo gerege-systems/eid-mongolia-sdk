@@ -200,7 +200,7 @@ eid-login-button::part(icon) { width: 24px; height: 24px; }
 **eID аппын доод хувилбар.** `flowType` бэхлэлт (device link v3) ба Web2App-ийн `userChallengeVerifier` нь
 **iOS 2.2.3 (build 59)**, **Android 2.2.3 (versionCode 60)**-аас эхэлсэн. eID сервер 2026-10-07-оос legacy холбоосыг
 бүрэн хассан (v3-гүй session-д утас `DEVICE_LINK_REQUIRED`) бөгөөд доод хувилбарыг `/mobile/app-config`-оор албадан
-шинэчлүүлдэг: Android 2026-10-07-оос ≥ 70 (төхөөрөмжийн баталгаатай), 2026-10-14-ний байдлаар iOS ≥ 2.2.7,
+шинэчлүүлдэг: Android 2026-10-07-оос ≥ 70 (төхөөрөмжийн баталгаатай), 2026-10-15-ны байдлаар iOS ≥ 2.2.7,
 Android ≥ 83 (`curl https://ca.eidmongolia.mn/mobile/app-config`). Иймд гарын үсэг зурж чадах бүх апп эдгээрийг дэмжинэ —
 RP талд нэмэлт шалгалт хэрэггүй. Эх сурвалж: eID CA-ийн `docs/DEVICE_LINK_V3.md` §5, §7; changelog
 `2026-10-02-ios-min-version-2-2-3`, `2026-10-07-android-min-70`.
@@ -358,7 +358,7 @@ certificate-choice бүгдэд, 2026-10-14-өөс). Хуучин CA (талба
 Эцсийн үнэн нь `GET /session` (`TIMEOUT`).
 
 **Session эхлэх алдаа** (`ApiError`-ийн дэд анги, `.code`-той): `NoSigningCertificateError` — 409
-`NO_SIGNING_CERTIFICATE` (sign / certificate-choice start, `/pdf/sign/prepare`: иргэнд идэвхтэй төхөөрөмж / хүчинтэй
+`NO_SIGNING_CERTIFICATE` (sign / certificate-choice start: иргэнд идэвхтэй төхөөрөмж / хүчинтэй
 гарын үсгийн гэрчилгээ алга, session үүсээгүй); `CertChoiceInvalidError` — 409 `CERT_CHOICE_INVALID` (linked sign-ийн
 certificate-choice хүчингүй / хуучирсан / ашиглагдсан → cert-choice-ийг дахин эхлүүл); `RequestInvalidError` — 400
 `REQUEST_INVALID` (ж: linked-д `linkedSessionID` дутуу).
@@ -366,7 +366,7 @@ certificate-choice хүчингүй / хуучирсан / ашиглагдса�
 ### 3.1. Гэрчилгээг урьдчилж мэдэх (client-side PAdES / CMS)
 
 Гэрчилгээ DTBS-д (`signingCertificateV2`) ордог тул эхлээд certificate-choice, дараа нь digest-ийг **яг тэр төхөөрөмж
-рүү (`documentNumber`)** зуруулна. Олон утастай иргэнд etsi-ээр эхлүүлбэл өөр утас зурж, гарын үсэг гэрчилгээтэйгээ
+рүү (`documentNumber`)** зуруулна. RP-д эрх: certificate-choice — `CERT`, digest sign — `SIGN`. Олон утастай иргэнд etsi-ээр эхлүүлбэл өөр утас зурж, гарын үсэг гэрчилгээтэйгээ
 таарахгүй.
 
 ```ts
@@ -455,7 +455,8 @@ const who = await eid.token.authVerify(ch.challengeId, authCertDer, rs);
 // токеноор PDF: §3d — prepare() → токен CKM_ECDSA(dtbs) → r||s → complete() → registerSignature() (sessionID-гүй, medium "token")
 ```
 
-`/token/auth/*` нь CA-д байгаа ч `/.well-known/eid`-д хараахан жагсаагдаагүй (гэрээний тест WARN).
+`/token/auth/*` нь `/.well-known/eid`-ийн `endpoints.token.auth_challenge` / `auth_verify`-д жагсаагдсан (AUTH эрх) —
+гэрээний тест бусад route-ийн адил шалгана.
 
 ## 3d. PDF гарын үсэг (PAdES, клиент тал) — `@gerege-systems/eid-mongolia-sdk/pades`
 
@@ -480,9 +481,11 @@ CA-ийн CRL (`esign.gov.mn`) нь `crl.eidmongolia.mn` толин хуулба
 CMS гарын үсэг, eID олгогч, timestamp, DSS) л шалгана.
 
 **Зурагчийн гэрчилгээ.** `prepare` иргэний SIGN гэрчилгээг (`signingCertificateV2`) шаарддаг тул session-оос ӨМНӨ
-хэрэгтэй — одоогоор `eid.person.certificates(etsi)` (`PKI_READ`; `type: "SIGN"`, `status: "VALID"`, `keyMedium: "MOBILE"`
-мөрийн `certValue` + `documentNumber`). Session-ийг тэр `documentNumber`-ээр эхлүүлнэ — өөр төхөөрөмж зурвал `complete`
-`SIGNATURE_INVALID`.
+хэрэгтэй. Үндсэн зам — **certificate-choice** (§3.1; RP-д `CERT` эрх): `validateCertificateChoice` → `signer.certificate`
++ `signer.documentNumber`, дараа нь `digestForSigner` / `deviceLinkForSigner`-ээр тэр төхөөрөмж рүү зуруулна.
+`eid.person.certificates(etsi)` (`PKI_READ`; `type: "SIGN"`, `status: "VALID"`, `keyMedium: "MOBILE"` мөрийн `certValue` +
+`documentNumber`) нь зөвхөн итгэмжлэгдсэн RP-д, иргэн сүүлийн 24 цагт тухайн RP-д амжилттай нэвтэрсэн үед (бусад → 403).
+Session-ийг тэр `documentNumber`-ээр эхлүүлнэ — өөр төхөөрөмж зурвал `complete` `SIGNATURE_INVALID`.
 
 ### Вэб RP (браузер prepare/complete, backend session)
 
@@ -560,8 +563,8 @@ writeFileSync("signed.pdf", done.pdf);
 `state` нь бэлтгэсэн PDF-ийг агуулна — PDF-тэй ижил нууцлалтай хадгал. Формат нь Go SDK-тай ижил (хөтөчид `prepare`,
 Go backend-д `complete` хийж болно).
 
-0.14.0-д `eid.pdf` (`prepare`, `document`, `documentVerified`, `tokenPrepare`, `tokenFinalize`, `tokenDocument`) ба
-`pdfTimeoutMs` / `pdfMaxBytes` устсан — PDF upload endpoint-ууд CA-д байхгүй болно.
+0.15.0-д `eid.pdf` (`prepare`, `document`, `documentVerified`, `tokenPrepare`, `tokenFinalize`, `tokenDocument`) ба
+`pdfTimeoutMs` / `pdfMaxBytes` устсан — PDF upload endpoint-ууд CA-д байхгүй (2026-10-14-нд устсан, 404).
 
 ## 4. QR ба ижил төхөөрөмж — device link v3
 
@@ -642,7 +645,9 @@ QR ба товч хоёуланг харуулсан хуудсанд: callback-
 
 > ⚠️ **Legacy холбоос хасагдсан (2026-10-07).** Статик `deviceLink(session)` (`{deviceLinkBase}?sessionId=…&vc=…`)
 > болон `/browser` entry-ийн `openOrShowQR`-ээр нээгдсэн session-д сервер утасны үйлдлийг `DEVICE_LINK_REQUIRED`-аар
-> татгалзана — зөвхөн v3 (`buildDeviceLink`) ажиллана. Аппын доод хувилбар: iOS 2.2.3 (59), Android 70.
+> татгалзана — зөвхөн v3 (`buildDeviceLink`) ажиллана. v3 (`flowType`, `userChallengeVerifier`) iOS 2.2.3 (59) /
+> Android 60-аас дэмжигдэнэ; сервер албадах доод хувилбар 2026-10-15-ны байдлаар iOS ≥ 2.2.7, Android ≥ 83
+> (`/mobile/app-config`, §«eID аппын доод хувилбар»).
 
 ## Аюулгүй байдал — яагаад `validator` заавал
 
@@ -689,7 +694,7 @@ OK ирж болзошгүй. Иймд `ResponseValidator`:
 | `ForbiddenError` | 403 — IP allowlist / mTLS / RP-ийн эрх; onBehalfOf татгалзвал `.code` (`OnBehalfErrorCode`) |
 | `SessionFailedError` | endResult ≠ OK (TIMEOUT, USER_REFUSED…) — `.endResult`-оор салга |
 | `ValidationError` | cert chain/signature/level шалгалт бүтэлгүйтсэн |
-| `NoSigningCertificateError` | 409 `NO_SIGNING_CERTIFICATE` — гарын үсгийн гэрчилгээ / төхөөрөмж алга (sign, cert-choice start, PDF prepare); `ApiError`-ийн дэд анги |
+| `NoSigningCertificateError` | 409 `NO_SIGNING_CERTIFICATE` — гарын үсгийн гэрчилгээ / төхөөрөмж алга (sign, cert-choice start); `ApiError`-ийн дэд анги |
 | `CertChoiceInvalidError` | 409 `CERT_CHOICE_INVALID` — linked sign-ийн certificate-choice хүчингүй; `ApiError`-ийн дэд анги |
 | `RequestInvalidError` | 400 `REQUEST_INVALID` — хүсэлт буруу (ж: `linkedSessionID` дутуу); `ApiError`-ийн дэд анги |
 | `ApiError` | бусад HTTP алдаа (`.status`, `.body`, серверийн `.code`, `.retryAfterMs`, `.headers`, `.retryable` — ж: 404 `ORG_NOT_FOUND`) |

@@ -98,7 +98,10 @@ export interface NotificationSession {
   acsp?: AcspContext;
   /** Sign session-ий хүсэлтэд илгээсэн утгууд ({@link SignContext}); auth / certificate-choice-д undefined. */
   sign?: SignContext;
-  /** Sign / certificate-choice session-ий ТООЦООЛСОН дуусах мөч (ms epoch) — {@link sessionExpiry}; auth-д undefined. */
+  /**
+   * Session дуусах мөч (ms epoch): CA-ийн start хариуны `expiresAt` (0.14.2-оос; auth / sign / certificate-choice). Хуучин
+   * CA (талбаргүй) үед sign / certificate-choice-д тооцоолсон ({@link sessionExpiry}), auth-д undefined.
+   */
   expiresAt?: number;
 }
 

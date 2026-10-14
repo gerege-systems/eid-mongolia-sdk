@@ -7,7 +7,7 @@
 // (RATE_LIMITED, STATE_UNAVAILABLE, ISSUANCE_PENDING) — `retryable` + `retryAfterMs`.
 
 import { X509Certificate, createHash, createPublicKey, timingSafeEqual } from "node:crypto";
-import { RP_ROUTES, RP_ROUTES_UNDISCOVERED, routePath } from "./contract.js";
+import { RP_ROUTES, routePath } from "./contract.js";
 import { ApiError, ValidationError } from "./errors.js";
 import type { Http } from "./http.js";
 import type { TokenOrganization } from "./person.js";
@@ -171,7 +171,7 @@ export class TokenApi {
   /** POST /token/auth/challenge — энэ RP-д холбогдсон нэг удаагийн challenge (2 мин). */
   async authChallenge(): Promise<TokenAuthChallenge> {
     const r = rec(
-      await this.http.post(routePath(RP_ROUTES_UNDISCOVERED.tokenAuthChallenge), {
+      await this.http.post(routePath(RP_ROUTES.tokenAuthChallenge), {
         relyingPartyUUID: this.creds.rpUUID,
         relyingPartyName: this.creds.rpName,
       }),
@@ -197,7 +197,7 @@ export class TokenApi {
       throw new Error("token auth: гэрчилгээ задарсангүй");
     }
     if (!challengeId || !signature?.length) throw new Error("token auth: challengeId ба signature шаардлагатай");
-    const raw = await this.http.post(routePath(RP_ROUTES_UNDISCOVERED.tokenAuthVerify), {
+    const raw = await this.http.post(routePath(RP_ROUTES.tokenAuthVerify), {
       challengeId,
       certificate: Buffer.from(certDer).toString("base64"),
       signature: Buffer.from(signature).toString("base64"),

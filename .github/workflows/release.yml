@@ -23,6 +23,8 @@ jobs:
         run: |
           v=$(node -p "require('./package.json').version")
           [ "${GITHUB_REF_NAME}" = "v$v" ] || { echo "tag ${GITHUB_REF_NAME} ≠ v$v"; exit 1; }
+      - name: CHANGELOG.md assembled for this version
+        run: node scripts/changelog.mjs check-release "$(node -p "require('./package.json').version")"
       - run: npm publish --provenance --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
