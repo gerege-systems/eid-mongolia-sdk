@@ -96,6 +96,42 @@ export interface NotificationSession {
   rpChallenge: string;
   /** Auth session-д validator-т өгөх контекст (sign session-д undefined). */
   acsp?: AcspContext;
+  /** Sign session-ий хүсэлтэд илгээсэн утгууд ({@link SignContext}); auth / certificate-choice-д undefined. */
+  sign?: SignContext;
+  /** Sign / certificate-choice session-ий ТООЦООЛСОН дуусах мөч (ms epoch) — {@link sessionExpiry}; auth-д undefined. */
+  expiresAt?: number;
+}
+
+/**
+ * Sign session-ий хүсэлтэд илгээсэн утгууд ЯГ ХЭВЭЭР: `validateSign` (digest, hashAlgorithm, signatureAlgorithm) ба
+ * device link (`buildDeviceLink`: digest, relyingPartyName, interactions, initialCallbackUrl)-д. RP session-тэй хамт
+ * серверт хадгална.
+ */
+export interface SignContext {
+  /** Илгээсэн digest (стандарт base64, ЯГ ХЭВЭЭР — device link-ийн authCode-д ордог). */
+  digest: string;
+  hashAlgorithm: HashAlgorithm;
+  signatureAlgorithm: SignatureAlgorithm;
+  relyingPartyName: string;
+  /** Илгээсэн interactions-ийн base64 МӨР. */
+  interactions: string;
+  initialCallbackUrl: string;
+}
+
+/**
+ * CA-ийн SIGNATURE ба CERTIFICATE_CHOICE session-ий анхдагч хүчинтэй хугацаа (мс; `EID_SIGN_SESSION_TTL_SECONDS` = 600).
+ * CA-ийн админ «Системийн тохиргоо»-нд 60–1800 секундэд өөрчилж болно; session start хариунд CA хугацааг буцаадаггүй
+ * (зөвхөн `sessionID`) тул SDK үүнийг `ClientConfig.signSessionTtlMs`-ээр тооцоолно.
+ */
+export const DEFAULT_SIGN_SESSION_TTL_MS = 600_000;
+
+/**
+ * Session start-ын хариунаас тооцоолох дуусах мөч (ms epoch): хүсэлт илгээхээс ӨМНӨХ цаг + ttl. CA ExpiresAt-ийг өөрийн
+ * хүлээн авсан мөчөөс тооцдог тул энэ утга CA-ийнхаас ХЭЗЭЭ Ч хойно биш (консерватив). RP UI-ийн тоолуур / «дахин
+ * эхлүүлэх» шийдвэрт л — эцсийн үнэн нь `GET /session` (`TIMEOUT`).
+ */
+export function sessionExpiry(sentAtMs: number, ttlMs?: number): number {
+  return sentAtMs + (ttlMs && ttlMs > 0 ? ttlMs : DEFAULT_SIGN_SESSION_TTL_MS);
 }
 
 /**
@@ -124,6 +160,14 @@ export interface DeviceLinkSession {
    * ЗӨВХӨН backend-д хадгална.
    */
   receivedAt: number;
+  /** auth | sign | cert ({@link deviceLinkInput}-д). Хуучин хадгалсан session-д undefined = auth. */
+  sessionType?: "auth" | "sign" | "cert";
+  /** Sign session-д ({@link deviceLinkInput}, `validateSign`); бусад үед undefined. */
+  sign?: SignContext;
+  /** Certificate-choice session-ий хүсэлтэд илгээсэн нэр (cert холбоосын authCode-д). */
+  relyingPartyName?: string;
+  /** Sign / certificate-choice session-ий ТООЦООЛСОН дуусах мөч (ms epoch, {@link sessionExpiry}); auth-д undefined. */
+  expiresAt?: number;
 }
 
 /** Session poll-ийн нэгтгэсэн үр дүн (validator-т орох түүхий материал). */

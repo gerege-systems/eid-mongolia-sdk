@@ -14,7 +14,7 @@ import { X509Certificate, constants, createHash, publicDecrypt, verify, type Key
 import { buildAcspV2Payload, hashLen, nodeHash } from "./crypto.js";
 import { SessionFailedError, ValidationError } from "./errors.js";
 import { certExtension, certExtensions, oidOf, parseSubject, tlv, type CertSubject } from "./subject.js";
-import type { AcspContext, CertificateLevel, FlowType, SessionResult } from "./types.js";
+import type { AcspContext, CertificateLevel, FlowType, SessionResult, SignatureAlgorithm } from "./types.js";
 
 /**
  * validateAuth-ийн нэмэлт шалгалт — RP ЯМАР урсгал эхлүүлснээ мэддэг тул түүнийг тулгана
@@ -55,6 +55,35 @@ export interface ValidateSignOptions {
    * тулгалт, криптограф баталгаа биш.
    */
   expectedFlowType?: FlowType;
+  /**
+   * Хүсэлтэд илгээсэн signatureAlgorithm (`s.sign.signatureAlgorithm`). Өгвөл хариуны RSA алгоритм ЯГ ИЖИЛ байх ёстой:
+   * `sha256WithRSAEncryption` хүссэн session-д `rsassa-pss` (эсвэл эсрэгээр) хариу → `ValidationError`. CA-ийн хуучин
+   * threshold-ECDSA credential хүссэнээс үл хамааран `ecdsa-with-SHA256` буцаадаг (түлхүүрийн төрөл гэрчилгээнд
+   * бэхлэгдсэн) — зөвхөн EC P-256 гэрчилгээ + SHA-256 үед зөвшөөрнө. Өгөөгүй бол хуучин зан (RSA алгоритмыг тулгахгүй).
+   */
+  expectedAlgorithm?: SignatureAlgorithm;
+  /**
+   * Урьдчилж мэдсэн гэрчилгээ (certificate-choice: `signer.certificate`). Өгвөл хариуны гэрчилгээ байт-ижил байх ёстой —
+   * өөр төхөөрөмж/гэрчилгээгээр зурсан бол (олон утастай иргэн) `ValidationError`.
+   */
+  expectedCertificate?: X509Certificate;
+}
+
+/**
+ * Certificate-choice-оор баталгаажсан гарын үсэг зурагч ({@link ResponseValidator.validateCertificateChoice}) —
+ * `sign.digestForSigner` / `sign.deviceLinkForSigner`-д өгнө.
+ */
+export interface Signer {
+  /** Гэрчилгээг сонгосон ЯГ ТЭР төхөөрөмж — sign session-ийг ҮҮГЭЭР эхлүүлнэ. */
+  documentNumber: string;
+  /** Иргэний SIGN гэрчилгээ (KeyUsage contentCommitment). */
+  certificate: X509Certificate;
+  /** DER, стандарт base64. */
+  certificateDerB64: string;
+  certificateLevel: string;
+  parsedSubject: CertSubject;
+  /** Certificate-choice session (linked sign-ийн `linkedSessionID`). */
+  certChoiceSessionId: string | null;
 }
 
 /**
@@ -233,13 +262,19 @@ export class ResponseValidator {
    * @param opts — `hashAlgorithm` мөр (хуучин хэлбэр; default SHA-256) эсвэл {@link ValidateSignOptions}.
    */
   validateSign(result: SessionResult, digestB64: string, opts: string | ValidateSignOptions = {}): VerifiedSignature {
-    const { hashAlgorithm = "SHA-256", expectedFlowType } = typeof opts === "string" ? { hashAlgorithm: opts } : opts;
+    const o: ValidateSignOptions = typeof opts === "string" ? { hashAlgorithm: opts } : opts;
+    const { hashAlgorithm = "SHA-256", expectedFlowType } = o;
     const leaf = this.precheck(result, "RAW_DIGEST_SIGNATURE");
     if (expectedFlowType && result.flowType !== expectedFlowType) {
       throw new ValidationError(`flowType ${result.flowType} ≠ эхлүүлсэн урсгал ${expectedFlowType} (relay байж болзошгүй)`);
     }
+    if (o.expectedCertificate && !leaf.raw.equals(o.expectedCertificate.raw)) {
+      throw new ValidationError(
+        `Гэрчилгээ certificate-choice-оор сонгосонтой таарахгүй (serial ${leaf.serialNumber} ≠ ${o.expectedCertificate.serialNumber})`,
+      );
+    }
     const digest = Buffer.from(digestB64, "base64");
-    const { alg, hash } = this.algorithmOf(result, leaf, null, hashAlgorithm);
+    const { alg, hash } = this.algorithmOf(result, leaf, o.expectedAlgorithm ?? null, hashAlgorithm);
     if (digest.length !== hashLen(hash)) throw new ValidationError("digest урт hashAlgorithm-тай таарахгүй");
     if (!verifyPrehashedSignature(digest, result.signatureValueB64!, leaf.publicKey, alg, hash)) {
       throw new ValidationError("Гарын үсэг өгсөн digest-тэй таарсангүй");
@@ -251,6 +286,25 @@ export class ResponseValidator {
       certificate: leaf,
       subject: leaf.subject,
       parsedSubject: parseSubject(leaf),
+    };
+  }
+
+  /**
+   * Certificate-choice session-ий хариуг шалгана: COMPLETE/OK (эс бөгөөс `SessionFailedError`), гэрчилгээ ба
+   * documentNumber байгаа, хугацаа, certLevel, зориулалт (гарын үсгийн — contentCommitment, `checkKeyUsage` үед), гинж,
+   * issuer. Энэ хариунд гарын үсэг БАЙХГҮЙ — иргэнийг таниагүй (нэвтрэлт биш); зөвхөн дараагийн sign session-ий
+   * гэрчилгээг урьдчилж мэдэхэд. `sessionId` — certificate-choice session.
+   */
+  validateCertificateChoice(result: SessionResult, sessionId: string | null = null): Signer {
+    this.sessionDone(result);
+    const leaf = this.leafOf(result, "RAW_DIGEST_SIGNATURE");
+    return {
+      documentNumber: result.documentNumber!,
+      certificate: leaf,
+      certificateDerB64: leaf.raw.toString("base64"),
+      certificateLevel: String(result.certificateLevel ?? ""),
+      parsedSubject: parseSubject(leaf),
+      certChoiceSessionId: sessionId,
     };
   }
 
@@ -311,13 +365,24 @@ export class ResponseValidator {
 
   /** state/endResult, cert байгаа эсэх, chain, validity, certLevel — нийтлэг шалгалт. */
   private precheck(result: SessionResult, protocol: string): X509Certificate {
-    if (result.state !== "COMPLETE") throw new ValidationError(`Session дуусаагүй (state=${result.state})`);
-    if (result.endResult !== "OK") throw new SessionFailedError(result.endResult ?? "UNKNOWN");
+    this.sessionDone(result);
     if (result.signatureProtocol && result.signatureProtocol !== protocol) {
       throw new ValidationError(`signatureProtocol ${result.signatureProtocol} ≠ ${protocol}`);
     }
     if (!result.certificateDerB64) throw new ValidationError("Хариунд гэрчилгээ алга");
     if (!result.signatureValueB64) throw new ValidationError("Хариунд гарын үсэг алга");
+    return this.leafOf(result, protocol);
+  }
+
+  /** COMPLETE + OK; амжилтгүй endResult → SessionFailedError. */
+  private sessionDone(result: SessionResult): void {
+    if (result.state !== "COMPLETE") throw new ValidationError(`Session дуусаагүй (state=${result.state})`);
+    if (result.endResult !== "OK") throw new SessionFailedError(result.endResult ?? "UNKNOWN");
+  }
+
+  /** Хариуны гэрчилгээ: documentNumber, задлалт, хугацаа, certLevel, зориулалт (protocol), гинж, issuer. */
+  private leafOf(result: SessionResult, protocol: string): X509Certificate {
+    if (!result.certificateDerB64) throw new ValidationError("Хариунд гэрчилгээ алга");
     if (!result.documentNumber) throw new ValidationError("Хариунд documentNumber алга");
 
     const leaf = new X509Certificate(Buffer.from(result.certificateDerB64, "base64"));

@@ -29,7 +29,7 @@
   },
   "scripts": {
     "build": "tsup src/index.ts src/browser.ts --format esm,cjs --dts --clean",
-    "test": "npm run build && node --test --experimental-strip-types test/sdk.test.ts test/oidc.test.ts test/portal-gaps.test.ts test/chain.test.ts",
+    "test": "npm run build && node --test --experimental-strip-types test/sdk.test.ts test/oidc.test.ts test/portal-gaps.test.ts test/chain.test.ts test/sign-gaps.test.ts",
     "test:contract": "npm run build && node --experimental-strip-types test/contract.test.ts",
     "lint": "tsc --noEmit"
   },
