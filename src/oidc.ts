@@ -7,6 +7,7 @@
 // Шинэ хамааралгүй: global fetch + WebCrypto (globalThis.crypto.subtle).
 
 import { timingSafeEqual } from "node:crypto";
+import { OIDC_EXPECT } from "./contract.js";
 import { EidError, NetworkError } from "./errors.js";
 
 /** eID-ийн OIDC issuer (төгсгөлд `/` байхгүй). */
@@ -180,7 +181,7 @@ export class EidOidcClient {
     if (!cfg.clientSecret) throw new EidError("EidOidcClient: clientSecret хоосон");
     if (!/^https:\/\//.test(cfg.redirectUri ?? "")) throw new EidError("EidOidcClient: redirectUri https:// байх ёстой");
     this.issuer = (cfg.issuer ?? EID_OIDC_ISSUER).replace(/\/+$/, "");
-    this.scope = cfg.scope ?? "openid";
+    this.scope = cfg.scope ?? OIDC_EXPECT.defaultScope;
   }
 
   /** Discovery document (1 цаг cache). `issuer` нь тохиргоотой яг таарах ёстой (OIDC Discovery §4.3). */
@@ -226,7 +227,7 @@ export class EidOidcClient {
       state,
       nonce,
       code_challenge: await pkceChallenge(codeVerifier),
-      code_challenge_method: "S256",
+      code_challenge_method: OIDC_EXPECT.pkceMethod,
     });
     if (opts.display) p.set("display", opts.display);
     u.search = p.toString();
@@ -310,7 +311,7 @@ export class EidOidcClient {
     const header = decodeJsonPart(parts[0]!);
     const payload = decodeJsonPart(parts[1]!);
     if (!header || !payload) throw bad("хэлбэр буруу");
-    if (header.alg !== "ES256") throw bad("alg ES256 биш");
+    if (header.alg !== OIDC_EXPECT.idTokenAlg) throw bad("alg ES256 биш");
     const kid = typeof header.kid === "string" ? header.kid : "";
     if (!kid) throw bad("kid алга");
 

@@ -36,6 +36,7 @@ import {
   parseSubject,
 } from "../dist/index.js";
 import * as browser from "../dist/browser.js";
+import { RP_ROUTES, routePath } from "../src/contract.ts";
 
 // Smart-ID RP-API v3 docs (signature_protocols.html)-ийн албан ёсны вектор — сервер, iOS,
 // Android, TS дөрвүүлээ ЭНЭ digest-ийг гаргах ёстой.
@@ -889,4 +890,11 @@ test("pdf.documentVerified — outSha256 таарвал байт; зөрвөл /
   await assert.rejects(() => eid.pdf.documentVerified("s", { docID: "d", documentStatus: "READY", outSha256: "0".repeat(64) }), ValidationError);
   await assert.rejects(() => eid.pdf.documentVerified("s", { docID: "d", documentStatus: "PENDING", outSha256: sha }), ValidationError);
   await assert.rejects(() => eid.pdf.documentVerified("s", { docID: "d", documentStatus: "READY" }), ValidationError);
+});
+
+test("routePath — {param}-ийг encodeURIComponent-аар бөглөнө; тоо зөрвөл шиднэ", () => {
+  assert.equal(routePath(RP_ROUTES.pdfDocument, "a/b c"), "/pdf/sign/a%2Fb%20c/document");
+  assert.equal(routePath(RP_ROUTES.authDeviceLinkAnonymous), "/authentication/device-link/anonymous");
+  assert.throws(() => routePath(RP_ROUTES.session));
+  assert.throws(() => routePath(RP_ROUTES.session, "x", "y"));
 });

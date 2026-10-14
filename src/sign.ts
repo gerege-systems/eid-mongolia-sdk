@@ -2,6 +2,7 @@
 // гарын үсэг зурна. RP нь баримтынхаа SHA-256 digest-ийг илгээж, хариунд ирэх signature-ийг
 // тэр digest + иргэний cert-ийн эсрэг ResponseValidator-аар шалгана.
 
+import { RP_ROUTES, routePath } from "./contract.js";
 import type { Http } from "./http.js";
 import { interactionsToBase64, sha256Base64 } from "./crypto.js";
 import type {
@@ -78,13 +79,13 @@ export class SignApi {
    * digest-ийг гаднаас бэлдэж өгнө — текст бус бинар баримтад тохиромжтой.
    */
   async digestByEtsi(id: string, digestB64: string, interactions: Interaction[], opts?: SignOptions): Promise<NotificationSession> {
-    const raw = await this.http.post(`/signature/notification/etsi/${encodeURIComponent(id)}`, this.body(digestB64, interactions, opts));
+    const raw = await this.http.post(routePath(RP_ROUTES.signNotificationEtsi, id), this.body(digestB64, interactions, opts));
     return this.parse(raw);
   }
 
   /** Бэлэн digest-ээр push sign — баримтын дугаараар (auth-аас гарсан documentNumber дээр). */
   async digestByDocument(documentNumber: string, digestB64: string, interactions: Interaction[], opts?: SignOptions): Promise<NotificationSession> {
-    const raw = await this.http.post(`/signature/notification/document/${encodeURIComponent(documentNumber)}`, this.body(digestB64, interactions, opts));
+    const raw = await this.http.post(routePath(RP_ROUTES.signNotificationDocument, documentNumber), this.body(digestB64, interactions, opts));
     return this.parse(raw);
   }
 
