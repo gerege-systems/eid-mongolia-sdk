@@ -19,4 +19,4 @@
 - Шалгасан: lint, test (162), test:compat, size:pades (126.8 KB), golden:check; `npm run test:convert-e2e` Chromium ба
   WebKit — хуудасны CSP nonce + `'strict-dynamic'`, worker CSP `script-src 'self' 'wasm-unsafe-eval' 'unsafe-eval'`
   (`'unsafe-eval'`-гүй бол EvalError), sample.docx/.doc → 3 хуудас PDF → `pades.prepare` OK, дахин ажиллуулахад wasm/data
-  сүлжээнээс авахгүй, цуцлалт, COEP-гүй хуудас `NOT_ISOLATED`. Firefox шалгаагүй.
+  сүлжээнээс авахгүй, цуцлалт, COEP-гүй хуудас `NOT_ISOLATED`. Firefox шалгаагүй. Linux WebKit (CI) — цуцалсны дараа шинэ worker-ийн init дуусдаггүй тул тэр алхмыг алгасна (macOS WebKit-д болно).

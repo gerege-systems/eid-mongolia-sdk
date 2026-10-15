@@ -67,6 +67,7 @@ jobs:
     # /convert: жинхэнэ LibreOffice WASM хөтөчид (COOP/COEP + хатуу CSP) → PDF → /pades prepare; кэш, цуцлалт.
     needs: test
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
