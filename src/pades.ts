@@ -18,6 +18,7 @@ import { assembleCMS, signedAttributes, CLAIMED_ROLE_MAX_RUNES } from "./pades/c
 import { randomBytes, sha256 } from "./pades/crypto.js";
 import { DEFAULT_TSA_URL, Fetcher, isBrowser, type FetchFn } from "./pades/fetch.js";
 import { LTVError, collectLTVWithWait, timestampToken } from "./pades/ltv.js";
+import { MAX_INPUT_BYTES } from "./pades/limits.js";
 import { AppearanceError, pageCount, round100, type Visible } from "./pades/page/appearance.js";
 import { appendVerifyPage } from "./pades/page/page.js";
 import { appendDSS } from "./pades/pdf/dss.js";
@@ -189,7 +190,6 @@ export interface PadesCompleted {
   signerCert: Uint8Array;
 }
 
-const MAX_INPUT_BYTES = (10 << 20) - (256 << 10);
 const MAX_OUTPUT_BYTES = 10 << 20;
 const MAX_FILE_NAME = 120;
 const PAGE_BRAND = "eID Mongolia";

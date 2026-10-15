@@ -14,5 +14,5 @@
     "types": ["node"]
   },
   "include": ["src"],
-  "exclude": ["src/button.ts"]
+  "exclude": ["src/button.ts", "src/convert.ts"]
 }

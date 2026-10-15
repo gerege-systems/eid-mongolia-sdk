@@ -63,3 +63,26 @@ jobs:
       - run: node --version
       - run: node scripts/test-compat.mjs
       - run: node test/pades-node18.mjs
+  convert-e2e:
+    # /convert: жинхэнэ LibreOffice WASM хөтөчид (COOP/COEP + хатуу CSP) → PDF → /pades prepare; кэш, цуцлалт.
+    needs: test
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chromium, webkit]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+      - run: npx playwright install --with-deps ${{ matrix.browser == 'chromium' && '--only-shell chromium' || 'webkit' }}
+      - run: node scripts/convert-e2e.mjs
+        env:
+          BROWSER: ${{ matrix.browser }}
