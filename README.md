@@ -16,7 +16,7 @@ RP-API v3, Smart-ID нийцтэй. Бүрэн баримт: <https://developer.
 npm install @gerege-systems/eid-mongolia-sdk
 ```
 
-Node.js ≥ 18 (global `fetch`, `node:crypto`) — бүх entry (`.`, `/browser`, `/button`, `/pades`), CI-д Node 18 / 20 / 22-оор шалгагдана.
+Node.js ≥ 18 (global `fetch`, `node:crypto`) — бүх entry (`.`, `/browser`, `/button`, `/pades`; `/convert` зөвхөн хөтөч, §3e), CI-д Node 18 / 20 / 22-оор шалгагдана.
 `/pades` мөн орчин үеийн хөтөчид (Web Crypto) ажиллана.
 
 ## 1. RP бүртгүүлэх
@@ -577,6 +577,65 @@ Go backend-д `complete` хийж болно).
 0.15.0-д `eid.pdf` (`prepare`, `document`, `documentVerified`, `tokenPrepare`, `tokenFinalize`, `tokenDocument`) ба
 `pdfTimeoutMs` / `pdfMaxBytes` устсан — PDF upload endpoint-ууд CA-д байхгүй (2026-10-14-нд устсан, 404).
 
+## 3e. Word → PDF хөтөч дотор — `@gerege-systems/eid-mongolia-sdk/convert`
+
+Иргэн Word (.docx / .doc) баримт сонговол хөтөч өөрөө PDF болгоно — **файл сервер рүү ОЧИХГҮЙ** (§3d-тэй ижил зарчим).
+Хувиргагч нь LibreOffice 24.8-ийн WebAssembly build (`@matbee/libreoffice-converter@2.7.2`, MPL-2.0), Web Worker-т.
+Гарын үсэг **Word файлд биш, хувиргасан PDF-д** зурагдана — иргэнд тэр PDF-ийг (яг тэр байтуудыг) зурахаас ӨМНӨ заавал
+харуулж, «шалгасан» гэж зөвшөөрүүл; хувиргалтад фонт, мөр, хуудас шилжиж болно (`warnings`).
+
+```bash
+npm install @gerege-systems/eid-mongolia-sdk @matbee/libreoffice-converter@2.7.2   # optional peer — зөвхөн /convert-д
+npx eid-mongolia-convert-assets public/eid-convert                                 # build үед; git-д commit хийхгүй (~250 MB)
+```
+
+```ts
+import { wordToPdf, converterStatus, isWordFile, ConvertError } from "@gerege-systems/eid-mongolia-sdk/convert";
+
+if (isWordFile(file)) {
+  const s = await converterStatus({ assetsBase: "/eid-convert/" });   // { cached, downloadBytes } — мобайл датанд анхааруул
+  const { pdf, pages, warnings } = await wordToPdf(file, {
+    assetsBase: "/eid-convert/",
+    signal: controller.signal,                                        // цуцлах → DOMException AbortError
+    onProgress: ({ phase, percent, loaded, total }) => show(phase, percent), // download (зөвхөн эхний удаа) → init → convert
+  });
+  preview(pdf);                       // иргэн шалгаад зөвшөөрнө
+  const p = await prepare(pdf, { signerCert, verifyPage: true, fileName: "Гэрээ.pdf" });   // §3d
+}
+```
+
+| Функц | Тайлбар |
+|---|---|
+| `wordToPdf(file, { assetsBase, onProgress?, signal?, fileName? })` | `{ pdf, pages, warnings }`. Нэг worker-ийг дахин ашиглана, дуудлагууд дараалалд |
+| `converterStatus({ assetsBase })` | `{ cached, downloadBytes }` — татахаас өмнө хэмжээг хэлэх (gzip хэмжээ, кэштэй бол 0) |
+| `isWordFile(file \| name)` | .docx / .doc эсэх (нэр, MIME). Агуулгыг `wordToPdf` эхний байтаар шалгана |
+| `disposeConverter()` | worker-ийг зогсоож санах ойг чөлөөлнө (кэш үлдэнэ) |
+
+**Хост дээр (заавал).**
+- Хувиргах хуудас **crossOriginIsolated**: `Cross-Origin-Opener-Policy: same-origin` + `Cross-Origin-Embedder-Policy:
+  require-corp` (SharedArrayBuffer). Зөвхөн тэр route-д тавьж болно — тэгвэл тэр хуудас руу **hard navigation**
+  (`<a href>`, client-side router биш). Үгүй бол `wordToPdf` шууд `NOT_ISOLATED` (хүлээхгүй). COEP-ийн дор гадны
+  CORP/CORS-гүй зураг, iframe ачаалагдахгүй.
+- Asset-ууд **өөрийн хост** дээр (`assetsBase`): `manifest.json` — `Cache-Control: no-cache`; `<хувилбар>/*` — урт кэш
+  (`public, max-age=31536000, immutable`), `.wasm` → `application/wasm`, gzip/brotli шахалттай (≈250 MB → gzip 77 MB).
+  Эхний удаа татсаныг SDK Cache Storage-д хадгална (дахин татахгүй); хувилбар солигдвол хуучныг устгана.
+- Worker-ийн скриптүүдэд (`<assetsBase><хувилбар>/*.js`) **тусдаа CSP**: `default-src 'self'; script-src 'self'
+  'wasm-unsafe-eval' 'unsafe-eval'` (Emscripten-д `eval` хэрэгтэй — зөвхөн worker-т). Хуудасны хатуу CSP (nonce +
+  `'strict-dynamic'`) хэвээр байна; хуудсанд `connect-src 'self'` хангалттай.
+- MPL-2.0: `<хувилбар>/NOTICE.txt` (эх код, лицензийн холбоос) asset-уудтай хамт үйлчилгээнд байна — хэрэглэгчийн
+  нүүрэнд (тусламж/лиценз хэсэгт) LibreOffice-ийг дурд.
+
+`ConvertError.code`: `UNSUPPORTED_ENVIRONMENT`, `NOT_ISOLATED`, `UNSUPPORTED_FILE`, `INPUT_TOO_LARGE` (> 50 MB),
+`ASSETS_UNAVAILABLE` (`retryable`), `CONVERT_FAILED` (эвдэрсэн / нууц үгтэй баримт). `warnings[].code`:
+`FONT_SUBSTITUTED` (`fonts` — хувиргагчид байхгүй, хэмжээ-нийцтэй орлуулагчгүй фонт; Times New Roman / Arial /
+Calibri / Cambria / Courier New-ийн Liberation / Carlito / Caladea орлуулагч анхааруулахгүй), `FONT_FALLBACK` (`fonts` —
+зарим тэмдэгтийг өөр фонтоор, жишээ нь Caladea-д кирилл байхгүй тул Noto), `PDF_NEAR_LIMIT` / `PDF_TOO_LARGE` (`bytes`,
+`limit` — §3d `prepare`-ийн 10 223 616 байт). Фонтын анхааруулга .docx-д л (heuristic); .doc-д үгүй.
+
+Шалгасан: Chromium ба WebKit (Playwright, `npm run test:convert-e2e`) — .docx ба .doc → PDF → `prepare`, кэштэй дахин
+ажиллуулахад татахгүй, цуцлалт, COEP-гүй хуудас. Мобайл хөтөчид 250 MB WASM санах ой их шаардана — сул утсанд унаж
+болзошгүй.
+
 ## 4. QR ба ижил төхөөрөмж — device link v3
 
 Иргэн өөр төхөөрөмжийн дэлгэц дээрх **QR**-ийг утсаараа уншина, эсвэл RP-ийн сайт/аппыг eID апптай **ижил
@@ -731,6 +790,7 @@ npm run lint          # tsc --noEmit
 npm test              # build + node --test (pades golden — Go reference-тэй байт-ижил)
 npm run golden:check  # test/fixtures/pades/golden + src/pades/assets ↔ бэхэлсэн Go commit
 npm run size:pades    # /pades хөтчийн bundle gzip ≤ 300 KB
+npm run test:convert-e2e   # /convert жинхэнэ LibreOffice Chromium-д (BROWSER=webkit — WebKit)
 ```
 
 `/pades`-ийн conformance fixture (golden: оролт, тестийн PKI-ийн гэрчилгээ, TSA/OCSP/CRL-ийн тогтмол хариу, хүлээгдэх
