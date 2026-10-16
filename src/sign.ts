@@ -474,11 +474,9 @@ export class SignApi {
   /**
    * `POST /pdf/signatures` — `pades.complete()`-ийн дараа CMS-ийг CA-д бүртгэнэ (`/verify/{docID}`, иргэний түүх). PDF
    * илгээгдэхгүй. SIGN эрх. CA CMS-ийг шалгана: 04-ийн SIGN cert, session digest = SHA-256(signedAttrs), claimedRole ↔
-   * төлөөлөл. Алдаа (`ApiError.code`; CA `pades_register.go`): 400 `REQUEST_INVALID` / `CMS_INVALID` /
-   * `SIGNATURE_INVALID` / `TIMESTAMP_INVALID`; 403/404 onBehalfOf-ийн код (`REPRESENTATION_REVOKED` г.м.); 404
-   * `DOC_NOT_FOUND`; 409 `SIGNER_MISMATCH` / `SIGNER_CERT_INVALID` / `CLAIMED_ROLE_MISMATCH` / `DOC_ID_CONFLICT` /
-   * `REGISTRY_CONFLICT` / `PRIOR_MISMATCH` / `SESSION_MISMATCH` / `SESSION_NOT_COMPLETE` / `SESSION_FAILED`; 413
-   * `REQUEST_TOO_LARGE`; 429 `RATE_LIMITED`. Бүртгэлгүй файл ч Adobe/EU DSS-д хүчинтэй — зөвхөн `/verify` «бүртгэлгүй» гэнэ.
+   * төлөөлөл. Алдаа: `ApiError.code` / `ForbiddenError.code` ∈ {@link PdfRegisterErrorCode}
+   * (`PDF_REGISTER_ERROR_CODES`; CA `pades_register.go`). Бүртгэлгүй файл ч Adobe/EU DSS-д хүчинтэй — зөвхөн `/verify`
+   * «бүртгэлгүй» гэнэ.
    */
   async registerSignature(input: RegisterSignatureInput): Promise<RegisterSignatureResult> {
     const body = buildRegisterBody(input);

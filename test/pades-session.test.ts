@@ -7,6 +7,8 @@ import {
   EidClient,
   ValidationError,
   ApiError,
+  PDF_REGISTER_ERROR_CODES,
+  type PdfRegisterErrorCode,
   buildDeviceLink,
   buildRegisterBody,
   registrationFromCompleted,
@@ -181,6 +183,24 @@ test("registerSignature — POST /pdf/signatures бие ба хариу; алд�
   }
   const conflict = client(() => ({ status: 409, body: { error: "x", code: "CLAIMED_ROLE_MISMATCH" } }));
   await assert.rejects(() => conflict.eid.registerSignature(base), (e: unknown) => e instanceof ApiError && e.code === "CLAIMED_ROLE_MISMATCH");
+});
+
+test("PDF_REGISTER_ERROR_CODES — CA pades_register.go-ийн кодууд, давхардалгүй; ApiError.code-оор салаална", async () => {
+  // CA main (2026-10-16) POST /pdf/signatures-ийн бүх тогтвортой code. Go SDK: eid.PDFRegisterErrorCodes (ижил дараалал).
+  const want: PdfRegisterErrorCode[] = ["REQUEST_INVALID", "REQUEST_TOO_LARGE", "CMS_INVALID", "SIGNATURE_INVALID",
+    "TIMESTAMP_INVALID", "SIGNER_MISMATCH", "SIGNER_CERT_INVALID", "TOKEN_CERT_INVALID", "TOKEN_ORG_MISMATCH",
+    "SESSION_MISMATCH", "SESSION_NOT_COMPLETE", "SESSION_FAILED", "CLAIMED_ROLE_MISMATCH", "REPRESENTATION_REVOKED",
+    "DOC_ID_CONFLICT", "REGISTRY_CONFLICT", "DOC_NOT_FOUND", "PRIOR_MISMATCH", "RATE_LIMITED", "STATE_UNAVAILABLE"];
+  assert.deepEqual([...PDF_REGISTER_ERROR_CODES], want);
+  assert.equal(new Set(PDF_REGISTER_ERROR_CODES).size, PDF_REGISTER_ERROR_CODES.length);
+  const docID = "11111111-1111-4111-8111-111111111111";
+  const sha = (s: string) => createHash("sha256").update(s).digest("hex");
+  const { eid } = client(() => ({ status: 404, body: { error: "x", code: "DOC_NOT_FOUND" } }));
+  await assert.rejects(
+    () => eid.registerSignature({ docID, sessionID: "s1", cms: new Uint8Array([0x30, 1]), outSha256: sha("o"), sigRevSha256: sha("r"),
+      inSha256: sha("i"), pageSha256: sha("p"), fileName: "a.pdf", revIndex: 1 }),
+    (e: unknown) => e instanceof ApiError && (PDF_REGISTER_ERROR_CODES as readonly string[]).includes(e.code!) && e.code === "DOC_NOT_FOUND",
+  );
 });
 
 test("registerSignature — 200 давталт: created false", async () => {
