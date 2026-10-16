@@ -52,6 +52,11 @@ export class Http {
     return { status: res.status, body: text ? (JSON.parse(text) as unknown) : {} };
   }
 
+  /** multipart/form-data POST (`/share`); Content-Type-ийг (boundary) fetch тавина. */
+  postForm(path: string, form: FormData, timeoutMs?: number): Promise<unknown> {
+    return this.json("POST", path, form, undefined, timeoutMs);
+  }
+
   get(path: string, timeoutMs?: number): Promise<unknown> {
     return this.json("GET", path, undefined, undefined, timeoutMs);
   }

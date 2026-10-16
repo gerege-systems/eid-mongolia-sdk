@@ -32,6 +32,7 @@ export const RP_ROUTES = {
   pdfSignatures: { method: "POST", path: "/pdf/signatures" },
   tokenAuthChallenge: { method: "POST", path: "/token/auth/challenge" },
   tokenAuthVerify: { method: "POST", path: "/token/auth/verify" },
+  share: { method: "POST", path: "/share" },
 } as const satisfies Record<string, RpRoute>;
 
 /**
@@ -62,6 +63,13 @@ export const PDF_SIGNATURE_REGISTER_FIELDS = [
   "onBehalfOf",
   "signerEtsi",
 ] as const;
+
+/**
+ * `POST /share`-ийн multipart талбарууд — CA `server/internal/httpapi/handlers_share.go` `parseShareRequest` (CA main
+ * 0329ef95, !371). CA үл мэдэгдэх талбарыг 400 REQUEST_INVALID-аар татгалздаг. Live discovery-ийн `endpoints.share`
+ * тайлбартай гэрээний тест тулгана.
+ */
+export const SHARE_FORM_FIELDS = ["file", "filename", "to", "subject", "message", "lang"] as const;
 
 /** Template-ийн `{param}`-уудыг дарааллаар нь `encodeURIComponent` хийсэн `args`-аар орлуулна. */
 export function routePath(route: RpRoute, ...args: string[]): string {

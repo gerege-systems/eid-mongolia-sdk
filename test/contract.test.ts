@@ -5,7 +5,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { DEFAULT_BASE_URL } from "../dist/index.js";
-import { PDF_SIGNATURE_REGISTER_FIELDS, RP_ROUTES, RP_ROUTES_UNDISCOVERED } from "../src/contract.ts";
+import { PDF_SIGNATURE_REGISTER_FIELDS, RP_ROUTES, RP_ROUTES_UNDISCOVERED, SHARE_FORM_FIELDS } from "../src/contract.ts";
 
 const EID_DISCOVERY = "https://rp.eidmongolia.mn/.well-known/eid";
 
@@ -94,4 +94,27 @@ test("PAdES клиент тал: pdfSigning.clientSide.register ба /pdf/signat
   assert.ok(m, "endpoints.pdf.signatures-д {талбарууд} алга");
   const live = m[1]!.split(",").map((x) => x.trim().replace(/\?$/, "")).filter(Boolean).sort();
   assert.deepEqual(live, [...PDF_SIGNATURE_REGISTER_FIELDS].sort(), "SDK-ийн бие ↔ CA dto.PDFSignatureRegisterRequest");
+});
+
+test("Share: endpoints.share-ийн талбарууд ба discovery-ийн share блок SDK-тэй ижил", async () => {
+  const d = await getJson(EID_DISCOVERY);
+  const base = String(d.rp_api_base);
+  const desc = String(((d.endpoints ?? {}) as Record<string, unknown>).share ?? "");
+  assert.ok(desc.startsWith(`POST ${base}${RP_ROUTES.share.path} `), `endpoints.share: ${desc}`);
+  const m = /\{([^}]*)\}/.exec(desc);
+  assert.ok(m, "endpoints.share-д {талбарууд} алга");
+  // "to (1–5)" → "to", "filename?" → "filename"
+  const live = m[1]!.split(",").map((x) => x.trim().replace(/\s*\(.*\)$/, "").replace(/\?$/, "")).filter(Boolean).sort();
+  assert.deepEqual(live, [...SHARE_FORM_FIELDS].sort(), "SDK-ийн multipart ↔ CA parseShareRequest");
+
+  const s = d.share as Record<string, unknown> | undefined;
+  assert.ok(s && typeof s === "object", "discovery-д share блок алга");
+  assert.equal(s.endpoint, base + RP_ROUTES.share.path, "share.endpoint");
+  assert.equal(typeof s.enabled, "boolean", "share.enabled");
+  for (const k of ["maxFileBytes", "maxFilenameChars", "maxMessageChars", "maxRecipients", "maxSubjectChars"]) {
+    assert.equal(typeof s[k], "number", `share.${k}`);
+  }
+  const q = s.quota as Record<string, unknown>;
+  for (const k of ["perRPHour", "perRPDay", "perRecipientDay"]) assert.equal(typeof q?.[k], "number", `share.quota.${k}`);
+  assert.ok(Array.isArray(s.formats) && s.formats.length > 0, "share.formats");
 });
