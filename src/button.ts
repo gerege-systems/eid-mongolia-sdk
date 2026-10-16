@@ -6,7 +6,7 @@
 //   • desktop  → цонх (modal): QR (секунд тутам шинэчлэгдэнэ) + «Регистрийн дугаараар нэвтрэх» товч (ижил цонхонд дэлгэгдэх push хэсэг), шууд төлөв;
 //   • утасны хөтөч → `start-url?mode=web2app` руу шилжинэ (сервер 302 → eID апп; апп буцаахад backend callback дуусгана).
 // Амжилттай бол `eid-login-success` (detail = backend-ийн {state, redirect, data}) — preventDefault хийгээгүй бол
-// `redirect` (эсвэл `success-url`) руу шилжинэ. Алдаа: `eid-login-error` (detail = {error}).
+// `redirect` (эсвэл `success-url`) руу шилжинэ. Алдаа: `eid-login-error` (detail = {error, status, code, retryAfter}; 429/503 — Retry-After-ын countdown).
 // Дизайн: `--eid-*` CSS хувьсагчаар дарж болно (README-ийн хүснэгт).
 
 import { isMobileUserAgent } from "./devicelink.js";
@@ -53,6 +53,7 @@ const T = {
     success: "Амжилттай нэвтэрлээ",
     sent: (vc: string) => `Мэдэгдэл илгээлээ. Утсан дээрх код ${vc.split("").join(" ")}`,
     minutes: (n: number) => `${n} минут үлдлээ`,
+    busy: (n: number) => `Систем завгүй — ${n} сек дараа дахин оролдоно уу`,
   },
   en: {
     button: "Log in with eID",
@@ -91,6 +92,7 @@ const T = {
     success: "Logged in",
     sent: (vc: string) => `Notification sent. Code on your phone ${vc.split("").join(" ")}`,
     minutes: (n: number) => `${n} minute${n === 1 ? "" : "s"} left`,
+    busy: (n: number) => `Service busy — try again in ${n} s`,
   },
 } as const;
 
@@ -104,6 +106,40 @@ export interface EidLoginStatus {
   data?: unknown;
   error?: string;
 }
+
+/**
+ * `eid-login-error` event-ийн detail. `error` — хуучин талбар (код эсвэл төрөл); `status` — start-ийн HTTP статус (сүлжээний
+ * алдаанд 0, start-аас бусад алдаанд null); `code` — хариуны `error`/`code` (эсвэл `NETWORK`, `HTTP_<статус>`);
+ * `retryAfter` — Retry-After (секунд) эсвэл null.
+ */
+export interface EidLoginErrorDetail {
+  error: string;
+  status: number | null;
+  code: string;
+  retryAfter: number | null;
+}
+
+/** 429/503-д Retry-After алга бол хүлээх секунд. */
+const BUSY_DEFAULT_S = 30;
+
+/** Retry-After (секунд эсвэл HTTP-date) → секунд; алга/буруу бол null. */
+function retryAfterOf(r: Response): number | null {
+  const v = r.headers.get("Retry-After")?.trim();
+  if (!v) return null;
+  if (/^\d+$/.test(v)) return Number(v);
+  const t = Date.parse(v);
+  return Number.isNaN(t) ? null : Math.max(0, Math.ceil((t - Date.now()) / 1000));
+}
+
+/** start-ийн алдааны хариунаас detail (body нь аль хэдийн задалсан байж болно). */
+async function startErrorOf(r: Response | null, body?: Record<string, unknown>): Promise<EidLoginErrorDetail> {
+  if (!r) return { error: "NETWORK", status: 0, code: "NETWORK", retryAfter: null };
+  const b = body ?? ((await r.json().catch(() => ({}))) as Record<string, unknown>);
+  const c = typeof b.error === "string" ? b.error : typeof b.code === "string" ? b.code : `HTTP_${r.status}`;
+  return { error: c, status: r.status, code: c, retryAfter: retryAfterOf(r) };
+}
+
+const isBusy = (d: EidLoginErrorDetail): boolean => d.status === 429 || d.status === 503;
 
 export interface EidLoginButtonOptions {
   /** Backend start endpoint (ж: `/auth/eid/start`). */
@@ -490,13 +526,14 @@ export class EidLoginButton extends Base {
         body: JSON.stringify({ ...body, lang: this.attr("lang") === "en" ? "en" : "mn" }),
       });
     } catch {
-      if (gen === this.gen && body.mode === "qr") this.end("unavailable");
+      if (gen === this.gen && body.mode === "qr") void startErrorOf(null).then((d) => this.end("unavailable", d));
       return null;
     }
     if (gen !== this.gen) return null;
     if (body.mode === "push") return r;
     if (!r.ok) {
-      this.end("unavailable");
+      const d = await startErrorOf(r);
+      if (gen === this.gen) this.end(isBusy(d) ? "busy" : "unavailable", d);
       return null;
     }
     const s = (await r.json()) as EidLoginStatus;
@@ -649,10 +686,18 @@ export class EidLoginButton extends Base {
       void this.begin(gen, { mode: "push", idCode: input.value.replace(/\s+/g, "").toUpperCase() }).then(async (r) => {
         if (gen !== this.gen) return;
         busy(false);
-        if (!r) return setErr(t.pushFailed);
+        if (!r) {
+          this.emitError(await startErrorOf(null));
+          return setErr(t.pushFailed);
+        }
         const b = (await r.json().catch(() => ({}))) as EidLoginStatus;
         if (r.ok && b.vc) return this.showWait(b);
-        if (r.status === 429) return setErr(t.rateLimited);
+        const d = await startErrorOf(r, b as unknown as Record<string, unknown>);
+        this.emitError(d);
+        if (isBusy(d)) {
+          btn.disabled = true;
+          return this.countdown(gen, d.retryAfter ?? BUSY_DEFAULT_S, (n) => setErr(n > 0 ? t.busy(n) : ""), () => (btn.disabled = false));
+        }
         if (r.status === 400) return setErr(t.idBad);
         setErr(t.pushFailed);
       });
@@ -735,12 +780,34 @@ export class EidLoginButton extends Base {
     if (go && to) this.navigate(to);
   }
 
-  private end(kind: "expired" | "refused" | "failed" | "unavailable" | "callback", error?: string): void {
+  private emitError(detail: EidLoginErrorDetail): void {
+    this.dispatchEvent(new CustomEvent<EidLoginErrorDetail>("eid-login-error", { detail, bubbles: true, composed: true }));
+  }
+
+  /** n секундээс 0 хүртэл секунд тутам show(n); 0 болоход done(). Цонх хаагдвал (gen өөрчлөгдвөл) зогсоно. */
+  private countdown(gen: number, n: number, show: (n: number) => void, done: () => void): void {
+    clearInterval(this.tick);
+    show(n);
+    if (n <= 0) return done();
+    this.tick = setInterval(() => {
+      if (gen !== this.gen) return clearInterval(this.tick);
+      n--;
+      show(n);
+      if (n <= 0) {
+        clearInterval(this.tick);
+        done();
+      }
+    }, 1000) as unknown as number;
+  }
+
+  private end(kind: "expired" | "refused" | "failed" | "unavailable" | "busy" | "callback", error?: string | EidLoginErrorDetail): void {
     clearTimeout(this.timer);
     clearInterval(this.tick);
     this.gen++;
     const t = this.t;
-    const titles = { expired: t.expiredTitle, refused: t.refusedTitle, failed: t.failedTitle, unavailable: t.failedTitle, callback: t.callbackTitle };
+    const titles = {
+      expired: t.expiredTitle, refused: t.refusedTitle, failed: t.failedTitle, unavailable: t.failedTitle, busy: t.failedTitle, callback: t.callbackTitle,
+    };
     const c = el("div", { class: "end", role: "alert" });
     const h = el("h2", { tabindex: "-1" }, titles[kind]);
     c.append(h);
@@ -750,8 +817,20 @@ export class EidLoginButton extends Base {
     if (kind !== "callback") {
       const retry = el("button", { type: "button", class: "btn btn-primary" }, t.retry);
       retry.addEventListener("click", () => this.open());
+      if (kind === "busy") {
+        const msg = el("p", { class: "text busy", role: "status" });
+        c.append(msg);
+        retry.disabled = true;
+        const d = error as EidLoginErrorDetail;
+        this.countdown(this.gen, d.retryAfter ?? BUSY_DEFAULT_S, (n) => (msg.textContent = n > 0 ? t.busy(n) : ""), () => {
+          retry.disabled = false;
+          msg.hidden = true;
+        });
+      }
       c.append(retry);
-      this.dispatchEvent(new CustomEvent("eid-login-error", { detail: { error: error ?? kind.toUpperCase() }, bubbles: true, composed: true }));
+      this.emitError(
+        typeof error === "object" ? error : { error: error ?? kind.toUpperCase(), status: null, code: error ?? kind.toUpperCase(), retryAfter: null },
+      );
     }
     this.view(c);
     h.focus();

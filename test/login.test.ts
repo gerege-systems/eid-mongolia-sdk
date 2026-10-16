@@ -617,6 +617,14 @@ test("ocspRevocationChecker: good / revoked / unknown→revoked, хуучин х
   assert.equal(await mk()(leaf, leaf), "unknown", "буруу issuer-ийн гарын үсэг");
 });
 
+test("ocspRevocationChecker: олгогч өөрөө зурж ӨӨРИЙН гэрчилгээг шигтгэсэн хариу → good (RFC 6960 §4.2.2.2, Go v0.6.0-тэй ижил)", async () => {
+  const { X509Certificate } = await import("node:crypto");
+  const F = JSON.parse(readFileSync(new URL("./fixtures/ocsp-embedded-issuer.json", import.meta.url), "utf8")) as Record<string, string>;
+  const fetchImpl = (async () => new Response(der(F.good!), { status: 200 })) as unknown as typeof fetch;
+  const c = ocspRevocationChecker({ fetchImpl, now: () => Date.parse(F.at!) + 60_000 });
+  assert.equal(await c(new X509Certificate(der(F.leaf!)), new X509Certificate(der(F.ca!))), "good");
+});
+
 // ── G3: аудит ──
 
 test("onEvent: refused / failed / expired / unverified / flow_refused", async () => {

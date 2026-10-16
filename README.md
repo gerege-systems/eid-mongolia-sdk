@@ -162,7 +162,28 @@ app.use("/auth/eid", express.json(), async (req, res) => {
 
 `label`, `icon`, `variant`, `aria-label`, `lang` өөрчлөгдөхөд товч шууд шинэчлэгдэнэ. `icon="none"` ба текстгүй
 (`variant="icon"` эсвэл `label=""`) хослол нь хоосон товч болохгүй — анхдагч текст харагдаж, console-д нэг удаа анхааруулна.
-Үйл явдал: `eid-login-success`, `eid-login-error` (`detail.error`: `USER_REFUSED…`, `VALIDATION`, `EXPIRED` …).
+Үйл явдал: `eid-login-success`, `eid-login-error` (доор).
+
+**`eid-login-error`** (0.20.0) — start амжилтгүй болох эсвэл нэвтрэлт амжилтгүй дуусах бүрд (`bubbles: true`,
+`composed: true` — shadow DOM-оос гадагш). `detail`:
+
+| Талбар | Утга |
+|---|---|
+| `error` | код эсвэл төрөл (`EXPIRED`, `USER_REFUSED…`, `VALIDATION` …) — өмнөх хувилбартай ижил |
+| `status` | start-ийн HTTP статус; сүлжээний алдаанд `0`; poll-ийн алдаанд `null` |
+| `code` | хариуны `error`/`code`, эсвэл `HTTP_<статус>` / `NETWORK` |
+| `retryAfter` | `Retry-After` (секунд) эсвэл `null` |
+
+429 / 503 (`{"error":"busy"}`) үед товч «Систем завгүй — N сек дараа дахин оролдоно уу» / "Service busy — try again in N s"
+гэж `Retry-After`-оор (анхдагч 30 с) тоолж, дуустал «Дахин оролдох» (push маягтад «Мэдэгдэл илгээх») идэвхгүй байна.
+
+```js
+document.querySelector("eid-login-button").addEventListener("eid-login-error", (e) => {
+  const { status, code, retryAfter } = e.detail;
+  if (status === 429 || status === 503) console.warn(`eID busy (${code}), retry in ${retryAfter ?? 30}s`);
+});
+```
+
 Гадны хамааралгүй (QR encoder дотроо), цонх нь focus trap, Esc, `aria-live` төлөвтэй.
 
 **Дизайн, theme.** Дизайн нь eID нэвтрэх хуудсынх (лого, өнгө). Фонт нь хуудаснаас өвлөгдөнө (товч, цонх, input бүгд).
@@ -722,6 +743,37 @@ if (info.enabled) {
 
 401 → `AuthenticationError`, 403 (SIGN эрхгүй, IP/mTLS) → `ForbiddenError`. Квот: RP тутам цагт 30 / өдөрт 200 хүсэлт,
 хүлээн авагч тутам өдөрт 10 имэйл (бодит утгыг `shareInfo().quota`-аас). Хугацаа анхдагч 150 с (`timeoutMs`).
+
+## 3g. Гарын үсэгтэй PDF шалгах — `@gerege-systems/eid-mongolia-sdk/validate` (0.20.0)
+
+PDF-ийг **хөтөч эсвэл Node дотор** шалгана — файл хаашаа ч илгээгдэхгүй. CA-ийн нийтийн шалгагчийн (`/v3/validate/pdf`,
+Go SDK `pades.ValidatePDF`) дүрэм, ижил JSON тайлан (snake_case); conformance багц нь гурвууланд нэг.
+
+```ts
+import { validatePdf, ValidatePdfError } from "@gerege-systems/eid-mongolia-sdk/validate";
+
+try {
+  const rep = await validatePdf(new Uint8Array(await file.arrayBuffer())); // анхдагч: үндэсний Root CA, онлайн цуцлалт
+  rep.indication; // "valid" | "invalid" | "indeterminate"
+  for (const s of rep.signatures) {
+    s.signer_name; s.signing_time; s.signature_level; s.certificate_level; s.problems; s.visible; s.key_medium;
+  }
+} catch (e) {
+  if (e instanceof ValidatePdfError) e.code; // PDF_NO_SIGNATURE | PDF_INVALID | PDF_TOO_LARGE | PDF_TOO_MANY_SIGNATURES
+}
+```
+
+- Шалгалт: ByteRange (завсар нь яг `/Contents`) ба messageDigest, CMS гарын үсэг (WebCrypto), signingCertificateV2,
+  гинж (үндэсний 01 → 02/03 → 04/05), KU/EKU, хугацаа (цагийн тэмдгийн цагт), RFC 3161 токен, гарын үсгийн ДАРААХ revision
+  (eID-ийн гарын үсэг/LTV-ээс өөр бүх өөрчлөлт → `modified_after_signing`), харагдах гарын үсэг (APPEARANCE_SPEC §5), `ltv`,
+  `certificate_level` (qcStatements: QUALIFIED/QSCD, бусад ADVANCED).
+- Цуцлалт (eID-ийн 04/05-аас гарсан гэрчилгээнд): онлайн — AIA OCSP, эс бөгөөс CDP CRL (`fetch` + AbortSignal; хөтөчид
+  `http://ocsp.|crl.eidmongolia.mn` → https, CORS `*`); хариугүй эсвэл `offline: true` бол баримтын DSS. Аль нь ч үгүй →
+  `revocation_unavailable`. Сүлжээгээр зөвхөн гэрчилгээний serial (OCSP хүсэлт) явна.
+- Options: `roots`, `intermediates`, `issuers` (DER, тест), `time`, `offline`, `fetch`, `signal`.
+- `key_medium` — гэрчилгээнээс л: qcStatements-тэй иргэний SIGN → `phone`, бусад `unknown` (CA өөрийн бүртгэлээс `token`
+  ч тогтооно). `session_id`, `doc_id`, `on_behalf_of_*` нь CA-ийн бүртгэлээс — локал тайланд байхгүй.
+- Хөтчийн bundle (минифай): ~245 KB, gzip ~134 KB (`npm run size:validate`, хязгаар 300 KB).
 
 ## 4. QR ба ижил төхөөрөмж — device link v3
 

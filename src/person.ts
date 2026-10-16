@@ -29,8 +29,8 @@ export interface PersonCertificate {
   /** Олгосон мөч (RFC 3339). Хуучин CA-д байхгүй. */
   issuedAt?: string;
   /**
-   * Цуцалсан мөч (RFC 3339) — REVOKED-д. Сунгалт/дахин бүртгэлээр солигдсон (status SUSPENDED,
-   * `revocationReason: "superseded"`) мөрд ихэвчлэн байхгүй.
+   * Цуцалсан мөч (RFC 3339) — REVOKED-д, мөн сунгалт/дахин бүртгэлээр солигдсон (status SUSPENDED,
+   * `revocationReason: "superseded"`) мөрд (CA !377-оос).
    */
   revokedAt?: string;
   /**

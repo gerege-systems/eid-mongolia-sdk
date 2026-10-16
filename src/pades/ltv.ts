@@ -84,10 +84,14 @@ function lenOf(n: number): number[] {
   return [0x80 | out.length, ...out];
 }
 
-interface OCSPResp {
+export interface OCSPResp {
   status: "good" | "revoked" | "unknown";
+  /** certID-ийн serial. */
+  serial: bigint;
   thisUpdate: PreciseTime;
   nextUpdate?: Date;
+  /** revoked үед. */
+  revokedAt?: PreciseTime;
   certificate?: Certificate;
 }
 
@@ -95,6 +99,14 @@ const OID_OCSP_BASIC = "1.3.6.1.5.5.7.48.1.1";
 
 /** x/crypto/ocsp ParseResponseForCert (+ гарын үсгийн шалгалт). */
 export async function parseOCSPForCert(der: Uint8Array, c: Certificate, issuer: Certificate): Promise<OCSPResp> {
+  return parseOCSP(der, intValue(c.serial), issuer);
+}
+
+/**
+ * x/crypto/ocsp ParseResponseForCert: serial өгвөл тэр serial-ийн хариу, эс бөгөөс яг нэг хариу (ParseResponse). issuer
+ * өгвөл гарын үсгийг шалгана: шигтгэсэн cert байвал хариу түүгээр, cert нь issuer-ээр зурагдсан байх ёстой.
+ */
+export async function parseOCSP(der: Uint8Array, serial: bigint | undefined, issuer: Certificate | undefined): Promise<OCSPResp> {
   const top = children(expect(parseOne(der), TAG.SEQUENCE, "OCSPResponse"));
   if (expect(top[0], TAG.ENUMERATED, "status").value[0] !== 0) throw new Error("OCSP response status");
   const rb = children(expect(children(expect(top[1], 0xa0, "responseBytes"))[0], TAG.SEQUENCE, "ResponseBytes"));
@@ -110,18 +122,22 @@ export async function parseOCSPForCert(der: Uint8Array, c: Certificate, issuer: 
   if (rid.tag !== 0xa1 && rid.tag !== 0xa2) throw new Error("invalid responder id tag");
   i++; // producedAt
   const responses = children(expect(tf[i], TAG.SEQUENCE, "responses"));
-  if (responses.length === 0) throw new Error("OCSP response contains bad number of responses");
-  const serial = intValue(c.serial);
   let single: Node[] | undefined;
-  for (const r of responses) {
-    const f = children(r);
-    const cid = children(f[0]!);
-    if (intValue(expect(cid[3], TAG.INTEGER, "serial").value) === serial) {
-      single = f;
-      break;
+  if (serial !== undefined) {
+    if (responses.length === 0) throw new Error("OCSP response contains bad number of responses");
+    for (const r of responses) {
+      const f = children(r);
+      const cid = children(f[0]!);
+      if (intValue(expect(cid[3], TAG.INTEGER, "serial").value) === serial) {
+        single = f;
+        break;
+      }
     }
+    if (!single) throw new Error("no response matching the supplied certificate");
+  } else {
+    if (responses.length !== 1) throw new Error("OCSP response contains bad number of responses");
+    single = children(responses[0]!);
   }
-  if (!single) throw new Error("no response matching the supplied certificate");
   let certificate: Certificate | undefined;
   if (basic[3]?.tag === 0xa0) {
     const certs = children(expect(children(basic[3])[0], TAG.SEQUENCE, "certs"));
@@ -129,8 +145,8 @@ export async function parseOCSPForCert(der: Uint8Array, c: Certificate, issuer: 
   }
   if (certificate) {
     if (!(await verifySignature(certificate, sigAlg, tbs.raw, sigBits))) throw new Error("bad signature on embedded certificate");
-    if (!(await checkSignature(issuer, certificate.sigAlg, certificate.tbs, certificate.signature))) throw new Error("bad OCSP signature");
-  } else if (!(await verifySignature(issuer, sigAlg, tbs.raw, sigBits))) {
+    if (issuer && !(await checkSignature(issuer, certificate.sigAlg, certificate.tbs, certificate.signature))) throw new Error("bad OCSP signature");
+  } else if (issuer && !(await verifySignature(issuer, sigAlg, tbs.raw, sigBits))) {
     throw new Error("bad OCSP signature");
   }
   const cid = children(single[0]!);
@@ -139,6 +155,7 @@ export async function parseOCSPForCert(der: Uint8Array, c: Certificate, issuer: 
   const st = single[1]!;
   const status = st.tag === 0x80 ? "good" : st.tag === 0xa1 ? "revoked" : st.tag === 0x82 ? "unknown" : undefined;
   if (!status) throw new Error("OCSP certStatus");
+  const revokedAt = status === "revoked" ? parsePreciseTime(expect(children(st)[0], TAG.GeneralizedTime, "revocationTime")) : undefined;
   const thisUpdate = parsePreciseTime(expect(single[2], TAG.GeneralizedTime, "thisUpdate"));
   let nextUpdate: Date | undefined;
   for (const x of single.slice(3)) {
@@ -150,7 +167,40 @@ export async function parseOCSPForCert(der: Uint8Array, c: Certificate, issuer: 
       }
     }
   }
-  return { status, thisUpdate, nextUpdate, certificate };
+  return { status, serial: intValue(expect(cid[3], TAG.INTEGER, "serial").value), thisUpdate, nextUpdate, revokedAt, certificate };
+}
+
+/** a, b нь ижил гэрчилгээ (байт-ижил) эсвэл ижил subject + түлхүүр (дахин олгосон ижил CA). */
+export function sameCertKey(a: Certificate, b: Certificate): boolean {
+  return equal(a.raw, b.raw) || (equal(a.rawSubject, b.rawSubject) && equal(a.spki, b.spki));
+}
+
+/**
+ * parseOCSP + RFC 6960 §4.2.2.2: олгогч өөрөө зурж хариундаа ӨӨРИЙН гэрчилгээг шигтгэсэн хариуг x/crypto/ocsp
+ * «bad OCSP signature» гэж татгалздаг — шигтгэсэн cert нь олгогч мөн (raw эсвэл subject+SPKI) бол хариуг олгогчийн
+ * түлхүүрээр шалгана (Go SDK v0.6.0 NewOCSPChecker-ийн засвартай ижил).
+ */
+export async function parseOCSPFrom(der: Uint8Array, serial: bigint | undefined, issuer: Certificate): Promise<OCSPResp> {
+  try {
+    return await parseOCSP(der, serial, issuer);
+  } catch (e) {
+    let alt: OCSPResp;
+    try {
+      alt = await parseOCSP(der, serial, undefined);
+    } catch {
+      throw e;
+    }
+    if (alt.certificate && sameCertKey(alt.certificate, issuer) && (await ocspSignedBy(der, issuer))) return alt;
+    throw e;
+  }
+}
+
+/** BasicOCSPResponse-ийн гарын үсэг k-ийн түлхүүрээр. */
+async function ocspSignedBy(der: Uint8Array, k: Certificate): Promise<boolean> {
+  const top = children(parseOne(der));
+  const rb = children(children(top[1]!)[0]!);
+  const basic = children(parseOne(rb[1]!.value));
+  return verifySignature(k, basic[1]!, basic[0]!.raw, basic[2]!.value.subarray(1));
 }
 
 function responderOK(resp: OCSPResp, issuer: Certificate): boolean {

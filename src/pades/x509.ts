@@ -271,6 +271,8 @@ function schemeFor(alg: Node): SigScheme {
       return { kind: "rsa", hash: "SHA-384" };
     case OID.sha512WithRSA:
       return { kind: "rsa", hash: "SHA-512" };
+    case "1.2.840.10045.4.1": // ecdsa-with-SHA1 (Go CheckSignature зөвшөөрдөг; гинжид validate/evaluate.ts татгалзана)
+      return { kind: "ecdsa", hash: "SHA-1" };
     case OID.ecdsaSHA256:
       return { kind: "ecdsa", hash: "SHA-256" };
     case OID.ecdsaSHA384:

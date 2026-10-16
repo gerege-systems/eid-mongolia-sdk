@@ -111,12 +111,13 @@ function hexSha256Equal(hex: unknown, data: Uint8Array): boolean {
  * - `TOKEN_LIMIT_REACHED` — иргэний токены хязгаар хүрсэн ({@link tokenLimitOf});
  * - `TOKEN_IN_USE` — `tokenSerial` өөр иргэнд хүчинтэй гэрчилгээтэй бүртгэлтэй;
  * - `TOKEN_SCOPE_CHANGE` — сунгалт scope-ийг солих гэсэн (хувийн ↔ байгууллага, эсвэл өөр `onBehalfOf`). Override
- *   байхгүй: иргэн eID апп-аас токеноо цуцалж (`/v3/mobile/tokens/{tokenSerial}/revoke`) байж шинэ scope-оор олгуулна.
+ *   байхгүй: иргэн eID апп-аас токеноо цуцалж (`/v3/mobile/tokens/{tokenSerial}/revoke`) байж шинэ scope-оор олгуулна;
+ * - `ACCOUNT_DELETE_PENDING` — иргэн «Бүртгэл устгах» хүсэлт (PENDING) өгсөн: токен олгохгүй (CA !377).
  */
-export type TokenConflictCode = "TOKEN_LIMIT_REACHED" | "TOKEN_IN_USE" | "TOKEN_SCOPE_CHANGE";
+export type TokenConflictCode = "TOKEN_LIMIT_REACHED" | "TOKEN_IN_USE" | "TOKEN_SCOPE_CHANGE" | "ACCOUNT_DELETE_PENDING";
 
 /** {@link TokenConflictCode}-ийн бүх утга (runtime шалгалтад). */
-export const TOKEN_CONFLICT_CODES: readonly TokenConflictCode[] = ["TOKEN_LIMIT_REACHED", "TOKEN_IN_USE", "TOKEN_SCOPE_CHANGE"];
+export const TOKEN_CONFLICT_CODES: readonly TokenConflictCode[] = ["TOKEN_LIMIT_REACHED", "TOKEN_IN_USE", "TOKEN_SCOPE_CHANGE", "ACCOUNT_DELETE_PENDING"];
 
 /** Discovery (`/.well-known/eid`)-ийн `tokenCertificate` блок. */
 export interface TokenCertInfo {

@@ -1,4 +1,4 @@
-// ҮҮСГЭСЭН ФАЙЛ — бүү зас. scripts/sync-pades-golden.mjs (Go reference 55bcb0abd013 pades/internal/eidcrypto/chain).
+// ҮҮСГЭСЭН ФАЙЛ — бүү зас. scripts/sync-pades-golden.mjs (Go reference 0fc5f738868c pades/internal/eidcrypto/chain).
 // Нийтийн PKI гинж (DER base64). Итгэлийн тулгуур нь зөвхөн 01; бусад нь гинж бүтээх завсрын CA; 04/05 — eID олгогч.
 
 export const NATIONAL_ROOT: string[] = [

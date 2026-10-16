@@ -130,15 +130,10 @@ test("TokenCertificate: discovery-ийн tokenCertificate блок TokenCertInfo
   assert.equal(t.scopeLockedOnRenewal, true, "tokenCertificate.scopeLockedOnRenewal");
 });
 
-test("PAdES клиент тал: pdfSigning.registerErrorCodes == SDK PDF_REGISTER_ERROR_CODES (олонлогоор)", async (t) => {
+// CA !377 (прод 35f92276)-оос discovery-д заавал — алга бол унана.
+test("PAdES клиент тал: pdfSigning.registerErrorCodes == SDK PDF_REGISTER_ERROR_CODES (олонлогоор)", async () => {
   const d = await getJson(EID_DISCOVERY);
   const codes = ((d.pdfSigning ?? {}) as { registerErrorCodes?: unknown }).registerErrorCodes;
-  if (codes === undefined) {
-    // CA-д талбар гарахаас өмнө — skip + WARN; гарсны дараа энэ салаа ажиллахгүй (тулгалт заавал).
-    warn("pdfSigning.registerErrorCodes discovery-д алга", ["CA-д нэмэгдсэний дараа тулгалт идэвхжинэ"]);
-    t.skip("pdfSigning.registerErrorCodes алга");
-    return;
-  }
   assert.ok(Array.isArray(codes) && codes.every((c) => typeof c === "string"), "registerErrorCodes мөрийн массив биш");
   assert.deepEqual([...new Set(codes as string[])].sort(), [...PDF_REGISTER_ERROR_CODES].sort(), "CA ↔ SDK кодын олонлог зөрсөн");
 });
