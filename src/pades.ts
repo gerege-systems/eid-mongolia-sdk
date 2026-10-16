@@ -159,6 +159,13 @@ export interface PadesCompleteOptions {
   sleep?: (ms: number) => Promise<void>;
   /** TSA nonce-ийн 8 байт (тест; WIRE.md §4). Анхдагч — криптограф санамсаргүй. */
   nonce?: () => Uint8Array | Promise<Uint8Array>;
+  /**
+   * OCSP/CRL (DSS) цуглуулалт унавал SDK-ийн өөрийн нэмэлт оролдлого — ижил state, гарын үсэг, TSA timestamp-аар (PIN
+   * дахин асуухгүй). Анхдагч 2 (нийт 3 оролдлого; хүлээлт ~1 с, ~3 с + jitter); 0 — унтраах. Бүгд унавал `LTV_UNAVAILABLE`.
+   */
+  ltvRetries?: number;
+  /** Цуцлалт: TSA/OCSP/CRL таталт ба retry-ийн хүлээлтийг тасална — `signal.reason` (анхдагч `AbortError`) шиднэ. */
+  signal?: AbortSignal;
 }
 
 export interface PadesCompleted {
@@ -426,12 +433,53 @@ function visibleSpec(doc: Uint8Array, o: PadesPrepareOptions, name: string, now:
   };
 }
 
+const DEFAULT_LTV_RETRIES = 2;
+const MAX_LTV_RETRIES = 10;
+const LTV_BACKOFF_MS = [1000, 3000];
+
+/** LTV retry-ийн хүлээлт: 1 с, 3 с (цааш 3 с) + 0–25% jitter. */
+function ltvBackoffMs(attempt: number): number {
+  const base = LTV_BACKOFF_MS[Math.min(attempt, LTV_BACKOFF_MS.length - 1)]!;
+  return Math.round(base * (1 + Math.random() * 0.25));
+}
+
+function abortReason(signal: AbortSignal): unknown {
+  return signal.reason ?? new DOMException("Цуцлагдсан", "AbortError");
+}
+
+function throwIfAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) throw abortReason(signal);
+}
+
+/** `sleep(ms)`-ийг `signal`-аар тасалж болох болгоно. */
+function abortableSleep(sleep: (ms: number) => Promise<void>, ms: number, signal: AbortSignal | undefined): Promise<void> {
+  if (!signal) return sleep(ms);
+  if (signal.aborted) return Promise.reject(abortReason(signal));
+  return new Promise<void>((resolve, reject) => {
+    const onAbort = (): void => reject(abortReason(signal));
+    signal.addEventListener("abort", onAbort, { once: true });
+    sleep(ms).then(
+      () => {
+        signal.removeEventListener("abort", onAbort);
+        resolve();
+      },
+      (e: unknown) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(e);
+      },
+    );
+  });
+}
+
 /**
  * Иргэний гарын үсгийг (session `signature.value` — base64 мөр эсвэл байт; RSA PKCS#1 v1.5, ECDSA r‖s эсвэл DER) DTBS-д
  * шалгаад TSA → CMS → embed → OCSP/CRL (genTime-ийн дараа) → DSS revision. Сүлжээ: tsa.timeserver.mn, AIA/CDP.
  *
+ * OCSP/CRL цуглуулалт унавал `ltvRetries` (анхдагч 2) удаа өөрөө дахин оролдоно (PIN дахин асуухгүй).
+ *
  * @throws {PadesError} SIGNATURE_INVALID / TSA_UNAVAILABLE / LTV_UNAVAILABLE / PLACEHOLDER_OVERFLOW / STATE_INVALID /
- *   PDF_TOO_LARGE / SELF_VALIDATION_FAILED
+ *   PDF_TOO_LARGE / SELF_VALIDATION_FAILED / REQUEST_INVALID (`ltvRetries`)
+ * @throws `signal.reason` (анхдагч `DOMException` `AbortError`) — `signal` цуцлагдвал.
  */
 export async function complete(state: Uint8Array | ArrayBuffer, signature: Uint8Array | string, opts: PadesCompleteOptions = {}): Promise<PadesCompleted> {
   let st: Awaited<ReturnType<typeof decodeState>>;
@@ -449,6 +497,12 @@ export async function complete(state: Uint8Array | ArrayBuffer, signature: Uint8
   const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   const fetchFn = opts.fetch ?? (globalThis.fetch?.bind(globalThis) as unknown as FetchFn | undefined);
   if (!fetchFn) throw new PadesError("TSA_UNAVAILABLE", "fetch алга (Node ≥ 18 эсвэл opts.fetch)");
+  const ltvRetries = opts.ltvRetries ?? DEFAULT_LTV_RETRIES;
+  if (!Number.isInteger(ltvRetries) || ltvRetries < 0 || ltvRetries > MAX_LTV_RETRIES) {
+    throw new PadesError("REQUEST_INVALID", `ltvRetries 0–${MAX_LTV_RETRIES} бүхэл тоо`);
+  }
+  const signal = opts.signal;
+  throwIfAborted(signal);
   let sigBytes: Uint8Array;
   try {
     sigBytes = typeof signature === "string" ? fromB64(signature) : u8(signature, "signature");
@@ -457,13 +511,14 @@ export async function complete(state: Uint8Array | ArrayBuffer, signature: Uint8
   }
   const sig = await verifyCitizen(cert, st.signedAttrs, sigBytes);
   if (!sig) throw new PadesError("SIGNATURE_INVALID", "гарын үсэг DTBS-тэй таарсангүй");
-  const f = new Fetcher(fetchFn, opts.httpsUpgrade ?? isBrowser());
+  const f = new Fetcher(fetchFn, opts.httpsUpgrade ?? isBrowser(), signal);
   let ts: Awaited<ReturnType<typeof timestampToken>>;
   try {
     const nonce = opts.nonce ? await opts.nonce() : await randomBytes(8);
     if (nonce.length !== 8) throw new Error("nonce 8 байт биш");
     ts = await timestampToken(f, opts.tsaUrl || DEFAULT_TSA_URL, sig, roots, chain, now(), nonce);
   } catch (e) {
+    throwIfAborted(signal);
     throw new PadesError("TSA_UNAVAILABLE", "TSA timestamp авч чадсангүй", { cause: e });
   }
   let cms: Uint8Array;
@@ -479,11 +534,19 @@ export async function complete(state: Uint8Array | ArrayBuffer, signature: Uint8
     if (e instanceof PlaceholderOverflowError) throw new PadesError("PLACEHOLDER_OVERFLOW", "CMS placeholder-т багтсангүй", { cause: e });
     throw new PadesError("STATE_INVALID", "CMS-ийг placeholder-т бичиж чадсангүй", { cause: e });
   }
+  // OCSP/CRL түр унавал (ж: CRL толь 404) ижил TSA token-оор дахин цуглуулна — амжсан таталт Fetcher-ийн cache-д.
   let dss: Awaited<ReturnType<typeof collectLTVWithWait>>;
-  try {
-    dss = await collectLTVWithWait(f, now, sleep, ts.time, roots, [[cert, ...chain], ts.certificates]);
-  } catch (e) {
-    throw new PadesError("LTV_UNAVAILABLE", `OCSP/CRL бүрэн авч чадсангүй${e instanceof LTVError ? ": " + e.message : ""}`, { cause: e });
+  for (let attempt = 0; ; attempt++) {
+    try {
+      dss = await collectLTVWithWait(f, now, sleep, ts.time, roots, [[cert, ...chain], ts.certificates]);
+      break;
+    } catch (e) {
+      throwIfAborted(signal);
+      if (attempt >= ltvRetries) {
+        throw new PadesError("LTV_UNAVAILABLE", `OCSP/CRL бүрэн авч чадсангүй${e instanceof LTVError ? ": " + e.message : ""}`, { cause: e });
+      }
+      await abortableSleep(sleep, ltvBackoffMs(attempt), signal);
+    }
   }
   let out: Uint8Array;
   try {

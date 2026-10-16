@@ -163,6 +163,60 @@ export const ON_BEHALF_ERROR_CODES: readonly OnBehalfErrorCode[] = [
 ];
 
 /**
+ * `POST /pdf/signatures` (`registerSignature`)-ийн CA алдааны кодууд — `ApiError.code` / `ForbiddenError.code` (CA
+ * `pades_register.go`, `handlers_pdf.go`). 400: REQUEST_INVALID, CMS_INVALID, SIGNATURE_INVALID, TIMESTAMP_INVALID;
+ * 403: TOKEN_ORG_MISMATCH, REPRESENTATION_REVOKED; 404: DOC_NOT_FOUND; 409: SIGNER_MISMATCH, SIGNER_CERT_INVALID,
+ * TOKEN_CERT_INVALID, SESSION_MISMATCH, SESSION_NOT_COMPLETE, SESSION_FAILED, CLAIMED_ROLE_MISMATCH, DOC_ID_CONFLICT,
+ * REGISTRY_CONFLICT, PRIOR_MISMATCH; 413: REQUEST_TOO_LARGE; 429: RATE_LIMITED; 503: STATE_UNAVAILABLE (сүүлийн хоёр
+ * {@link RETRYABLE_ERROR_CODES}). Session олдоогүй бол 404 code-гүй.
+ */
+export type PdfRegisterErrorCode =
+  | "REQUEST_INVALID"
+  | "REQUEST_TOO_LARGE"
+  | "CMS_INVALID"
+  | "SIGNATURE_INVALID"
+  | "TIMESTAMP_INVALID"
+  | "SIGNER_MISMATCH"
+  | "SIGNER_CERT_INVALID"
+  | "TOKEN_CERT_INVALID"
+  | "TOKEN_ORG_MISMATCH"
+  | "SESSION_MISMATCH"
+  | "SESSION_NOT_COMPLETE"
+  | "SESSION_FAILED"
+  | "CLAIMED_ROLE_MISMATCH"
+  | "REPRESENTATION_REVOKED"
+  | "DOC_ID_CONFLICT"
+  | "REGISTRY_CONFLICT"
+  | "DOC_NOT_FOUND"
+  | "PRIOR_MISMATCH"
+  | "RATE_LIMITED"
+  | "STATE_UNAVAILABLE";
+
+/** {@link PdfRegisterErrorCode}-ийн бүх утга (runtime шалгалтад). */
+export const PDF_REGISTER_ERROR_CODES: readonly PdfRegisterErrorCode[] = [
+  "REQUEST_INVALID",
+  "REQUEST_TOO_LARGE",
+  "CMS_INVALID",
+  "SIGNATURE_INVALID",
+  "TIMESTAMP_INVALID",
+  "SIGNER_MISMATCH",
+  "SIGNER_CERT_INVALID",
+  "TOKEN_CERT_INVALID",
+  "TOKEN_ORG_MISMATCH",
+  "SESSION_MISMATCH",
+  "SESSION_NOT_COMPLETE",
+  "SESSION_FAILED",
+  "CLAIMED_ROLE_MISMATCH",
+  "REPRESENTATION_REVOKED",
+  "DOC_ID_CONFLICT",
+  "REGISTRY_CONFLICT",
+  "DOC_NOT_FOUND",
+  "PRIOR_MISMATCH",
+  "RATE_LIMITED",
+  "STATE_UNAVAILABLE",
+];
+
+/**
  * Сүлжээ/timeout — upstream хариу өгсөнгүй. Мессеж ба `op`-д хувь хүний таних тэмдэг ОРОХГҮЙ (замын `/etsi/{…}`,
  * `/document/{…}` → `…`) — шууд лог руу бичиж болно.
  */

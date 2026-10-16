@@ -137,9 +137,11 @@ export {
   DeviceLinkError,
   ResponseTooLargeError,
   ON_BEHALF_ERROR_CODES,
+  PDF_REGISTER_ERROR_CODES,
   RETRYABLE_ERROR_CODES,
   parseRetryAfter,
   type OnBehalfErrorCode,
+  type PdfRegisterErrorCode,
   type RetryableErrorCode,
   type HttpErrorInit,
 } from "./errors.js";

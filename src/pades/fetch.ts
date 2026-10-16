@@ -26,6 +26,8 @@ export class Fetcher {
     private readonly fetchFn: FetchFn,
     /** http → https (allowlist) — хөтчийн орчин. */
     private readonly upgrade: boolean,
+    /** Дуудагчийн цуцлалт — явж буй таталтыг тасална. */
+    private readonly signal?: AbortSignal,
   ) {}
 
   /** Татах URL: CRL толин хуулбар; хөтөчид http → https (allowlist); бусад үед хэвээр (Go url.String()-тэй ижил). */
@@ -47,8 +49,12 @@ export class Fetcher {
       const hit = this.cache.get(target);
       if (hit) return hit;
     }
+    const outer = this.signal;
+    if (outer?.aborted) throw outer.reason ?? new Error("aborted");
     const ctl = typeof AbortController !== "undefined" ? new AbortController() : undefined;
     const timer = ctl ? setTimeout(() => ctl.abort(), HTTP_TIMEOUT_MS) : undefined;
+    const onAbort = (): void => ctl?.abort();
+    outer?.addEventListener("abort", onAbort, { once: true });
     try {
       const res = await this.fetchFn(target, {
         method,
@@ -63,6 +69,7 @@ export class Fetcher {
       return out;
     } finally {
       if (timer) clearTimeout(timer);
+      outer?.removeEventListener("abort", onAbort);
     }
   }
 }

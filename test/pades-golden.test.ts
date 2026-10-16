@@ -121,3 +121,112 @@ test("pades golden — Go reference-тэй байт-ижил (prepare + complete
   assert.ok(n >= 16, "golden case цөөн");
   assert.ok(M.cases.filter((c) => c.prepare.appearance).length >= 5, "харагдах golden case цөөн");
 });
+
+// ── LTV retry (complete, ltvRetries): OCSP/CRL түр унавал ижил state + гарын үсгээр SDK өөрөө давтана ─────────────────
+
+/** Эхний non-error golden case-ийн prepare (LTV retry тестэд). */
+async function firstPrepared(): Promise<{ c: Case; p: pades.PadesPrepared }> {
+  const c = M.cases.find((x) => !x.expect.error && !x.input.startsWith("case:"))!;
+  const p = await pades.prepare(read(c.input), {
+    signerCert: pem("citizen"),
+    chain: ["04", "03", "02"].map(pem),
+    signingTime: new Date(M.signingTime),
+    reason: c.prepare.reason,
+    claimedRole: c.prepare.claimedRole,
+    docId: c.prepare.docId,
+    verifyPage: c.prepare.verifyPage,
+    fileName: c.prepare.fileName,
+    lang: c.prepare.lang,
+    appearance: c.prepare.appearance,
+  });
+  return { c, p };
+}
+
+/** TSA-аас бусад (OCSP/CRL) таталт `down()` үнэн үед 404 — CRL толь түр унасантай ижил. */
+function flakyFetch(down: () => boolean): pades.PadesCompleteOptions["fetch"] {
+  const inner = replayFetch([]);
+  return async (url, init) => {
+    if (!url.startsWith("http://tsa.pki.test/") && down()) return { status: 404, arrayBuffer: async () => new ArrayBuffer(0) };
+    return inner!(url, init);
+  };
+}
+
+function ltvOpts(c: Case, extra: Partial<pades.PadesCompleteOptions>): pades.PadesCompleteOptions {
+  return {
+    tsaUrl: "http://tsa.pki.test/",
+    roots: [pem("root")],
+    httpsUpgrade: false,
+    now: () => new Date(M.now),
+    nonce: () => seededNonce(`golden-nonce:${c.name}`),
+    ...extra,
+  };
+}
+
+test("pades complete — LTV 2 удаа унаад 3 дахь нь амжвал байт-ижил гаралт (1 с, 3 с + jitter)", async () => {
+  const { c, p } = await firstPrepared();
+  const waits: number[] = [];
+  const r = await pades.complete(
+    p.state,
+    Buffer.from(String(c.expect.signature), "hex"),
+    ltvOpts(c, { fetch: flakyFetch(() => waits.length < 2), sleep: async (ms) => void waits.push(ms) }),
+  );
+  assert.equal(r.outSha256, c.expect.outSha256);
+  assert.equal(waits.length, 2);
+  assert.ok(waits[0]! >= 1000 && waits[0]! <= 1250, `1-р хүлээлт ${waits[0]}`);
+  assert.ok(waits[1]! >= 3000 && waits[1]! <= 3750, `2-р хүлээлт ${waits[1]}`);
+});
+
+test("pades complete — LTV 3 оролдлого бүгд унавал LTV_UNAVAILABLE (retryable); ltvRetries 0 бол давтахгүй", async () => {
+  const { c, p } = await firstPrepared();
+  const sig = Buffer.from(String(c.expect.signature), "hex");
+  const waits: number[] = [];
+  await assert.rejects(
+    () => pades.complete(p.state, sig, ltvOpts(c, { fetch: flakyFetch(() => true), sleep: async (ms) => void waits.push(ms) })),
+    (e: unknown) => e instanceof pades.PadesError && e.code === "LTV_UNAVAILABLE" && e.retryable,
+  );
+  assert.equal(waits.length, 2);
+  const none: number[] = [];
+  await assert.rejects(
+    () => pades.complete(p.state, sig, ltvOpts(c, { fetch: flakyFetch(() => true), sleep: async (ms) => void none.push(ms), ltvRetries: 0 })),
+    (e: unknown) => e instanceof pades.PadesError && e.code === "LTV_UNAVAILABLE",
+  );
+  assert.equal(none.length, 0);
+  await assert.rejects(
+    () => pades.complete(p.state, sig, ltvOpts(c, { fetch: flakyFetch(() => true), ltvRetries: -1 })),
+    (e: unknown) => e instanceof pades.PadesError && e.code === "REQUEST_INVALID",
+  );
+});
+
+test("pades complete — signal: retry-ийн хүлээлтэд цуцлавал AbortError, дахин татахгүй; урьдчилан цуцалсан бол сүлжээгүй", async () => {
+  const { c, p } = await firstPrepared();
+  const sig = Buffer.from(String(c.expect.signature), "hex");
+  const ac = new AbortController();
+  let calls = 0;
+  let afterAbort = 0;
+  const down = flakyFetch(() => true)!;
+  const fetch: pades.PadesCompleteOptions["fetch"] = async (url, init) => {
+    calls++;
+    if (ac.signal.aborted) afterAbort++;
+    return down(url, init);
+  };
+  await assert.rejects(
+    () =>
+      pades.complete(p.state, sig, ltvOpts(c, {
+        fetch,
+        signal: ac.signal,
+        sleep: () => {
+          ac.abort();
+          return new Promise(() => {}); // хэзээ ч дуусахгүй — зөвхөн abort тасална
+        },
+      })),
+    (e: unknown) => e instanceof DOMException && e.name === "AbortError",
+  );
+  assert.ok(calls > 0);
+  assert.equal(afterAbort, 0);
+  calls = 0;
+  await assert.rejects(
+    () => pades.complete(p.state, sig, ltvOpts(c, { fetch, signal: AbortSignal.abort() })),
+    (e: unknown) => e instanceof DOMException && e.name === "AbortError",
+  );
+  assert.equal(calls, 0);
+});

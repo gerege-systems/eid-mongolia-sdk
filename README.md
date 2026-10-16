@@ -541,6 +541,12 @@ reply({ verifyUrl: reg.verifyUrl });
   `complete().priorRevisionSha256`-ийг (`sha256(doc[0 : ByteRange[2]+ByteRange[3]])`) `registrationFromCompleted`
   `priorSignatures` болгож дамжуулна; `registerSignature` 409 `PRIOR_MISMATCH`-ийн дараа өөрөө revision-оор тааруулна
   (`priorRevisionSha256`-г гараар өгвөл оролдохгүй). Хөтчөөс JSON-оор дамжуулахдаа `priorRevisionSha256`-ийг ч явуул.
+- `registerSignature`-ийн алдаа: `ApiError.code` / `ForbiddenError.code` ∈ `PdfRegisterErrorCode`
+  (`PDF_REGISTER_ERROR_CODES`; Go: `eid.PDFRegisterErrorCodes`) — 400 `REQUEST_INVALID` / `CMS_INVALID` /
+  `SIGNATURE_INVALID` / `TIMESTAMP_INVALID`; 403 `TOKEN_ORG_MISMATCH` / `REPRESENTATION_REVOKED`; 404 `DOC_NOT_FOUND`; 409
+  `SIGNER_MISMATCH` / `SIGNER_CERT_INVALID` / `TOKEN_CERT_INVALID` / `SESSION_MISMATCH` / `SESSION_NOT_COMPLETE` /
+  `SESSION_FAILED` / `CLAIMED_ROLE_MISMATCH` / `DOC_ID_CONFLICT` / `REGISTRY_CONFLICT` / `PRIOR_MISMATCH`; 413
+  `REQUEST_TOO_LARGE`; 429 `RATE_LIMITED`, 503 `STATE_UNAVAILABLE` (`retryable`).
 
 **Харагдах гарын үсэг (сонголттой).** `appearance: { page?, x, y, width, height, lang? }` өгвөл гарын үсэг хуудсан дээр
 харагдана (QR + нэр, `claimedRole`, «eID Mongolia-аар зурсан», огноо `YYYY-MM-DD HH:MM (+08)`); байхгүй бол үл харагдах
@@ -578,6 +584,12 @@ for (let i = 0; ; i++) {
 await eid.registerSignature(registrationFromCompleted(done, { fileName: "Гэрээ №12.pdf", sessionID: s.sessionId }));
 writeFileSync("signed.pdf", done.pdf);
 ```
+
+**LTV retry (0.18.3+).** `complete` нь OCSP/CRL (DSS) цуглуулалт унавал (ж: CRL толь түр 404) ижил state, гарын үсэг,
+TSA timestamp-аар өөрөө **2 удаа** дахин оролдоно (нийт 3; хүлээлт ~1 с, ~3 с + 0–25% jitter) — PIN дахин асуухгүй.
+`ltvRetries` (анхдагч 2, `0` — унтраах); бүгд унавал `LTV_UNAVAILABLE`. `signal` (`AbortSignal`) нь TSA/OCSP/CRL таталт ба
+хүлээлтийг тасална — `signal.reason` (анхдагч `DOMException` `AbortError`) шиднэ. Дээрх гадна давталт нь
+`TSA_UNAVAILABLE` болон удаан тасалдалд л хэрэгтэй.
 
 `PadesError.code` (тогтвортой, бүх платформд ижил): `PDF_INVALID`, `PDF_ENCRYPTED`, `PDF_LOCKED` (DocMDP P=1),
 `PDF_TOO_LARGE`, `PDF_TOO_MANY_SIGNATURES`, `PDF_PRIOR_SIGNATURE_INVALID`, `PDF_FOREIGN_SIGNATURE`, `SIGNER_INVALID`,
