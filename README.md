@@ -449,6 +449,7 @@ const st = await eid.token.issueCertificate({ signerEtsi, csrAuth, csrSign, toke
 const res = await eid.token.certificateResult(st.sessionId);
 verifyTokenCertificates(res, csrAuth, csrSign); // гэрчилгээ бүр CSR-ийн түлхүүртэй
 // 409 TOKEN_LIMIT_REACHED → tokenLimitOf(err): { kind, limit, organization? }
+// 409 TOKEN_IN_USE — serial өөр иргэнд; 409 TOKEN_SCOPE_CHANGE — сунгалт scope солих гэсэн (доор)
 
 // токеноор нэвтрэх (AUTH эрх)
 const ch = await eid.token.authChallenge();
@@ -457,6 +458,13 @@ const who = await eid.token.authVerify(ch.challengeId, authCertDer, rs);
 
 // токеноор PDF: §3d — prepare() → токен CKM_ECDSA(dtbs) → r||s → complete() → registerSignature() (sessionID-гүй, medium "token")
 ```
+
+**Сунгалт scope-ийг хадгална** (CA 2026-10-16, discovery `tokenCertificate.scopeLockedOnRenewal: true` —
+`eid.token.certificateInfo()`): ижил `tokenSerial` дээр иргэний ACTIVE бүртгэл байвал олголт = сунгалт; байгууллагын
+токен зөвхөн тэр байгууллагаар (`onBehalfOf` ижил), хувийн токен зөвхөн хувиараа. Өөр scope бол `POST` (эсвэл
+батлалтын дараа `certificateResult`) 409 `TOKEN_SCOPE_CHANGE`, session-ий `tokenCertificate.errorCode` мөн ийм — override
+байхгүй. Scope солих = иргэн eID апп-аас токеноо цуцлаад (`/v3/mobile/tokens/{tokenSerial}/revoke`) шинээр олгуулна;
+хэрэглэгчид: «Токены төрлийг (хувийн/байгууллага) солихын тулд eID апп-аас токеныг цуцлаад шинээр олгуулна уу».
 
 `/token/auth/*` нь `/.well-known/eid`-ийн `endpoints.token.auth_challenge` / `auth_verify`-д жагсаагдсан (AUTH эрх) —
 гэрээний тест бусад route-ийн адил шалгана.

@@ -3,7 +3,8 @@
 //     батална → session.poll (`tokenCertificate.status` = ISSUED) → certificateResult → verifyTokenCertificates;
 //   - токеноор нэвтрэлт (docs/TOKEN_AUTH.md, AUTH эрх): authChallenge → токен tokenAuthDigest-ийг CKM_ECDSA-аар зурна
 //     (түүхий r||s) → authVerify.
-// Алдаа: `ApiError.code` (TOKEN_LIMIT_REACHED → tokenLimitOf, CHALLENGE_EXPIRED, CERT_INVALID …); түр алдаа
+// Алдаа: `ApiError.code` (TOKEN_LIMIT_REACHED → tokenLimitOf, TOKEN_IN_USE, TOKEN_SCOPE_CHANGE, CHALLENGE_EXPIRED,
+// CERT_INVALID …); түр алдаа
 // (RATE_LIMITED, STATE_UNAVAILABLE, ISSUANCE_PENDING) — `retryable` + `retryAfterMs`.
 
 import { X509Certificate, createHash, createPublicKey, timingSafeEqual } from "node:crypto";
@@ -104,6 +105,41 @@ function hexSha256Equal(hex: unknown, data: Uint8Array): boolean {
   return timingSafeEqual(createHash("sha256").update(data).digest(), Buffer.from(hex, "hex"));
 }
 
+/**
+ * Токены олголтын 409 кодууд (`ApiError.code`; session-ий `tokenCertificate.errorCode`-д ч ирнэ):
+ * - `TOKEN_LIMIT_REACHED` — иргэний токены хязгаар хүрсэн ({@link tokenLimitOf});
+ * - `TOKEN_IN_USE` — `tokenSerial` өөр иргэнд хүчинтэй гэрчилгээтэй бүртгэлтэй;
+ * - `TOKEN_SCOPE_CHANGE` — сунгалт scope-ийг солих гэсэн (хувийн ↔ байгууллага, эсвэл өөр `onBehalfOf`). Override
+ *   байхгүй: иргэн eID апп-аас токеноо цуцалж (`/v3/mobile/tokens/{tokenSerial}/revoke`) байж шинэ scope-оор олгуулна.
+ */
+export type TokenConflictCode = "TOKEN_LIMIT_REACHED" | "TOKEN_IN_USE" | "TOKEN_SCOPE_CHANGE";
+
+/** {@link TokenConflictCode}-ийн бүх утга (runtime шалгалтад). */
+export const TOKEN_CONFLICT_CODES: readonly TokenConflictCode[] = ["TOKEN_LIMIT_REACHED", "TOKEN_IN_USE", "TOKEN_SCOPE_CHANGE"];
+
+/** Discovery (`/.well-known/eid`)-ийн `tokenCertificate` блок. */
+export interface TokenCertInfo {
+  enabled: boolean;
+  /** `POST` олголтын бүтэн URL. */
+  issue: string;
+  /** `GET` үр дүнгийн URL template (`{sessionID}`). */
+  result: string;
+  /** Шаардлагатай RP эрх (TOKEN_ISSUE). */
+  permission: string;
+  certificateLevel: string;
+  keyAlgorithm: string;
+  /** `"optional"` — хоосон = хувийн токен. */
+  onBehalfOf: string;
+  /**
+   * true — сунгалт (ижил `tokenSerial` дээр ACTIVE бүртгэлтэй) scope-ийг хадгална; өөр scope бол 409
+   * `TOKEN_SCOPE_CHANGE`. Хуучин CA-д талбар алга → false.
+   */
+  scopeLockedOnRenewal: boolean;
+  raw: unknown;
+}
+
+const DISCOVERY_PATH = "/.well-known/eid";
+
 /** CA олголт дуусаагүй бол ≤ 15с хүлээдэг. */
 const TOKEN_RESULT_TIMEOUT_MS = 30_000;
 
@@ -116,6 +152,11 @@ export class TokenApi {
   /**
    * POST /token/certificate — токены AUTH + SIGN гэрчилгээ олголт эхлүүлнэ (иргэн утсаараа батална). CA-ийн буцаасан
    * CSR hash-ууд илгээсэнтэй таарахгүй бол ValidationError.
+   *
+   * Сунгалт: ижил `tokenSerial` дээр энэ иргэний ACTIVE бүртгэл байвал олголт = сунгалт, **scope-ийг хадгална** —
+   * байгууллагын токен зөвхөн тэр байгууллагаар (`onBehalfOf` ижил), хувийн токен зөвхөн хувиараа. Өөр scope бол
+   * 409 `TOKEN_SCOPE_CHANGE` (override үгүй); scope солих = иргэн eID апп-аас токеноо цуцлаад шинээр олгуулна.
+   * Бусад 409: `TOKEN_LIMIT_REACHED` ({@link tokenLimitOf}), `TOKEN_IN_USE` ({@link TokenConflictCode}).
    */
   async issueCertificate(input: TokenCertInput): Promise<TokenCertStart> {
     if (!input.signerEtsi?.trim() || !input.csrAuth?.length || !input.csrSign?.length || !input.tokenSerial?.trim()) {
@@ -147,9 +188,27 @@ export class TokenApi {
     };
   }
 
+  /** Discovery-ийн `tokenCertificate` блок. Блок байхгүй (хуучин CA) бол `enabled: false`. */
+  async certificateInfo(): Promise<TokenCertInfo> {
+    const d = rec(await this.http.get(DISCOVERY_PATH));
+    const t = rec(d.tokenCertificate);
+    return {
+      enabled: t.enabled === true,
+      issue: String(t.issue ?? ""),
+      result: String(t.result ?? ""),
+      permission: String(t.permission ?? ""),
+      certificateLevel: String(t.certificateLevel ?? ""),
+      keyAlgorithm: String(t.keyAlgorithm ?? ""),
+      onBehalfOf: String(t.onBehalfOf ?? ""),
+      scopeLockedOnRenewal: t.scopeLockedOnRenewal === true,
+      raw: d.tokenCertificate,
+    };
+  }
+
   /**
    * GET /token/certificate/{sessionID} — олгосон AUTH + SIGN гэрчилгээ + гинж. Токенд бичихээс өмнө
-   * {@link verifyTokenCertificates}-ээр CSR-ийн түлхүүртэй тулга.
+   * {@link verifyTokenCertificates}-ээр CSR-ийн түлхүүртэй тулга. Эхлэл ба батлалтын хооронд нөхцөл өөрчлөгдсөн бол
+   * 409 ({@link TokenConflictCode}) — гэрчилгээ гараагүй.
    */
   async certificateResult(sessionId: string): Promise<TokenCertResult> {
     const raw = await this.http.get(routePath(RP_ROUTES.tokenCertificateResult, sessionId), TOKEN_RESULT_TIMEOUT_MS);

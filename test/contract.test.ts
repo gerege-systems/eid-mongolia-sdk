@@ -118,3 +118,14 @@ test("Share: endpoints.share-ийн талбарууд ба discovery-ийн sha
   for (const k of ["perRPHour", "perRPDay", "perRecipientDay"]) assert.equal(typeof q?.[k], "number", `share.quota.${k}`);
   assert.ok(Array.isArray(s.formats) && s.formats.length > 0, "share.formats");
 });
+
+test("TokenCertificate: discovery-ийн tokenCertificate блок TokenCertInfo-тэй ижил (scopeLockedOnRenewal)", async () => {
+  const d = await getJson(EID_DISCOVERY);
+  const base = String(d.rp_api_base);
+  const t = d.tokenCertificate as Record<string, unknown> | undefined;
+  assert.ok(t && typeof t === "object", "discovery-д tokenCertificate блок алга");
+  assert.equal(t.issue, base + RP_ROUTES.tokenCertificate.path, "tokenCertificate.issue");
+  assert.equal(t.result, base + RP_ROUTES.tokenCertificateResult.path, "tokenCertificate.result");
+  assert.equal(typeof t.enabled, "boolean", "tokenCertificate.enabled");
+  assert.equal(t.scopeLockedOnRenewal, true, "tokenCertificate.scopeLockedOnRenewal");
+});
