@@ -653,8 +653,8 @@ Calibri / Cambria / Courier New-ийн Liberation / Carlito / Caladea орлуу
 Гарын үсэг зурсан PDF-ээ дараагийн гарын үсэг зурагч / хүлээн авагч руу хавсралтаар илгээнэ (`POST /share`). CA файлыг
 **хадгалахгүй**: eID-ийн хүчинтэй гарын үсэгтэй эсэхийг шалгаад илгээж, хаяна. Хүлээн авагч бүрт тусдаа имэйл.
 
-> CA-ийн туг одоогоор **унтраалттай** (`share.enabled=false` → 503 `SHARE_DISABLED`). Дуудахын өмнө
-> `await eid.shareInfo()`-ийн `enabled`-ийг шалга.
+> CA дээр үргэлж асаалттай (2026-10-16-наас туг байхгүй). Хязгаар, квотыг `await eid.shareInfo()`-ээс уншина;
+> `enabled` false бол имэйлийн үйлчилгээ түр тохируулагдаагүй (503).
 
 ```ts
 import { ShareError } from "@gerege-systems/eid-mongolia-sdk";
@@ -688,7 +688,7 @@ if (info.enabled) {
 | 422 | `FILE_NOT_SIGNED` | `.reason`: `no_signature` \| `invalid` \| `untrusted` |
 | 429 | `RATE_LIMITED` | квот; `.retryAfterMs`, `.retryable` |
 | 502 | `MAIL_FAILED` | `.sent`, `.failed`, `.recipients` — зөвхөн `failed`-ийг дахин илгээ |
-| 503 | `SHARE_DISABLED`, `MAIL_UNAVAILABLE`, `VALIDATOR_UNAVAILABLE`, `VALIDATOR_BUSY` | туг / тохиргоо / ачаалал (`VALIDATOR_*` — Retry-After) |
+| 503 | `MAIL_UNAVAILABLE`, `VALIDATOR_UNAVAILABLE`, `VALIDATOR_BUSY` (`SHARE_DISABLED` — хуучин CA) | тохиргоо / ачаалал (`VALIDATOR_*` — Retry-After) |
 
 401 → `AuthenticationError`, 403 (SIGN эрхгүй, IP/mTLS) → `ForbiddenError`. Квот: RP тутам цагт 30 / өдөрт 200 хүсэлт,
 хүлээн авагч тутам өдөрт 10 имэйл (бодит утгыг `shareInfo().quota`-аас). Хугацаа анхдагч 150 с (`timeoutMs`).
