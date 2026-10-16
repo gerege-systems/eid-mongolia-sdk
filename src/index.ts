@@ -19,9 +19,19 @@ export {
   registrationFromCompleted,
   buildRegisterBody,
 } from "./sign.js";
-export { PDF_SIGNATURE_REGISTER_FIELDS } from "./contract.js";
+export { PDF_SIGNATURE_REGISTER_FIELDS, SHARE_FORM_FIELDS } from "./contract.js";
 export { SessionApi, parseSessionResult, personMatchesCertificate } from "./session.js";
 export { OrganizationApi } from "./organization.js";
+export {
+  ShareError,
+  SHARE_ERROR_CODES,
+  DEFAULT_SHARE_TIMEOUT_MS,
+  type ShareErrorCode,
+  type ShareNotSignedReason,
+  type ShareInput,
+  type ShareResult,
+  type ShareInfo,
+} from "./share.js";
 export {
   PersonApi,
   type TokenOrganization,

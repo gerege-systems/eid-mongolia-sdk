@@ -26,6 +26,18 @@ export interface PersonCertificate {
   notBefore: string;
   notAfter: string;
   issuerDn: string;
+  /** Олгосон мөч (RFC 3339). Хуучин CA-д байхгүй. */
+  issuedAt?: string;
+  /**
+   * Цуцалсан мөч (RFC 3339) — REVOKED-д. Сунгалт/дахин бүртгэлээр солигдсон (status SUSPENDED,
+   * `revocationReason: "superseded"`) мөрд ихэвчлэн байхгүй.
+   */
+  revokedAt?: string;
+  /**
+   * RFC 5280 CRLReason-ийн нэр: keyCompromise, cACompromise, affiliationChanged, superseded, cessationOfOperation,
+   * certificateHold, privilegeWithdrawn г.м. `status` өөрчлөгдөхгүй — солигдсоныг (SUSPENDED) `superseded`-ээр ялга.
+   */
+  revocationReason?: string;
   /** base64 DER (нийтийн артефакт). */
   certValue?: string;
   /** TOKEN мөрөнд токенд холбогдсон байгууллага; хувийн токенд алга. */

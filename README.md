@@ -434,6 +434,10 @@ Session-ий `onBehalfOf` блок (`role`/`roleLabel`/`rightType`/`rightTypeLab
 `eid.person.certificates(etsi)` · `devices` · `activity(etsi, { flow, limit, offset })` · `summary` · `children` — иргэн
 сүүлийн 24 цагт танай RP-ээр нэвтэрсэн байх ёстой (эс бөгөөс `ForbiddenError`). Хариу бүрт `raw`.
 
+Гэрчилгээ бүрт (0.18.0-аас) `issuedAt` (олгосон), `revokedAt?` (цуцалсан — REVOKED), `revocationReason?` (RFC 5280
+нэр: `keyCompromise`, `superseded`, `cessationOfOperation` …). `status` өөрчлөгдөхгүй: сунгалт/дахин бүртгэлээр
+солигдсон мөр `SUSPENDED` + `revocationReason: "superseded"`, `revokedAt`-гүй.
+
 ## 3c. USB токен
 
 ```ts
@@ -636,6 +640,51 @@ Calibri / Cambria / Courier New-ийн Liberation / Carlito / Caladea орлуу
 ажиллуулахад татахгүй, цуцлалт, COEP-гүй хуудас. Мобайл хөтөчид 250 MB WASM санах ой их шаардана — сул утсанд унаж
 болзошгүй.
 
+## 3f. Гарын үсэгтэй файлыг имэйлээр — `eid.share()` (`SIGN` эрх)
+
+Гарын үсэг зурсан PDF-ээ дараагийн гарын үсэг зурагч / хүлээн авагч руу хавсралтаар илгээнэ (`POST /share`). CA файлыг
+**хадгалахгүй**: eID-ийн хүчинтэй гарын үсэгтэй эсэхийг шалгаад илгээж, хаяна. Хүлээн авагч бүрт тусдаа имэйл.
+
+> CA-ийн туг одоогоор **унтраалттай** (`share.enabled=false` → 503 `SHARE_DISABLED`). Дуудахын өмнө
+> `await eid.shareInfo()`-ийн `enabled`-ийг шалга.
+
+```ts
+import { ShareError } from "@gerege-systems/eid-mongolia-sdk";
+
+const info = await eid.shareInfo(); // { enabled, maxFileBytes, maxRecipients, quota: { perRPHour, perRPDay, perRecipientDay }, … }
+if (info.enabled) {
+  try {
+    const r = await eid.share({
+      file: signedPdf,                 // Uint8Array | ArrayBuffer | Blob/File; ≤ 3 080 192 байт
+      filename: "гэрээ.pdf",           // .pdf өргөтгөлтэй; анхдагч File-ийн нэр эсвэл document.pdf
+      to: ["next@example.mn"],         // 1–5, давхардалгүй
+      subject: "Гэрээ — гарын үсэг",   // ≤ 150; CA «‹RP нэр›: …» угтвар тавина
+      message: "Хоёр дахь гарын үсгийг зурна уу", // ≤ 1000
+      lang: "mn",                      // mn | en
+    });
+    console.log(r.sent, r.sha256, r.signatures, r.docID); // docID — CA-д бүртгэлтэй бол (имэйлд verify холбоос)
+  } catch (e) {
+    if (e instanceof ShareError) {
+      // e.code: ShareErrorCode; 422 → e.reason; 502 → e.sent / e.failed / e.recipients ("sent" | "failed", to-гийн дарааллаар)
+    }
+    throw e;
+  }
+}
+```
+
+| HTTP | `ShareError.code` | Тайлбар |
+|---|---|---|
+| 400 | `REQUEST_INVALID`, `FILE_EMPTY`, `RECIPIENT_REQUIRED`, `TOO_MANY_RECIPIENTS`, `RECIPIENT_INVALID`, `RECIPIENT_DUPLICATE` | талбарын алдаа |
+| 413 | `FILE_TOO_LARGE` | файл / имэйл хязгаараас их |
+| 415 | `FILE_TYPE_NOT_SUPPORTED` | PDF биш (өргөтгөл, Content-Type, `%PDF-` гурвуулаа таарна) |
+| 422 | `FILE_NOT_SIGNED` | `.reason`: `no_signature` \| `invalid` \| `untrusted` |
+| 429 | `RATE_LIMITED` | квот; `.retryAfterMs`, `.retryable` |
+| 502 | `MAIL_FAILED` | `.sent`, `.failed`, `.recipients` — зөвхөн `failed`-ийг дахин илгээ |
+| 503 | `SHARE_DISABLED`, `MAIL_UNAVAILABLE`, `VALIDATOR_UNAVAILABLE`, `VALIDATOR_BUSY` | туг / тохиргоо / ачаалал (`VALIDATOR_*` — Retry-After) |
+
+401 → `AuthenticationError`, 403 (SIGN эрхгүй, IP/mTLS) → `ForbiddenError`. Квот: RP тутам цагт 30 / өдөрт 200 хүсэлт,
+хүлээн авагч тутам өдөрт 10 имэйл (бодит утгыг `shareInfo().quota`-аас). Хугацаа анхдагч 150 с (`timeoutMs`).
+
 ## 4. QR ба ижил төхөөрөмж — device link v3
 
 Иргэн өөр төхөөрөмжийн дэлгэц дээрх **QR**-ийг утсаараа уншина, эсвэл RP-ийн сайт/аппыг eID апптай **ижил
@@ -766,6 +815,7 @@ OK ирж болзошгүй. Иймд `ResponseValidator`:
 | `NoSigningCertificateError` | 409 `NO_SIGNING_CERTIFICATE` — гарын үсгийн гэрчилгээ / төхөөрөмж алга (sign, cert-choice start); `ApiError`-ийн дэд анги |
 | `CertChoiceInvalidError` | 409 `CERT_CHOICE_INVALID` — linked sign-ийн certificate-choice хүчингүй; `ApiError`-ийн дэд анги |
 | `RequestInvalidError` | 400 `REQUEST_INVALID` — хүсэлт буруу (ж: `linkedSessionID` дутуу); `ApiError`-ийн дэд анги |
+| `ShareError` | `share()`-ийн 4xx/5xx (401/403-аас бусад) — `.code` (`ShareErrorCode`), `.reason` (422), `.sent`/`.failed`/`.recipients` (502); `ApiError`-ийн дэд анги |
 | `ApiError` | бусад HTTP алдаа (`.status`, `.body`, серверийн `.code`, `.retryAfterMs`, `.headers`, `.retryable` — ж: 404 `ORG_NOT_FOUND`) |
 | `ResponseTooLargeError` | хариу SDK-ийн хязгаараас их (JSON 4 MiB) — `.op`, `.limit` |
 | `NetworkError` | timeout/сүлжээ (`.op` — таних тэмдэггүй зам, `.timeout`) |

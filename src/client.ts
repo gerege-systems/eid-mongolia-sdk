@@ -5,6 +5,7 @@
 //   client.organization — иргэний төлөөлөх байгууллагууд
 //   client.person    — иргэний PKI самбар (PKI_READ): гэрчилгээ, төхөөрөмж, үйл ажиллагаа, тоо, хүүхдүүд
 //   client.token     — USB токены гэрчилгээ олголт (TOKEN_ISSUE) ба токеноор нэвтрэлт (AUTH)
+//   client.share()   — гарын үсэгтэй файлыг имэйлээр дамжуулах (SIGN; `shareInfo()` — discovery-ийн туг, хязгаар)
 //   client.session   — үр дүн poll хийх (long-poll)
 //   client.validator — хариуг крипто-баталгаажуулах (cert chain + signature)
 //
@@ -32,6 +33,7 @@ import { SessionApi } from "./session.js";
 import { OrganizationApi } from "./organization.js";
 import { PersonApi } from "./person.js";
 import { TokenApi } from "./token.js";
+import { shareFile, shareInfo, type ShareInfo, type ShareInput, type ShareResult } from "./share.js";
 import { ResponseValidator, type TrustConfig } from "./validator.js";
 import type { CertificateLevel, RpCredentials } from "./types.js";
 
@@ -100,6 +102,7 @@ export class EidClient {
   readonly validator: ResponseValidator;
   /** `credentials.rpName` — иргэний утсанд харагдах RP нэр. */
   readonly rpName: string;
+  private readonly http: Http;
 
   constructor(cfg: ClientConfig) {
     if (!cfg.credentials?.apiSecret) throw new Error("EidClient: credentials.apiSecret шаардлагатай");
@@ -123,6 +126,7 @@ export class EidClient {
     this.session = new SessionApi(http);
     this.validator = new ResponseValidator(cfg.trust ?? {});
     this.rpName = cfg.credentials.rpName;
+    this.http = http;
   }
 
   /** {@link SignApi.pdfDigest} — клиент талын PAdES-ийн DTBS-д гарын үсгийн session (PDF CA руу очихгүй). */
@@ -133,5 +137,20 @@ export class EidClient {
   /** {@link SignApi.registerSignature} — `pades.complete()`-ийн CMS-ийг CA-д бүртгэнэ (`POST /pdf/signatures`). */
   registerSignature(input: RegisterSignatureInput): Promise<RegisterSignatureResult> {
     return this.sign.registerSignature(input);
+  }
+
+  /**
+   * `POST /share` (SIGN эрх) — гарын үсэгтэй файлыг (PDF, eID-ийн хүчинтэй гарын үсэгтэй) 1–5 хүлээн авагч руу
+   * имэйлээр, хавсралтаар илгээнэ; CA файлыг хадгалахгүй. Алдаа: `ShareError` (`code`, 422-д `reason`, 502-д
+   * `sent`/`failed`/`recipients`), 401 AuthenticationError, 403 ForbiddenError. CA-ийн туг унтраалттай бол 503
+   * SHARE_DISABLED — {@link shareInfo}-оор урьдчилан шалга.
+   */
+  share(input: ShareInput): Promise<ShareResult> {
+    return shareFile(this.http, input);
+  }
+
+  /** Discovery (`/.well-known/eid`)-ийн `share` блок: `enabled`, формат, хязгаар, квот. */
+  shareInfo(): Promise<ShareInfo> {
+    return shareInfo(this.http);
   }
 }
