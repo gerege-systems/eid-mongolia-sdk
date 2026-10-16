@@ -3,8 +3,8 @@
 
 import type { X509Certificate } from "node:crypto";
 import { createHash } from "node:crypto";
-import { equal } from "./pades/bytes.js";
-import { ocspRequest, parseOCSPForCert } from "./pades/ltv.js";
+import { intValue } from "./pades/asn1.js";
+import { ocspRequest, parseOCSPFrom, sameCertKey } from "./pades/ltv.js";
 import { OID, parseCertificate, type Certificate } from "./pades/x509.js";
 import type { RevocationChecker, RevocationStatus } from "./validator.js";
 
@@ -63,10 +63,10 @@ export function ocspRevocationChecker(opts: OcspCheckerOptions = {}): Revocation
         if (res.status !== 200) continue;
         const der = new Uint8Array(await res.arrayBuffer());
         if (der.length > MAX_BYTES) continue;
-        const resp = await parseOCSPForCert(der, leaf, issuer);
+        const resp = await parseOCSPFrom(der, intValue(leaf.serial), issuer);
         const t = now();
         const rc = resp.certificate;
-        if (rc && !equal(rc.raw, issuer.raw)) {
+        if (rc && !sameCertKey(rc, issuer)) {
           if (!rc.extKeyUsage.includes(OID.kpOCSPSigning)) continue;
           if (t < rc.notBefore.getTime() || t > rc.notAfter.getTime()) continue;
         }

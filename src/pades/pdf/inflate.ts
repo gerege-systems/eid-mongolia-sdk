@@ -56,8 +56,15 @@ export function zlibInflate(src: Uint8Array, limit = 64 << 20): Uint8Array {
   return inflateRaw(src.subarray(2), limit);
 }
 
+/** inflateRaw-ийн нэмэлт гаралт (хатуу zlib — validate/pdfobj.ts): end — deflate-ийн дараах эхний байт, truncated —
+ * өгөгдөл дутуу (энэ үед end утгагүй). */
+export interface InflateInfo {
+  end: number;
+  truncated: boolean;
+}
+
 /** Raw deflate (RFC 1951). Төгсгөлийн block хүртэл (дараах байт — adler — үл тоомсорлоно). */
-export function inflateRaw(src: Uint8Array, limit = 64 << 20): Uint8Array {
+export function inflateRaw(src: Uint8Array, limit = 64 << 20, info?: InflateInfo): Uint8Array {
   let pos = 0;
   let bitBuf = 0;
   let bitCnt = 0;
@@ -105,7 +112,9 @@ export function inflateRaw(src: Uint8Array, limit = 64 << 20): Uint8Array {
   } catch (e) {
     // Таслагдсан stream: Go-ийн stream reader шиг тайлсан хэсгийг буцаана (уншигч өөрөө хэмжээг шалгана).
     if (!(e instanceof Truncated)) throw e;
+    if (info) info.truncated = true;
   }
+  if (info) info.end = pos;
   return out.slice(0, len);
 
   function inflateBlocks(): void {

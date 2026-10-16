@@ -16,8 +16,8 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const GO_SDK_REPO = "https://github.com/gerege-systems/eid-mongolia-sdk-go";
-// Tag pades-golden-v3.
-export const GO_SDK_COMMIT = "55bcb0abd013cd749199c975f0e76e200d50feeb";
+// Tag v0.7.0 (pades-golden-v3 + pades/testdata/validate).
+export const GO_SDK_COMMIT = "7c67790ca2befb717679c9192ac1ec5a8fd550b5";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const check = process.argv.includes("--check");
@@ -48,6 +48,16 @@ function expected(src) {
   }
   for (const f of readdirSync(join(g, "pki")).sort()) {
     if (f.endsWith(".pem") && !f.endsWith(".key.pem")) out.set(`${dst}/pki/${f}`, readFileSync(join(g, "pki", f)));
+  }
+  // validatePdf conformance (Go pades/testdata/validate): golden/output-ийн PDF-үүд оролт болно.
+  for (const f of readdirSync(join(g, "output")).sort()) out.set(`${dst}/output/${f}`, readFileSync(join(g, "output", f)));
+  const v = join(src, "pades/testdata/validate");
+  const vdst = "test/fixtures/pades/validate";
+  for (const f of ["manifest.json", "README.md"]) out.set(`${vdst}/${f}`, readFileSync(join(v, f)));
+  for (const sub of ["input", "http", "pki"]) {
+    for (const f of readdirSync(join(v, sub)).sort()) {
+      if (!f.endsWith(".key.pem")) out.set(`${vdst}/${sub}/${f}`, readFileSync(join(v, sub, f)));
+    }
   }
   const fonts = join(src, "pades/assets/fonts");
   const fdst = "src/pades/assets";
@@ -133,6 +143,7 @@ function listRepo() {
     }
   };
   walk("test/fixtures/pades/golden");
+  walk("test/fixtures/pades/validate");
   walk("src/pades/assets");
   return files;
 }
@@ -154,6 +165,7 @@ try {
     console.log(`pades golden: ${want.size} файл Go ${GO_SDK_COMMIT.slice(0, 12)}-тэй ижил`);
   } else {
     rmSync(join(root, "test/fixtures/pades/golden"), { recursive: true, force: true });
+    rmSync(join(root, "test/fixtures/pades/validate"), { recursive: true, force: true });
     for (const [p, b] of want) {
       mkdirSync(dirname(join(root, p)), { recursive: true });
       writeFileSync(join(root, p), b);

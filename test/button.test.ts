@@ -11,7 +11,7 @@ for (const k of ["window", "document", "HTMLElement", "customElements", "CustomE
 }
 
 type Status = Record<string, unknown>;
-let startReplies: Array<{ status: number; body: Status }> = [];
+let startReplies: Array<{ status: number; body: Status; headers?: Record<string, string> } | "neterr"> = [];
 let statusReplies: Array<Status | "neterr"> = [];
 let requests: { url: string; method: string; body?: unknown }[] = [];
 
@@ -19,7 +19,8 @@ globalThis.fetch = (async (url: string, init?: RequestInit) => {
   requests.push({ url: String(url), method: init?.method ?? "GET", body: init?.body ? JSON.parse(String(init.body)) : undefined });
   if (String(url).includes("/start")) {
     const r = startReplies.shift() ?? { status: 500, body: {} };
-    return new Response(JSON.stringify(r.body), { status: r.status, headers: { "Content-Type": "application/json" } });
+    if (r === "neterr") throw new TypeError("network");
+    return new Response(JSON.stringify(r.body), { status: r.status, headers: { "Content-Type": "application/json", ...r.headers } });
   }
   const s = statusReplies.shift() ?? { state: "PENDING" };
   if (s === "neterr") throw new TypeError("network");
@@ -349,18 +350,72 @@ test("countdown: VC-ийн доор m:ss; минут тутам л зарлан�
   m.b.close();
 });
 
-test("push 429 → алдааны мессеж (цонх хэвээр)", async () => {
+test("push 429 → busy countdown (товч идэвхгүй), eid-login-error {status, code, retryAfter}", async () => {
   startReplies = [
     { status: 200, body: { mode: "qr", qr: QR, vc: "1", expiresIn: 120 } },
-    { status: 429, body: { error: "rate_limited" } },
+    { status: 429, body: { error: "rate_limited" }, headers: { "Retry-After": "2" } },
   ];
   const { sr, text, click, b } = make();
+  const evs: unknown[] = [];
+  b.addEventListener("eid-login-error", (e: Event) => evs.push((e as CustomEvent).detail));
   click();
   await until(() => !!sr.querySelector("form"));
   (sr.querySelector("input") as HTMLInputElement).value = "УБ12345678";
   sr.querySelector("form")!.dispatchEvent(new (dom.window.Event)("submit", { cancelable: true }));
-  await until(() => /Хэт олон оролдлого/.test(text()));
+  await until(() => /Систем завгүй — 2 сек/.test(text()));
+  const push = sr.querySelector("button.push") as HTMLButtonElement;
+  assert.equal(push.disabled, true);
+  assert.deepEqual(evs, [{ error: "rate_limited", status: 429, code: "rate_limited", retryAfter: 2 }]);
+  await until(() => /Систем завгүй — 1 сек/.test(text()), 1500);
+  await until(() => !push.disabled, 2500);
+  assert.doesNotMatch(text(), /Систем завгүй/);
   b.close();
+});
+
+test("start 503 busy → цонхонд countdown (en), дахин оролдох идэвхгүй → идэвхжинэ; event composed", async () => {
+  startReplies = [{ status: 503, body: { error: "busy" }, headers: { "Retry-After": "1" } }];
+  const { sr, text, click, b } = make({ lang: "en" });
+  const evs: CustomEvent[] = [];
+  document.body.addEventListener("eid-login-error", (e: Event) => evs.push(e as CustomEvent));
+  click();
+  await until(() => /Service busy — try again in 1 s/.test(text()));
+  const retry = sr.querySelector(".end button") as HTMLButtonElement;
+  assert.equal(retry.disabled, true);
+  assert.equal(evs.length, 1);
+  assert.ok(evs[0]!.composed && evs[0]!.bubbles);
+  assert.deepEqual(evs[0]!.detail, { error: "busy", status: 503, code: "busy", retryAfter: 1 });
+  await until(() => !retry.disabled, 2500);
+  assert.doesNotMatch(text(), /Service busy/);
+  b.close();
+});
+
+test("start 503 Retry-After-гүй → 30 сек анхдагч; 502 ба сүлжээний алдаанд event", async () => {
+  startReplies = [{ status: 503, body: { error: "busy" } }];
+  let m = make();
+  const evs: unknown[] = [];
+  m.b.addEventListener("eid-login-error", (e: Event) => evs.push((e as CustomEvent).detail));
+  m.click();
+  await until(() => /Систем завгүй — 30 сек/.test(m.text()));
+  m.b.close();
+  assert.deepEqual(evs, [{ error: "busy", status: 503, code: "busy", retryAfter: null }]);
+
+  startReplies = [{ status: 502, body: {} }];
+  m = make();
+  const evs2: unknown[] = [];
+  m.b.addEventListener("eid-login-error", (e: Event) => evs2.push((e as CustomEvent).detail));
+  m.click();
+  await until(() => /холбогдож чадсангүй/.test(m.text()));
+  m.b.close();
+  startReplies = ["neterr"];
+  m = make();
+  m.b.addEventListener("eid-login-error", (e: Event) => evs2.push((e as CustomEvent).detail));
+  m.click();
+  await until(() => evs2.length === 2);
+  m.b.close();
+  assert.deepEqual(evs2, [
+    { error: "HTTP_502", status: 502, code: "HTTP_502", retryAfter: null },
+    { error: "NETWORK", status: 0, code: "NETWORK", retryAfter: null },
+  ]);
 });
 
 test("EXPIRED / WAIT_CALLBACK / start алдаа", async () => {
