@@ -259,7 +259,11 @@ export type TokenCertStatus = "PENDING" | "ISSUED" | "FAILED" | "EXPIRED";
 /** GET /session/{id}-ийн `tokenCertificate` (TOKEN_CERT §Төлөв). */
 export interface TokenCertSessionBlock {
   status: TokenCertStatus | string;
-  /** FAILED үед: endResult (USER_REFUSED, TIMEOUT …) эсвэл CSR_DIGEST_MISMATCH, TOKEN_LIMIT_REACHED г.м. */
+  /**
+   * FAILED үед: endResult (USER_REFUSED, TIMEOUT …) эсвэл CSR_DIGEST_MISMATCH, SIGNER_CERT_CHANGED, SIGNATURE_INVALID,
+   * SESSION_MISMATCH, REPRESENTATION_REVOKED, KYC_INCOMPLETE, TOKEN_LIMIT_REACHED, TOKEN_IN_USE, TOKEN_SCOPE_CHANGE,
+   * ISSUANCE_FAILED, REGISTRY_FAILED.
+   */
   errorCode?: string;
   authSerialHex?: string;
   signSerialHex?: string;

@@ -17,6 +17,7 @@ import {
   RETRYABLE_ERROR_CODES,
   ResponseTooLargeError,
   ResponseValidator,
+  TOKEN_CONFLICT_CODES,
   ValidationError,
   buildAcspV2Payload,
   parseRetryAfter,
@@ -297,6 +298,31 @@ test("token.certificateResult + verifyTokenCertificates + tokenLimitOf", async (
   assert.equal(tokenLimitOf(new ApiError(409, JSON.stringify({ kind: "PERSONAL", limit: 1 }), "TOKEN_IN_USE")), undefined);
   assert.deepEqual(tokenLimitOf(new ApiError(409, JSON.stringify({ kind: "PERSONAL", limit: 0 }), "TOKEN_LIMIT_REACHED")), { kind: "PERSONAL", limit: 0 });
   assert.equal(tokenLimitOf(new Error("x")), undefined);
+
+  const scope = client({ status: 409, body: { error: "Токены төрлийг солихын тулд …", code: "TOKEN_SCOPE_CHANGE" } });
+  const se = await scope.eid.token.issueCertificate({ signerEtsi: "PNOMN-1", csrAuth: TOK_A.csr, csrSign: TOK_S.csr, tokenSerial: "x", onBehalfOf: "NTRMN-1" }).catch((e) => e);
+  assert.ok(se instanceof ApiError && se.status === 409 && se.code === "TOKEN_SCOPE_CHANGE");
+  assert.ok((TOKEN_CONFLICT_CODES as readonly string[]).includes(se.code!));
+  assert.equal(se.retryable, false);
+  assert.equal(tokenLimitOf(se), undefined);
+});
+
+test("token.certificateInfo: discovery-ийн tokenCertificate блок (scopeLockedOnRenewal)", async () => {
+  const block = {
+    certificateLevel: "ADVANCED", enabled: true, issue: "https://rp.eidmongolia.mn/token/certificate",
+    keyAlgorithm: "EC P-256 (ecdsa-with-SHA256)", onBehalfOf: "optional", permission: "TOKEN_ISSUE",
+    result: "https://rp.eidmongolia.mn/token/certificate/{sessionID}", scopeLockedOnRenewal: true,
+  };
+  const { eid, calls } = client({ status: 200, body: { version: "v3", tokenCertificate: block } });
+  const i = await eid.token.certificateInfo();
+  assert.equal(calls[0]!.url, "https://rp.eidmongolia.mn/.well-known/eid");
+  assert.equal(i.scopeLockedOnRenewal, true);
+  assert.equal(i.enabled, true);
+  assert.equal(i.permission, "TOKEN_ISSUE");
+  assert.equal(i.onBehalfOf, "optional");
+  const old = await client({ status: 200, body: { version: "v3" } }).eid.token.certificateInfo();
+  assert.equal(old.enabled, false);
+  assert.equal(old.scopeLockedOnRenewal, false);
 });
 
 test("token auth — tokenAuthDigest вектор, challenge, verify (identity = SERIALNUMBER)", async () => {
