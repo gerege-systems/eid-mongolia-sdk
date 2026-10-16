@@ -7,7 +7,7 @@ import { concat, equal, fromLatin1, toHex } from "../bytes.js";
 import { digest, sha256 } from "../crypto.js";
 import { PRef, Reader, type Value } from "../pdf/reader.js";
 import { OID, parseCertificate, verifySignature, type Certificate } from "../x509.js";
-import { fixSurrogates, fromPrecise, goString, hexSerial, pdfText, ZERO_TIME, type GoTime } from "./gofmt.js";
+import { fromPrecise, hexSerial, pdfText, ZERO_TIME, type GoTime } from "./gofmt.js";
 import { Revisions, type SigMeta } from "./revisions.js";
 
 /** PDF-ийн дээд хэмжээ (CA MaxPDFBytes). */
@@ -221,7 +221,6 @@ async function extractSignature(doc: Uint8Array, obj: Value): Promise<RawSignatu
   s.leaf = leaf.raw;
   const der = cmsDER(contents);
   if (der) s.cmsSha256 = toHex(await sha256(der));
-  s.signingCertV2 = "";
   const chk = await signedAttrChecks(si.authAttrs, leaf);
   s.signingCertV2 = chk.certV2;
   s.signingTimeAttr = chk.signingTime;
@@ -701,4 +700,3 @@ function extractDSS(dss: Value): RawDSS | undefined {
   return { certs: read("Certs"), ocsps: read("OCSPs"), crls: read("CRLs") };
 }
 
-export { fixSurrogates, goString };

@@ -82,8 +82,6 @@ test("extract: Go corpus-тэй ижил", { skip: !dir }, async () => {
   });
   writeFileSync(out, r.outputFiles[0]!.contents);
   const { extract, ExtractError } = (await import(pathToFileURL(out).href)) as typeof import("../src/pades/validate/extract.ts");
-  const { formatTime } = (await import(pathToFileURL(out).href)) as unknown as { formatTime?: unknown };
-  void formatTime;
   const b64 = (b?: Uint8Array) => (b ? Buffer.from(b).toString("base64") : undefined);
   const t = (x?: { sec?: number; nanos: number }) => {
     if (!x) return undefined;
