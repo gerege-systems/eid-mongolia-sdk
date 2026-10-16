@@ -618,7 +618,7 @@ if (isWordFile(file)) {
 
 | Функц | Тайлбар |
 |---|---|
-| `wordToPdf(file, { assetsBase, onProgress?, signal?, fileName? })` | `{ pdf, pages, warnings }`. Нэг worker-ийг дахин ашиглана, дуудлагууд дараалалд |
+| `wordToPdf(file, { assetsBase, onProgress?, signal?, fileName?, verbose? })` | `{ pdf, pages, warnings }`. Нэг worker-ийг дахин ашиглана, дуудлагууд дараалалд. `verbose: true` — LibreOffice-ийн оношилгооны лог консолд (анхдагч чимээгүй; утга солигдвол worker дахин асна) |
 | `converterStatus({ assetsBase })` | `{ cached, downloadBytes }` — татахаас өмнө хэмжээг хэлэх (gzip хэмжээ, кэштэй бол 0) |
 | `isWordFile(file \| name)` | .docx / .doc эсэх (нэр, MIME). Агуулгыг `wordToPdf` эхний байтаар шалгана |
 | `disposeConverter()` | worker-ийг зогсоож санах ойг чөлөөлнө (кэш үлдэнэ) |
@@ -634,6 +634,11 @@ if (isWordFile(file)) {
 - Worker-ийн скриптүүдэд (`<assetsBase><хувилбар>/*.js`) **тусдаа CSP**: `default-src 'self'; script-src 'self'
   'wasm-unsafe-eval' 'unsafe-eval'` (Emscripten-д `eval` хэрэгтэй — зөвхөн worker-т). Хуудасны хатуу CSP (nonce +
   `'strict-dynamic'`) хэвээр байна; хуудсанд `connect-src 'self'` хангалттай.
+- Консол: LibreOffice хувиргалт бүрд «warn:vcl…», «[LOK C++] …» гэх мэт оношилгооны мөр (алдаа биш) хэвлэдэг.
+  `eid-mongolia-convert-assets` (≥ 0.18.2) upstream worker-ийг (`@matbee/libreoffice-converter@2.7.2`-ийн sha256-аар
+  баталгаажсан үед л) patch хийж эдгээрийг `verbose: true`-гүй бол гаргахгүй; `manifest.json`-д `"patched": true`. Hash
+  таарахгүй бол patch-гүй хуулж анхааруулна — хувиргалт ажиллана, лог л гарна. SDK шинэчилсний дараа asset-ийг дахин
+  хуул (`rev` солигдож worker-ийн immutable кэш шинэчлэгдэнэ; soffice.wasm/.data дахин татагдахгүй).
 - MPL-2.0: `<хувилбар>/NOTICE.txt` (эх код, лицензийн холбоос) asset-уудтай хамт үйлчилгээнд байна — хэрэглэгчийн
   нүүрэнд (тусламж/лиценз хэсэгт) LibreOffice-ийг дурд.
 

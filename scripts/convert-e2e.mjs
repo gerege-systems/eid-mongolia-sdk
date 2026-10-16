@@ -47,13 +47,13 @@ try {
   const page = (coi) => `<!doctype html><meta charset="utf-8"><title>convert e2e</title><body><script type="module" nonce="${NONCE}">
 import * as c from "/app.js";
 window.c = c;
-window.run = async (path, name, abortAt) => {
+window.run = async (path, name, abortAt, verbose) => {
   const log = [];
   const ctl = new AbortController();
   try {
     const file = new File([await (await fetch(path)).arrayBuffer()], name);
     const t = performance.now();
-    const r = await c.wordToPdf(file, { assetsBase: "/eid-convert/", signal: ctl.signal, onProgress: (p) => {
+    const r = await c.wordToPdf(file, { assetsBase: "/eid-convert/", signal: ctl.signal, verbose, onProgress: (p) => {
       log.push(p.phase + " " + p.percent);
       if (abortAt && p.phase === abortAt) ctl.abort();
     } });
@@ -87,7 +87,13 @@ window.ready = true;
     const ctx = await browser.newContext();
     const p = await ctx.newPage();
     const errors = [];
-    p.on("console", (m) => { if (m.type() === "error") errors.push(m.text().slice(0, 300)); });
+    // Хувиргагчийн оношилгооны лог (LibreOffice stdout/stderr, upstream worker-ийн console.log) — verbose-гүй бол 0.
+    const LO_LOG = /^(warn:|info:|\[LOK|\[Worker\]|\[FS |\[Fonts\]|\[LibreOfficeConverter\])/;
+    const loLog = [];
+    p.on("console", (m) => {
+      if (m.type() === "error") errors.push(m.text().slice(0, 300));
+      if (LO_LOG.test(m.text())) loLog.push(m.type() + " " + m.text().slice(0, 120));
+    });
     p.on("pageerror", (e) => errors.push(String(e).slice(0, 300)));
     p.on("response", (r) => {
       if (!r.url().includes("/eid-convert/")) return;
@@ -114,6 +120,7 @@ window.ready = true;
         check(false, `${name}: pades.prepare ${e.code}: ${e.message}`);
       }
     }
+    check(loLog.length === 0, `verbose-гүй: хувиргагчийн консол лог 0${loLog.length ? ` (${loLog.length}): ${loLog.slice(0, 3).join(" | ")}` : ""}`);
     const first = bytes;
     check(first > 240e6, `эхний удаа татсан ${(first / 1e6).toFixed(1)} MB`);
 
@@ -129,6 +136,10 @@ window.ready = true;
       const again = await p.evaluate(() => window.run("/fixtures/convert/sample.docx", "a.docx"));
       check(again.ok && !again.log.some((l) => l.startsWith("download")), `цуцалсны дараа: download үе шатгүй (кэш), ${again.ms} ms`);
       check(big.length === 0, `цуцалсны дараа soffice.wasm/.data сүлжээнээс дахин аваагүй${big.length ? ": " + big.join(" ") : ""}`);
+      // verbose: true — worker дахин асаж лог гарна (оношилгоо). Шинэ worker тул Linux WebKit-д мөн алгасна.
+      loLog.length = 0;
+      const vb = await p.evaluate(() => window.run("/fixtures/convert/sample.docx", "v.docx", undefined, true));
+      check(vb.ok && loLog.length > 0, `verbose: true — хувиргагчийн лог ${loLog.length} мөр`);
     }
     const st = await p.evaluate(() => window.c.converterStatus({ assetsBase: "/eid-convert/" }));
     check(st.cached && st.downloadBytes === 0, `converterStatus ${JSON.stringify(st)}`);

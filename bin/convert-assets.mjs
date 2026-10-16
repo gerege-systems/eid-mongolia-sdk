@@ -7,7 +7,13 @@
 //   <хавтас>/<хувилбар>/eid-convert.worker.js, browser.worker.global.js
 //   <хавтас>/<хувилбар>/LICENSE-MPL-2.0.txt, NOTICE.txt
 //
+// browser.worker.global.js-ийг (зөвхөн sha256 нь QUIET_PATCH-тай таарвал) чимээгүй болгоно: upstream LibreOffice-ийн
+// stdout/stderr-ийг (print/printErr) үргэлж console.log/console.error руу илгээдэг — хувиргалт бүрд ~28 улаан мөр
+// («warn:vcl…», «[LOK C++] …»). Patch-ийн дараа зөвхөн `wordToPdf({ verbose: true })` үед (worker `?verbose=1`).
+// Hash таарахгүй бол patch-гүй хуулж анхааруулна (build унахгүй) — хувиргалт ажиллана, лог л гарна.
+//
 // `wordToPdf({ assetsBase: "<URL>/" })` нь <хавтас>-ын URL-ийг авна. Хуучин хувилбарын дэд хавтсыг устгана.
+import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
 import { createReadStream, createWriteStream, existsSync, mkdirSync, readdirSync, rmSync, statSync, copyFileSync, writeFileSync, readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
@@ -58,7 +64,44 @@ async function gzipSize(path) {
   return n;
 }
 
+const sha256 = (buf) => createHash("sha256").update(buf).digest("hex");
+
+/** Мэдэгдэж буй upstream файл → яг нэг удаа таарах ёстой солилтууд. */
+const QUIET_PATCH = {
+  file: "browser.worker.global.js",
+  // @matbee/libreoffice-converter@2.7.2 dist/browser.worker.global.js
+  sha256: "9401aff2213772d7114fe417e3f34eb359905ae3a4e94a735644d926d593e276",
+  replace: [
+    ["print:console.log,printErr:console.error}", "print:self.EID_CONVERT_VERBOSE?console.log:()=>{},printErr:self.EID_CONVERT_VERBOSE?console.error:()=>{}}"],
+    // Энд (runtime асасны дараа) ENV-д бичих нь LibreOffice-д хүрдэггүй — үйлчлэх утга нь soffice.js-ийн preRun "+WARN"
+    // (2026-10-16 Chromium-д хэмжсэн: "-WARN-INFO"-тэй ч «warn:» мөрүүд хэвээр). Консол руу гарахыг printErr зогсооно;
+    // "+ALL"-ийг зөвхөн upstream дахин уншдаг болбол бүх лог асахгүйн тулд солино.
+    ['a.ENV.SAL_LOG="+ALL"', 'a.ENV.SAL_LOG="-WARN-INFO"'],
+    ['console.log("[Worker] Set SAL_LOG to +ALL")', 'console.log("[Worker] Set SAL_LOG to "+a.ENV.SAL_LOG)'],
+  ],
+};
+
+/** Patch хийсэн агуулга эсвэл null (hash / солилт таарахгүй — шалтгааныг хэвлэнэ). */
+function quiet(buf) {
+  const got = sha256(buf);
+  if (got !== QUIET_PATCH.sha256) {
+    console.warn(`анхааруулга: ${PKG}/dist/${QUIET_PATCH.file} sha256 ${got} — мэдэгдэж буй ${QUIET_PATCH.sha256} биш; лог чимээгүй болгох patch-гүй хуулав (хувиргалт ажиллана, консолд LibreOffice-ийн лог гарна)`);
+    return null;
+  }
+  let s = buf.toString("utf8");
+  for (const [from, to] of QUIET_PATCH.replace) {
+    if (s.split(from).length !== 2) {
+      console.warn(`анхааруулга: ${QUIET_PATCH.file}-д «${from}» яг нэг удаа олдсонгүй — patch-гүй хуулав`);
+      return null;
+    }
+    s = s.replace(from, () => to);
+  }
+  return Buffer.from(s, "utf8");
+}
+
 const files = {};
+let patched = false;
+const rev = createHash("sha256");
 for (const [name, rel] of Object.entries(FILES)) {
   const from = rel === null ? new URL(name, import.meta.url).pathname : join(src, rel);
   if (!existsSync(from)) {
@@ -66,7 +109,16 @@ for (const [name, rel] of Object.entries(FILES)) {
     process.exit(1);
   }
   const to = join(out, dir, name);
-  copyFileSync(from, to);
+  if (name === QUIET_PATCH.file) {
+    const buf = readFileSync(from);
+    const q = quiet(buf);
+    patched = q !== null;
+    writeFileSync(to, q ?? buf);
+  } else {
+    copyFileSync(from, to);
+  }
+  // Worker-ийн скриптүүд `<хувилбар>/` дор immutable кэштэй — агуулга солигдвол (patch, SDK шинэчлэл) rev-ээр URL солино.
+  if (name.endsWith(".js")) rev.update(name).update("\0").update(readFileSync(to));
   files[name] = { bytes: statSync(to).size, gzip: await gzipSize(to) };
 }
 // MPL-2.0 §3.2: эх кодын байршил ба лиценз дагалдана.
@@ -74,6 +126,6 @@ writeFileSync(join(out, dir, "NOTICE.txt"),
   `${PKG}@${version} (${license}) — LibreOffice WebAssembly build.\n` +
   `Source: https://github.com/matbeedotcom/libreoffice-document-converter (tag v${version}); LibreOffice: https://www.libreoffice.org/about-us/source-code/\n` +
   `License text: https://www.mozilla.org/MPL/2.0/\n`);
-writeFileSync(join(out, "manifest.json"), JSON.stringify({ format: 1, converter: PKG, version, dir, files }, null, 2) + "\n");
+writeFileSync(join(out, "manifest.json"), JSON.stringify({ format: 1, converter: PKG, version, dir, rev: rev.digest("hex").slice(0, 16), patched, files }, null, 2) + "\n");
 const sum = (k) => Object.values(files).reduce((s, f) => s + f[k], 0);
-console.log(`${PKG}@${version} → ${join(out, dir)} (${(sum("bytes") / 1e6).toFixed(1)} MB, gzip ${(sum("gzip") / 1e6).toFixed(1)} MB)`);
+console.log(`${PKG}@${version} → ${join(out, dir)} (${(sum("bytes") / 1e6).toFixed(1)} MB, gzip ${(sum("gzip") / 1e6).toFixed(1)} MB)${patched ? ", лог чимээгүй (patch)" : ""}`);

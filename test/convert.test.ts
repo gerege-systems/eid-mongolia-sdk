@@ -2,7 +2,12 @@
 // хуудас/фонт/хэмжээний анхааруулга. Жинхэнэ LibreOffice-ийг scripts/convert-e2e.mjs (Chromium) шалгана.
 import { test, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, copyFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import vm from "node:vm";
 
 import * as convert from "../dist/convert.js";
 
@@ -287,4 +292,107 @@ test("fontWarnings / docxFonts / embeddedFonts", () => {
     ["FONT_SUBSTITUTED", ["Arial Mon"]],
   ]);
   assert.deepEqual(convert.fontWarnings([], ["NotoSerif"]), []);
+});
+
+test("verbose: worker URL-д rev/verbose, init-д verbose; утга солигдвол worker дахин асна", async () => {
+  const orig = g.fetch as typeof fakeFetch;
+  g.fetch = (u: string | URL, i?: { signal?: AbortSignal }) =>
+    String(u) === BASE + "manifest.json" ? Promise.resolve(new Response(JSON.stringify({ ...manifest(), rev: "0123456789abcdef" }))) : orig(u, i);
+  await convert.wordToPdf(DOCX, { assetsBase: BASE });
+  assert.equal(workers[0]!.url, BASE + "2.7.2/eid-convert.worker.js?cache=eid-convert-2.7.2&v=0123456789abcdef");
+  assert.equal(workers[0]!.init!.verbose, false);
+  await convert.wordToPdf(DOCX, { assetsBase: BASE, verbose: true });
+  assert.equal(workers.length, 2);
+  assert.equal(workers[0]!.terminated, true);
+  assert.equal(workers[1]!.url, BASE + "2.7.2/eid-convert.worker.js?cache=eid-convert-2.7.2&v=0123456789abcdef&verbose=1");
+  assert.equal(workers[1]!.init!.verbose, true);
+  await convert.wordToPdf(DOCX, { assetsBase: BASE, verbose: true });
+  assert.equal(workers.length, 2);
+  g.fetch = () => Promise.resolve(new Response(JSON.stringify({ ...manifest(), rev: "../x" })));
+  convert.disposeConverter();
+  await assert.rejects(convert.wordToPdf(DOCX, { assetsBase: BASE }), code("ASSETS_UNAVAILABLE"));
+});
+
+// ── eid-mongolia-convert-assets: лог чимээгүй болгох patch ─────────────────────────────────────
+
+const BIN = new URL("../bin/convert-assets.mjs", import.meta.url).pathname;
+const UPSTREAM = new URL("../node_modules/@matbee/libreoffice-converter/", import.meta.url).pathname;
+const sha = (b: Uint8Array) => createHash("sha256").update(b).digest("hex");
+
+function runBin(cwd: string, out: string) {
+  const r = spawnSync(process.execPath, [BIN, out], { cwd, encoding: "utf8" });
+  const m = JSON.parse(readFileSync(join(out, "manifest.json"), "utf8"));
+  return { ...r, m, worker: readFileSync(join(out, "2.7.2/browser.worker.global.js")) };
+}
+
+test("convert-assets: мэдэгдэж буй upstream → patch («+ALL» үгүй, print/printErr verbose-оор), manifest хэмжээ/rev таарна", () => {
+  const out = mkdtempSync(join(tmpdir(), "eid-assets-"));
+  try {
+    const r = runBin(new URL("..", import.meta.url).pathname, out);
+    assert.equal(r.status, 0, r.stderr);
+    const w = r.worker.toString("utf8");
+    assert.ok(!w.includes('"+ALL"'));
+    assert.ok(w.includes("print:self.EID_CONVERT_VERBOSE?console.log:()=>{},printErr:self.EID_CONVERT_VERBOSE?console.error:()=>{}}"));
+    assert.ok(!w.includes("print:console.log,printErr:console.error"));
+    assert.ok(w.includes('a.ENV.SAL_LOG="-WARN-INFO"'));
+    assert.equal(r.m.patched, true);
+    assert.match(r.m.rev, /^[0-9a-f]{16}$/);
+    // manifest-ийн хэмжээ = үйлчлэх (patch-тай) файлынх — wordToPdf-ийн ASSETS_UNAVAILABLE шалгалттай нийцнэ.
+    assert.equal(r.m.files["browser.worker.global.js"].bytes, r.worker.length);
+    assert.notEqual(r.worker.length, readFileSync(join(UPSTREAM, "dist/browser.worker.global.js")).length);
+    assert.match(r.stdout, /лог чимээгүй/);
+  } finally {
+    rmSync(out, { recursive: true, force: true });
+  }
+});
+
+test("convert-assets: upstream hash таарахгүй → patch-гүй хуулж анхааруулна, build унахгүй; rev өөр", () => {
+  const proj = mkdtempSync(join(tmpdir(), "eid-assets-proj-"));
+  try {
+    const pkg = join(proj, "node_modules/@matbee/libreoffice-converter");
+    mkdirSync(join(pkg, "dist"), { recursive: true });
+    mkdirSync(join(pkg, "wasm"), { recursive: true });
+    writeFileSync(join(proj, "package.json"), "{}");
+    writeFileSync(join(pkg, "package.json"), JSON.stringify({ name: "@matbee/libreoffice-converter", version: "2.7.2", license: "MPL-2.0" }));
+    for (const f of ["soffice.js", "soffice.wasm", "soffice.data", "soffice.worker.js"]) writeFileSync(join(pkg, "wasm", f), "x");
+    const changed = Buffer.from('a.ENV.SAL_LOG="+ALL";print:console.log,printErr:console.error}//өөр build');
+    writeFileSync(join(pkg, "dist/browser.worker.global.js"), changed);
+    const out = join(proj, "out");
+    const r = runBin(proj, out);
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stderr, /анхааруулга: .*sha256/);
+    assert.equal(sha(r.worker), sha(changed));
+    assert.equal(r.m.patched, false);
+    assert.equal(r.m.files["browser.worker.global.js"].bytes, changed.length);
+
+    // Жинхэнэ 2.7.2 файл → hash таарч patch хийгдэнэ; worker-ийн агуулга өөр тул rev өөр (immutable кэш шинэчлэгдэнэ).
+    copyFileSync(join(UPSTREAM, "dist/browser.worker.global.js"), join(pkg, "dist/browser.worker.global.js"));
+    const r2 = runBin(proj, out);
+    assert.equal(r2.m.patched, true);
+    assert.notEqual(r2.m.rev, r.m.rev);
+  } finally {
+    rmSync(proj, { recursive: true, force: true });
+  }
+});
+
+test("eid-convert.worker.js: verbose-гүй бол console.log/info/debug чимээгүй (error үлдэнэ), ?verbose=1 бол хэвээр; ?v= дамжина", () => {
+  const src = readFileSync(new URL("../bin/eid-convert.worker.js", import.meta.url), "utf8");
+  const run = (query: string) => {
+    const logged: string[] = [];
+    const con = { log: () => logged.push("log"), info: () => logged.push("info"), debug: () => logged.push("debug"), error: () => logged.push("error"), warn: () => logged.push("warn") };
+    const imported: string[] = [];
+    const self: Record<string, unknown> = { location: { href: "https://rp.example/eid-convert/2.7.2/eid-convert.worker.js" + query }, console: con, fetch: () => {} };
+    vm.runInNewContext(src, { self, URL, importScripts: (u: string) => imported.push(u) });
+    const c = self.console as typeof con;
+    c.log(); c.info(); c.debug(); c.error(); c.warn();
+    return { logged, imported, verbose: self.EID_CONVERT_VERBOSE };
+  };
+  const quiet = run("?v=abcdef0123456789");
+  assert.deepEqual(quiet.logged, ["error", "warn"]);
+  assert.equal(quiet.verbose, false);
+  assert.deepEqual(quiet.imported, ["browser.worker.global.js?v=abcdef0123456789"]);
+  const loud = run("?verbose=1");
+  assert.deepEqual(loud.logged, ["log", "info", "debug", "error", "warn"]);
+  assert.equal(loud.verbose, true);
+  assert.deepEqual(loud.imported, ["browser.worker.global.js"]);
 });

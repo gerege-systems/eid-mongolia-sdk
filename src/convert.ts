@@ -82,6 +82,11 @@ export interface WordToPdfOptions {
   signal?: AbortSignal;
   /** Оролт `Uint8Array` бол өргөтгөл таних нэр (".docx" / ".doc"). `File` бол түүний нэр. */
   fileName?: string;
+  /**
+   * Хувиргагчийн (LibreOffice) оношилгооны логийг хөтчийн консолд гаргах — анхдагч false (чимээгүй). Worker асах үед
+   * үйлчилнэ: утга солигдвол worker дахин асна. Чимээгүй горим `eid-mongolia-convert-assets` ≥ 0.18.2-оор хуулсан asset шаардана.
+   */
+  verbose?: boolean;
 }
 
 export interface WordToPdfResult {
@@ -112,6 +117,8 @@ interface Manifest {
   version: string;
   /** asset-уудын дэд хавтас (`<version>/`) — урт кэштэй. */
   dir: string;
+  /** Worker-ийн скриптүүдийн агуулгын hash (≥ 0.18.2) — immutable кэштэй URL-д `?v=`. */
+  rev?: string;
   files: Record<AssetName, { bytes: number; gzip?: number }>;
 }
 
@@ -120,6 +127,9 @@ function parseManifest(v: unknown): Manifest {
   if (!m || m.format !== 1 || m.converter !== CONVERTER_PACKAGE || typeof m.version !== "string" || typeof m.dir !== "string" ||
     !/^(?!\.{1,2}\/$)[A-Za-z0-9._-]+\/$/.test(m.dir) || !m.files) {
     throw new ConvertError("ASSETS_UNAVAILABLE", "manifest.json буруу — `eid-mongolia-convert-assets`-ээр дахин үүсгэ");
+  }
+  if (m.rev !== undefined && (typeof m.rev !== "string" || !/^[0-9a-f]{8,64}$/.test(m.rev))) {
+    throw new ConvertError("ASSETS_UNAVAILABLE", "manifest.json-ийн rev буруу");
   }
   for (const a of ASSETS) {
     const f = m.files[a];
@@ -272,6 +282,7 @@ type ConverterModule = {
 
 interface Live {
   key: string;
+  verbose: boolean;
   conv: Converter;
   /** Одоогийн дуудлагын progress (init/convert-ийн worker мэдэгдэл). */
   sink: ((p: { percent: number }) => void) | null;
@@ -303,7 +314,8 @@ async function start(opts: WordToPdfOptions, signal?: AbortSignal): Promise<Live
   const root = base(opts.assetsBase);
   const m = await loadManifest(root, signal);
   const key = root + m.dir;
-  if (live && live.key === key) return live;
+  const verbose = opts.verbose === true;
+  if (live && live.key === key && live.verbose === verbose) return live;
   if (live) kill(live);
   let mod: ConverterModule;
   try {
@@ -312,13 +324,18 @@ async function start(opts: WordToPdfOptions, signal?: AbortSignal): Promise<Live
     throw new ConvertError("ASSETS_UNAVAILABLE", `${CONVERTER_PACKAGE} суугаагүй (optional peerDependency)`, { cause: e });
   }
   const cache = await prefetch(root, m, opts.onProgress, signal);
-  const l: Live = { key, conv: null as unknown as Converter, sink: null };
+  const l: Live = { key, verbose, conv: null as unknown as Converter, sink: null };
+  const q = new URLSearchParams();
+  if (cache) q.set("cache", cache);
+  if (m.rev) q.set("v", m.rev);
+  if (verbose) q.set("verbose", "1");
   l.conv = new mod.WorkerBrowserConverter({
     sofficeJs: key + "soffice.js",
     sofficeWasm: key + "soffice.wasm",
     sofficeData: key + "soffice.data",
     sofficeWorkerJs: key + "soffice.worker.js",
-    browserWorkerJs: key + "eid-convert.worker.js" + (cache ? "?cache=" + encodeURIComponent(cache) : ""),
+    browserWorkerJs: key + "eid-convert.worker.js" + (q.toString() ? "?" + q.toString() : ""),
+    verbose,
     onProgress: (p: { percent: number }) => l.sink?.(p),
   });
   live = l;
