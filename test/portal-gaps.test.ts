@@ -94,7 +94,8 @@ function leaf(name: string, ext: string, key = "rsa:2048", subj = "/C=MN/SN=Ба
   };
 }
 const AUTH = leaf("auth", "keyUsage=digitalSignature,keyEncipherment\nextendedKeyUsage=clientAuth,emailProtection");
-const SIGN = leaf("sign", "keyUsage=digitalSignature,nonRepudiation\nextendedKeyUsage=emailProtection");
+// qcStatements QcCompliance — 0.19.0-аас түвшин гэрчилгээнээс (SIGN-д qc-гүй бол ADVANCED).
+const SIGN = leaf("sign", "keyUsage=digitalSignature,nonRepudiation\nextendedKeyUsage=emailProtection\n1.3.6.1.5.5.7.1.3=DER:30:0a:30:08:06:06:04:00:8e:46:01:01");
 
 const VERIFIER = "dGVzdC12ZXJpZmllci0zMi1ieXRlcy14eHh4eHh4eHg";
 const INTERACTIONS = Buffer.from(JSON.stringify([{ type: "displayTextAndPIN", displayText60: "x" }])).toString("base64");
@@ -131,7 +132,8 @@ function signedDigest(key: string, cert: X509Certificate) {
   return { result, digest: digest.toString("base64") };
 }
 
-const trusted = (extra: Record<string, unknown> = {}) => new ResponseValidator({ trustAnchorsPem: [ROOT_PEM], ...extra });
+// Тестийн root нь иргэний 04 биш — анхдагч issuer allowlist-ийг (0.19.0) энд унтраана.
+const trusted = (extra: Record<string, unknown> = {}) => new ResponseValidator({ trustAnchorsPem: [ROOT_PEM], allowAnyIssuer: true, ...extra });
 
 // ── 1. person блок, raw, tokenCertificate ──
 
@@ -342,21 +344,42 @@ test("token auth — tokenAuthDigest вектор, challenge, verify (identity =
     result: { endResult: "OK" }, identity: { etsi: "PNOMN-55667788", givenName: "Бат", surname: "Болд" },
     cert: { serialHex: "4f1c", notAfter: "2027-10-12T08:40:00Z" }, organization: { etsi: "NTRMN-1", name: "X" },
   };
-  const v = client({ body: ok });
-  const res = await v.eid.token.authVerify("c1", TOK_A.cert.raw, new Uint8Array(64));
+  // 0.19.0: SDK CA руу илгээхээс өмнө гарын үсэг (r||s, tokenAuthDigest), rpUUID, гэрчилгээг (гинж/зориулалт) өөрөө шалгана.
+  const RP = "2d87bd3a-1303-41bf-81bd-37d6b92fb7bc";
+  const chal = { challengeId: "c1", challenge: "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=", rpUUID: RP, expiresAt: "" };
+  const preimage = Buffer.concat([Buffer.from("eID-TOKEN-AUTH" + RP), Buffer.from(chal.challenge, "base64")]);
+  const sig = new Uint8Array(cryptoSign("sha256", preimage, { key: TOK_A.key, dsaEncoding: "ieee-p1363" }));
+  const tclient = (reply: Reply, trust: Record<string, unknown> = { trustAnchorsPem: [ROOT_PEM], allowAnyIssuer: true }) =>
+    client(reply, { credentials: { ...CREDS, rpUUID: RP }, trust });
+  const v = tclient({ body: ok });
+  const res = await v.eid.token.authVerify(chal, TOK_A.cert.raw, sig);
   assert.equal(res.identity.surname, "Болд");
   assert.equal(res.organization?.etsi, "NTRMN-1");
   assert.deepEqual(Object.keys(JSON.parse(v.calls[0]!.body!)).sort(), ["certificate", "challengeId", "signature"]);
   for (const body of [{ ...ok, identity: { ...ok.identity, etsi: "PNOMN-99999999" } }, { ...ok, result: { endResult: "DENIED" } }]) {
-    const bad = client({ body });
+    const bad = tclient({ body });
     await assert.rejects(
-      () => bad.eid.token.authVerify("c1", TOK_A.cert.raw, new Uint8Array(64)),
+      () => bad.eid.token.authVerify(chal, TOK_A.cert.raw, sig),
       (e: unknown) => e instanceof ValidationError && /token auth/.test(e.message) && !/PNOMN-/.test(e.message),
     );
   }
-  await assert.rejects(() => v.eid.token.authVerify("c1", new Uint8Array([1, 2]), new Uint8Array(64)));
-  const expired = client({ status: 410, body: { error: "x", code: "CHALLENGE_EXPIRED" } });
-  await assert.rejects(() => expired.eid.token.authVerify("c1", TOK_A.cert.raw, new Uint8Array(64)), (e: unknown) => e instanceof ApiError && e.code === "CHALLENGE_EXPIRED");
+  // CA OK гэсэн ч SDK-ийн шалгалт унавал CA руу ЯВАХГҮЙ: буруу гарын үсэг, өөр challenge, өөр RP, гинжгүй/өөр issuer, KU.
+  const localFail = async (name: string, fn: (c: ReturnType<typeof tclient>) => Promise<unknown>, re: RegExp, trust?: Record<string, unknown>) => {
+    const c = tclient({ body: ok }, trust);
+    await assert.rejects(() => fn(c), (e: unknown) => e instanceof ValidationError && re.test(e.message), name);
+    assert.equal(c.calls.length, 0, name);
+  };
+  await localFail("zero sig", (c) => c.eid.token.authVerify(chal, TOK_A.cert.raw, new Uint8Array(64)), /гарын үсэг/);
+  await localFail("other challenge", (c) => c.eid.token.authVerify({ ...chal, challenge: "AQECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=" }, TOK_A.cert.raw, sig), /гарын үсэг/);
+  await localFail("other rp", (c) => c.eid.token.authVerify({ ...chal, rpUUID: "00000000-0000-4000-8000-000000000000" }, TOK_A.cert.raw, sig), /rpUUID/);
+  await localFail("default issuer", (c) => c.eid.token.authVerify(chal, TOK_A.cert.raw, sig), /allowedIssuerSkis/, { trustAnchorsPem: [ROOT_PEM] });
+  await localFail("no anchor", (c) => c.eid.token.authVerify(chal, TOK_A.cert.raw, sig), /Trust anchor/, {});
+  const tsSig = new Uint8Array(cryptoSign("sha256", preimage, { key: TOK_S.key, dsaEncoding: "ieee-p1363" }));
+  await localFail("sign cert", (c) => c.eid.token.authVerify(chal, TOK_S.cert.raw, tsSig), /KeyUsage|ExtKeyUsage|clientAuth/);
+  await assert.rejects(() => v.eid.token.authVerify(chal, new Uint8Array([1, 2]), sig));
+  await assert.rejects(() => v.eid.token.authVerify("c1" as unknown as typeof chal, TOK_A.cert.raw, sig), /challengeId мөр биш/);
+  const expired = tclient({ status: 410, body: { error: "x", code: "CHALLENGE_EXPIRED" } });
+  await assert.rejects(() => expired.eid.token.authVerify(chal, TOK_A.cert.raw, sig), (e: unknown) => e instanceof ApiError && e.code === "CHALLENGE_EXPIRED");
 });
 
 // ── 5. validator ──
@@ -365,24 +388,31 @@ test("validator — allowedIssuerSkis", () => {
   const { result, acsp } = signedAuth(AUTH.key, AUTH.cert);
   const rootSki = execFileSync("openssl", ["x509", "-in", f("root.pem"), "-noout", "-ext", "subjectKeyIdentifier"]).toString().split("\n")[1]!.trim();
   trusted({ allowedIssuerSkis: [rootSki] }).validateAuth(result, acsp); // ":"-тэй, том үсэг
+  // Анхдагч (allowAnyIssuer-гүй, жагсаалтгүй) = [CITIZEN_ISSUING_CA_SKI] → тестийн root-ийн leaf татгалзагдана.
+  assert.throws(() => new ResponseValidator({ trustAnchorsPem: [ROOT_PEM] }).validateAuth(result, acsp), (e: unknown) => e instanceof ValidationError && /allowedIssuerSkis/.test(e.message));
+  // allowUntrusted (anchor-гүй) — анхдагч allowlist үйлчлэхгүй (гинж алга).
+  new ResponseValidator({ allowUntrusted: true }).validateAuth(result, acsp);
   assert.throws(() => trusted({ allowedIssuerSkis: [CITIZEN_ISSUING_CA_SKI] }).validateAuth(result, acsp), (e: unknown) => e instanceof ValidationError && /allowedIssuerSkis/.test(e.message));
   assert.throws(() => trusted({ allowedIssuerSkis: ["zz"] }));
   // CITIZEN_ISSUING_CA_SKI — бодит 04 (testdata-гүй репод: Go SDK testdata-тай тулгасан утга)
   assert.equal(CITIZEN_ISSUING_CA_SKI, "b8a37f2c64ad677912db7d9e34f246358a2fb909");
 });
 
-test("validator — checkKeyUsage: auth → clientAuth, sign → nonRepudiation", () => {
-  const strict = trusted({ checkKeyUsage: true });
+test("validator — checkKeyUsage (0.19.0-аас анхдагч true): auth → clientAuth, sign → nonRepudiation", () => {
+  const strict = trusted();
   const a = signedAuth(AUTH.key, AUTH.cert);
   strict.validateAuth(a.result, a.acsp);
   const wrong = signedAuth(SIGN.key, SIGN.cert);
   assert.throws(() => strict.validateAuth(wrong.result, wrong.acsp), (e: unknown) => e instanceof ValidationError && /clientAuth/.test(e.message));
   // checkKeyUsage=false ч EKU-г гинжийн шалгалт (auth → clientAuth) үргэлж шалгана (0.11.0-аас).
-  assert.throws(() => trusted().validateAuth(wrong.result, wrong.acsp), (e: unknown) => e instanceof ValidationError && /ExtKeyUsage/.test(e.message));
+  assert.throws(() => trusted({ checkKeyUsage: false }).validateAuth(wrong.result, wrong.acsp), (e: unknown) => e instanceof ValidationError && /ExtKeyUsage/.test(e.message));
   const s = signedDigest(SIGN.key, SIGN.cert);
   strict.validateSign(s.result, s.digest);
+  // PIN1 (AUTH) түлхүүрийн гарын үсэг validateSign-д — анхдагчаар унана.
   const sAuth = signedDigest(AUTH.key, AUTH.cert);
   assert.throws(() => strict.validateSign(sAuth.result, sAuth.digest), (e: unknown) => e instanceof ValidationError && /nonRepudiation/.test(e.message));
+  assert.throws(() => new EidClient({ credentials: CREDS, trust: { trustAnchorsPem: [ROOT_PEM], allowAnyIssuer: true, requiredLevel: "ADVANCED" } })
+    .validator.validateSign(sAuth.result, sAuth.digest), (e: unknown) => e instanceof ValidationError && /nonRepudiation/.test(e.message));
 });
 
 test("validator — schemeName", () => {

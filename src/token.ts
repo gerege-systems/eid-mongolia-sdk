@@ -14,6 +14,7 @@ import type { Http } from "./http.js";
 import type { TokenOrganization } from "./person.js";
 import { parseSubject, tlv } from "./subject.js";
 import type { RpCredentials } from "./types.js";
+import { verifyPrehashedSignature, type ResponseValidator } from "./validator.js";
 
 export interface TokenCertInput {
   /** Иргэн (PNOMN-…) — батлах push түүний утсанд очно. */
@@ -147,6 +148,8 @@ export class TokenApi {
   constructor(
     private readonly http: Http,
     private readonly creds: RpCredentials,
+    /** authVerify-ийн гэрчилгээний шалгалт (EidClient-ийн `trust`). */
+    private readonly validator: ResponseValidator,
   ) {}
 
   /**
@@ -244,20 +247,43 @@ export class TokenApi {
   }
 
   /**
-   * POST /token/auth/verify — токены AUTH гэрчилгээ (DER) + challenge дээрх түүхий r||s. CA гинж, төлөв, цуцлалт, гарын
-   * үсгийг шалгана; SDK нэмж endResult === OK ба identity.etsi === гэрчилгээний SERIALNUMBER-ийг тулгана (эс бөгөөс
-   * ValidationError). Challenge нэг удаагийн — алдааны дараа шинээр авна.
+   * POST /token/auth/verify — токены AUTH гэрчилгээ (DER) + challenge дээрх түүхий r||s (64 байт).
+   *
+   * **0.19.0-аас SDK CA-ийн OK-д дангаар итгэхгүй** (бусад auth-тай ижил): CA руу илгээхээс өмнө `challenge.rpUUID` ===
+   * энэ RP, гарын үсэг {@link tokenAuthDigest}`(challenge.rpUUID, challenge.challenge)` дээр гэрчилгээний түлхүүрээр
+   * (EC P-256) таарах, гэрчилгээ `trust`-аар (хугацаа, зориулалт auth, гинж, issuer allowlist — {@link ResponseValidator})
+   * хүчинтэйг шалгана; дараа нь CA-ийн endResult === OK ба identity.etsi === гэрчилгээний SERIALNUMBER. Эс бөгөөс
+   * ValidationError. Цуцлалтыг (OCSP) CA шалгана; RP нэмж `validator.checkRevocation(cert)` дуудаж болно.
+   * `challenge` — {@link authChallenge}-ийн хариу (RP хадгалсан, эсвэл клиентээс буцаж ирсэн — CA challengeId-ээр
+   * тулгана). Challenge нэг удаагийн — алдааны дараа шинээр авна.
    */
-  async authVerify(challengeId: string, certDer: Uint8Array, signature: Uint8Array): Promise<TokenAuthResult> {
+  async authVerify(challenge: TokenAuthChallenge, certDer: Uint8Array, signature: Uint8Array): Promise<TokenAuthResult> {
+    if (typeof challenge !== "object" || !challenge?.challengeId || !signature?.length) {
+      throw new Error("token auth: challenge ({challengeId, challenge, rpUUID}) ба signature шаардлагатай (0.19.0-аас challengeId мөр биш)");
+    }
+    let leaf: X509Certificate;
     let serial: string | undefined;
     try {
-      serial = parseSubject(new X509Certificate(certDer)).serialNumber;
+      leaf = new X509Certificate(certDer);
+      serial = parseSubject(leaf).serialNumber;
     } catch {
       throw new Error("token auth: гэрчилгээ задарсангүй");
     }
-    if (!challengeId || !signature?.length) throw new Error("token auth: challengeId ба signature шаардлагатай");
+    if (challenge.rpUUID.toLowerCase() !== this.creds.rpUUID.toLowerCase()) {
+      throw new ValidationError("token auth: challenge өөр RP-д холбогдсон (rpUUID)");
+    }
+    let digest: Buffer;
+    try {
+      digest = tokenAuthDigest(challenge.rpUUID, challenge.challenge);
+    } catch (e) {
+      throw new ValidationError(`token auth: ${(e as Error).message}`);
+    }
+    if (signature.length !== 64 || !verifyPrehashedSignature(digest, rawToDerEcdsa(signature), leaf.publicKey, "ecdsa-with-SHA256", "SHA-256")) {
+      throw new ValidationError("token auth: гарын үсэг challenge-тэй таарсангүй (EC P-256 r||s)");
+    }
+    this.validator.verifyTokenAuthCertificate(leaf);
     const raw = await this.http.post(routePath(RP_ROUTES.tokenAuthVerify), {
-      challengeId,
+      challengeId: challenge.challengeId,
       certificate: Buffer.from(certDer).toString("base64"),
       signature: Buffer.from(signature).toString("base64"),
     });
@@ -275,6 +301,19 @@ export class TokenApi {
       raw,
     };
   }
+}
+
+/** Түүхий r||s (64 байт) → ECDSA-Sig-Value DER (base64). */
+function rawToDerEcdsa(sig: Uint8Array): string {
+  const int = (b: Uint8Array): Buffer => {
+    let i = 0;
+    while (i < b.length - 1 && b[i] === 0) i++;
+    const v = Buffer.from(b.subarray(i));
+    const body = v[0]! & 0x80 ? Buffer.concat([Buffer.from([0]), v]) : v;
+    return Buffer.concat([Buffer.from([0x02, body.length]), body]);
+  };
+  const seq = Buffer.concat([int(sig.subarray(0, 32)), int(sig.subarray(32))]);
+  return Buffer.concat([Buffer.from([0x30, seq.length]), seq]).toString("base64");
 }
 
 /** PKCS#10 CSR-ийн SubjectPublicKeyInfo DER (бүтэн TLV). */

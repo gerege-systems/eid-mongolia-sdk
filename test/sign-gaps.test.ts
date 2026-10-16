@@ -54,6 +54,7 @@ function mkCert(keyArgs: string[], ku: string) {
     execFileSync("openssl", [
       "req", "-x509", ...keyArgs, "-nodes", "-days", "2", "-utf8", "-keyout", join(dir, "k.pem"), "-out", join(dir, "c.pem"),
       "-subj", "/C=MN/SN=Бат/GN=Болд/serialNumber=PNOMN-12345678/CN=БОЛД Бат", "-addext", `keyUsage=${ku}`,
+      "-addext", "1.3.6.1.5.5.7.1.3=DER:30:0a:30:08:06:06:04:00:8e:46:01:01", // qcStatements QcCompliance → QUALIFIED
     ], { stdio: "ignore" });
     return { key: readFileSync(join(dir, "k.pem"), "utf8"), cert: new X509Certificate(readFileSync(join(dir, "c.pem"))) };
   } finally {

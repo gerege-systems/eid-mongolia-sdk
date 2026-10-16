@@ -80,8 +80,23 @@ export interface EidLoginStore {
   delete(sessionId: string): Promise<boolean> | boolean;
 }
 
-/** Нэг процессын санах ойн сан (TTL-тэй). Олон instance / serverless-д тохирохгүй. */
-export function memoryLoginStore(): EidLoginStore {
+/** {@link memoryLoginStore}-ийн анхдагч дээд хэмжээ (идэвхтэй нэвтрэлт). */
+export const MEMORY_LOGIN_STORE_MAX = 10_000;
+
+/** Санах ойн сан дүүрсэн (хугацаа нь дуусаагүй `max` нэвтрэлт) — start 503 `busy`. */
+export class LoginStoreFullError extends Error {
+  constructor() {
+    super("eid-login: memory store дүүрсэн");
+    this.name = "LoginStoreFullError";
+  }
+}
+
+/**
+ * Нэг процессын санах ойн сан (TTL-тэй). Олон instance / serverless-д тохирохгүй. Хэмжээ `max`-аар (анхдагч
+ * {@link MEMORY_LOGIN_STORE_MAX}) хязгаарлагдана: дүүрвэл хугацаа дууссаныг цэвэрлээд, хоосроогүй бол ШИНЭ нэвтрэлтийг
+ * {@link LoginStoreFullError}-оор татгалзана — эхэлсэн нэвтрэлтүүдийг хэзээ ч устгахгүй (хуучныг шахаж гаргахгүй).
+ */
+export function memoryLoginStore(max = MEMORY_LOGIN_STORE_MAX): EidLoginStore {
   const m = new Map<string, { tx: EidLoginTx; exp: number }>();
   return {
     get(k) {
@@ -95,7 +110,10 @@ export function memoryLoginStore(): EidLoginStore {
     },
     set(k, tx, ttl) {
       const now = Date.now();
-      if (m.size > 1000) for (const [key, e] of m) if (e.exp <= now) m.delete(key);
+      if (!m.has(k) && m.size >= max) {
+        for (const [key, e] of m) if (e.exp <= now) m.delete(key);
+        if (m.size >= max) throw new LoginStoreFullError();
+      }
       m.set(k, { tx, exp: now + ttl });
     },
     delete(k) {
@@ -160,20 +178,35 @@ export interface EidLoginRateLimits {
   push?: EidLoginRateRule;
 }
 
-/** Анхдагч хязгаар — `rateLimit`-ийн объектод өгөөгүй төрөл энүүгээр үлдэнэ. `{ ...defaultRateLimit, start: … }`. */
+/**
+ * Анхдагч хязгаар — `rateLimit`-ийн объектод өгөөгүй төрөл энүүгээр үлдэнэ. `{ ...defaultRateLimit, start: … }`.
+ * push: нэг дугаарт 60 секундэд 3 (MFA fatigue); start (0.19.0-аас): нэг IP-ээс 60 секундэд 20 (ip мэдэгдэж байвал —
+ * `req.ip` / `trustProxy`).
+ */
 export const defaultRateLimit: Readonly<EidLoginRateLimits> = Object.freeze({
+  start: Object.freeze({ limit: 20, windowMs: 60_000 }),
   push: Object.freeze({ limit: 3, windowMs: 60_000 }),
 });
 
+/** Санах ойн хязгаарлагчийн дээд түлхүүрийн тоо (төрөл тус бүрд). */
+const LIMITER_MAX_KEYS = 10_000;
+
 const RATE_KINDS = ["start", "push"] as const;
 
-/** Санах ойн гулсах цонх (түлхүүр тус бүрд), 10 000 түлхүүрээс хэтэрвэл цэвэрлэнэ. */
-function windowLimiter(limit: number, windowMs: number): (key: string) => boolean {
+/**
+ * Санах ойн гулсах цонх (түлхүүр тус бүрд), дээд тал нь {@link LIMITER_MAX_KEYS} түлхүүр. Дүүрвэл цонх нь өнгөрсөн
+ * түлхүүрийг цэвэрлээд, хоосроогүй бол ШИНЭ түлхүүрийг татгалзана (fail-closed) — байгаа түлхүүрийн тоолуурыг хэзээ ч
+ * арилгахгүй тул олон түлхүүрээр дүүргэж тухайн дугаарын хязгаарыг тойрох боломжгүй (0.18.x бүгдийг цэвэрлэдэг байв).
+ */
+function windowLimiter(limit: number, windowMs: number, maxKeys = LIMITER_MAX_KEYS): (key: string) => boolean {
   const hits = new Map<string, number[]>();
   return (key) => {
     const now = Date.now();
     const h = (hits.get(key) ?? []).filter((t) => now - t < windowMs);
-    if (hits.size > 10_000) hits.clear();
+    if (!hits.has(key) && hits.size >= maxKeys) {
+      for (const [k, ts] of hits) if (!ts.some((t) => now - t < windowMs)) hits.delete(k);
+      if (hits.size >= maxKeys) return false;
+    }
     if (h.length >= limit) {
       hits.set(key, h);
       return false;
@@ -239,7 +272,8 @@ export interface EidLoginOptions {
   cookie?: { name?: string; path?: string; secure?: boolean; domain?: string };
   /**
    * Хязгаарлалт. Түлхүүр: `start:<ip>` (ip мэдэгдэж байвал), `push:<idCode>`; false → 429.
-   * Анхдагч {@link defaultRateLimit}: push-д нэг дугаарт 60 секундэд 3 (санах ойд) — MFA fatigue-ээс.
+   * Анхдагч {@link defaultRateLimit}: push-д нэг дугаарт 60 секундэд 3 (санах ойд) — MFA fatigue-ээс; start-д нэг IP-ээс
+   * 60 секундэд 20 (0.19.0-аас).
    *
    * - Объект `{ start?, push? }` — анхдагчтай НЭГТГЭГДЭНЭ: өгсөн төрөл анхдагчийг дарна, өгөөгүй нь анхдагчаараа.
    *   Утга: `{ limit, windowMs }` (санах ойн гулсах цонх), функц (Redis г.м.) эсвэл `false` (тухайн төрлийг хязгаарлахгүй).
@@ -692,8 +726,12 @@ export function createEidLogin(opts: EidLoginOptions): EidLogin {
       const ae = err as ApiError;
       onError(new Error(`eid-login: eID push-ийг татгалзав (${ae.status}${ae.code ? ` ${ae.code}` : ""}); decoy session-оор хариулав`), ctx);
       err = undefined;
-      r = await startDecoy();
-      decoy = true;
+      try {
+        r = await startDecoy();
+        decoy = true;
+      } catch (e) {
+        err = e;
+      }
     }
     // Decoy микросекундэд, бодит push eID-ийн round trip-ээр бэлэн болно — хоёуланг ижил доод хугацаанд барина.
     if (mode === "push" && pushFloorMs > 0) await sleep(began + pushFloorMs - Date.now(), req.signal);
@@ -702,6 +740,7 @@ export function createEidLogin(opts: EidLoginOptions): EidLogin {
       // Бүртгэлтэй ба бүртгэлгүй дугаар хоёулаа ижил 502 авна.
       onError(err, ctx);
       if (err instanceof ApiError && err.status === 429) return limited();
+      if (err instanceof LoginStoreFullError) return json(503, { error: "busy" }, { "Retry-After": "30" });
       return json(502, { error: "eid_unavailable" });
     }
     if (mode === "push") await emit("push_sent", r.tx.sessionId, { mode, pushKey: pushKey(idCode), decoy }, ctx);

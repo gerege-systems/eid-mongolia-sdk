@@ -4,7 +4,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { DEFAULT_BASE_URL } from "../dist/index.js";
+import { DEFAULT_BASE_URL, PDF_REGISTER_ERROR_CODES } from "../dist/index.js";
 import { PDF_SIGNATURE_REGISTER_FIELDS, RP_ROUTES, RP_ROUTES_UNDISCOVERED, SHARE_FORM_FIELDS } from "../src/contract.ts";
 
 const EID_DISCOVERY = "https://rp.eidmongolia.mn/.well-known/eid";
@@ -128,4 +128,17 @@ test("TokenCertificate: discovery-ийн tokenCertificate блок TokenCertInfo
   assert.equal(t.result, base + RP_ROUTES.tokenCertificateResult.path, "tokenCertificate.result");
   assert.equal(typeof t.enabled, "boolean", "tokenCertificate.enabled");
   assert.equal(t.scopeLockedOnRenewal, true, "tokenCertificate.scopeLockedOnRenewal");
+});
+
+test("PAdES клиент тал: pdfSigning.registerErrorCodes == SDK PDF_REGISTER_ERROR_CODES (олонлогоор)", async (t) => {
+  const d = await getJson(EID_DISCOVERY);
+  const codes = ((d.pdfSigning ?? {}) as { registerErrorCodes?: unknown }).registerErrorCodes;
+  if (codes === undefined) {
+    // CA-д талбар гарахаас өмнө — skip + WARN; гарсны дараа энэ салаа ажиллахгүй (тулгалт заавал).
+    warn("pdfSigning.registerErrorCodes discovery-д алга", ["CA-д нэмэгдсэний дараа тулгалт идэвхжинэ"]);
+    t.skip("pdfSigning.registerErrorCodes алга");
+    return;
+  }
+  assert.ok(Array.isArray(codes) && codes.every((c) => typeof c === "string"), "registerErrorCodes мөрийн массив биш");
+  assert.deepEqual([...new Set(codes as string[])].sort(), [...PDF_REGISTER_ERROR_CODES].sort(), "CA ↔ SDK кодын олонлог зөрсөн");
 });

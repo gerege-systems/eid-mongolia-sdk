@@ -13,6 +13,7 @@
 import { X509Certificate, constants, createHash, publicDecrypt, verify, type KeyObject } from "node:crypto";
 import { buildAcspV2Payload, hashLen, nodeHash } from "./crypto.js";
 import { SessionFailedError, ValidationError } from "./errors.js";
+import { INTERMEDIATES, NATIONAL_ROOT } from "./pades/assets/chain.js";
 import { certExtension, certExtensions, oidOf, parseSubject, tlv, type CertSubject } from "./subject.js";
 import type { AcspContext, CertificateLevel, FlowType, SessionResult, SignatureAlgorithm } from "./types.js";
 
@@ -103,6 +104,22 @@ export type RevocationOutcome = "good" | "unchecked" | "skipped";
  * гаргадаг цорын ганц CA. `TrustConfig.allowedIssuerSkis`-д.
  */
 export const CITIZEN_ISSUING_CA_SKI = "b8a37f2c64ad677912db7d9e34f246358a2fb909";
+const derB64ToPem = (b64: string): string =>
+  `-----BEGIN CERTIFICATE-----\n${b64.match(/.{1,64}/g)!.join("\n")}\n-----END CERTIFICATE-----\n`;
+
+/**
+ * Mongolian National Root CA (01) — итгэлийн тулгуур (`TrustConfig.trustAnchorsPem`). Нийтийн эх:
+ * https://ca.eidmongolia.mn/pki/mongolian-national-root-ca.cer. Go SDK `eid.NationalRootCAPEM`-тэй ижил.
+ */
+export const NATIONAL_ROOT_CA_PEM: string = derB64ToPem(NATIONAL_ROOT[0]!);
+
+/**
+ * Иргэний гэрчилгээний завсрын CA-ууд: 02 National Issuing CA (MDDC) → 03 Gerege Issuing CA → 04 eID Mongolia Issuing
+ * CA. RP-API хариунд гинж ирдэггүй — `TrustConfig.intermediatesPem` өгөөгүй бол (0.19.0-аас) эдгээрийг анхдагчаар
+ * хэрэглэнэ. Go SDK `eid.CitizenIntermediatesPEM`-тэй ижил.
+ */
+export const CITIZEN_INTERMEDIATES_PEM: readonly string[] = Object.freeze(INTERMEDIATES.slice(0, 3).map(derB64ToPem));
+
 export type RevocationChecker = (
   cert: X509Certificate,
   issuer: X509Certificate | undefined,
@@ -115,7 +132,7 @@ export interface TrustConfig {
    * үл тоомсорлоно — зөвхөн dev/тест).
    */
   trustAnchorsPem?: string[];
-  /** Intermediate CA PEM-үүд (leaf ↔ root хооронд). */
+  /** Intermediate CA PEM-үүд (leaf ↔ root хооронд). Алга бол {@link CITIZEN_INTERMEDIATES_PEM} (02, 03, 04; 0.19.0-аас). */
   intermediatesPem?: string[];
   /** Шаардах certLevel (default QUALIFIED). ADVANCED тохируулбал доод түвшин зөвшөөрнө. */
   requiredLevel?: CertificateLevel;
@@ -137,14 +154,21 @@ export interface TrustConfig {
    */
   revocationMode?: "hard-fail" | "soft-fail";
   /**
-   * Иргэний гэрчилгээг шууд гаргасан CA-ийн Subject Key Identifier (hex, ":" зөвшөөрнө) жагсаалт. Хоосон/алга бол trust
-   * anchor хүртэл гинжлэгдсэн дурын CA зөвшөөрөгдөнө (хуучин зан). Ижил root-ийн доорх өөр CA (ж: байгууллагын Issuing
-   * CA) иргэний гэрчилгээ гаргахаас хамгаалахад: `[CITIZEN_ISSUING_CA_SKI]`.
+   * Иргэний гэрчилгээг шууд гаргасан CA-ийн Subject Key Identifier (hex, ":" зөвшөөрнө) жагсаалт. **0.19.0-аас анхдагч
+   * `[CITIZEN_ISSUING_CA_SKI]`** (trust anchor тохируулсан үед) — ижил root-ийн доорх өөр CA (ж: байгууллагын Issuing CA)
+   * иргэний гэрчилгээ гаргахаас хамгаална. Өгвөл энэ жагсаалтаар солино (үргэлж шалгана, `allowUntrusted` үед ч).
+   * Дурын issuer-ийг зөвшөөрөх бол {@link allowAnyIssuer}.
    */
   allowedIssuerSkis?: string[];
   /**
-   * true бол гэрчилгээний зориулалтыг CA-ийн профайлаар шалгана: auth → KeyUsage digitalSignature + ExtKeyUsage
-   * clientAuth (P-CITIZEN-AUTH); sign → KeyUsage contentCommitment / nonRepudiation (P-CITIZEN-SIGN). Анхдагч false.
+   * true бол анхдагч issuer allowlist-ийг (`[CITIZEN_ISSUING_CA_SKI]`) унтраана — trust anchor хүртэл гинжлэгдсэн дурын CA
+   * (0.18.x-ийн зан). `allowedIssuerSkis` өгсөн бол түүнийг шалгасаар байна. Тест/dev, эсвэл өөр Issuing CA-тай орчинд л.
+   */
+  allowAnyIssuer?: boolean;
+  /**
+   * Гэрчилгээний зориулалтыг CA-ийн профайлаар шалгана: auth → KeyUsage digitalSignature + ExtKeyUsage clientAuth
+   * (P-CITIZEN-AUTH); sign → KeyUsage contentCommitment / nonRepudiation (P-CITIZEN-SIGN). **0.19.0-аас анхдагч true**
+   * — нэвтрэлтийн (PIN1) түлхүүрийн гарын үсэг `validateSign`-д тэнцэхгүй. `false` — шалгахгүй (хуучин зан, зөвлөхгүй).
    */
   checkKeyUsage?: boolean;
   /** ACSP_V2 payload-ийн scheme нэр (CA-ийн `capabilities.acsp_scheme_name`); анхдагч "smart-id". */
@@ -160,6 +184,10 @@ export interface VerifiedIdentity {
   subject: string;
   /** Subject-ийн задалсан талбарууд (нэр, ETSI `serialNumber`, улс) — {@link parseSubject}. */
   parsedSubject: CertSubject;
+  /**
+   * Үнэлэгдсэн түвшин: хариуны `certificateLevel` ба гэрчилгээнээс тогтоосон түвшний ({@link certificateLevelOf}) бага
+   * нь. Хариу гэрчилгээнээс өндөр түвшин зарлавал ValidationError.
+   */
   certificateLevel: string;
 }
 
@@ -172,6 +200,8 @@ export interface VerifiedSignature {
   subject: string;
   /** Subject-ийн задалсан талбарууд — {@link parseSubject}. */
   parsedSubject: CertSubject;
+  /** Үнэлэгдсэн түвшин ({@link VerifiedIdentity.certificateLevel}-тэй ижил дүрэм; гарын үсгийн гэрчилгээнд qcStatements). */
+  certificateLevel: string;
 }
 
 export class ResponseValidator {
@@ -188,22 +218,25 @@ export class ResponseValidator {
 
   constructor(trust: TrustConfig = {}) {
     this.anchors = (trust.trustAnchorsPem ?? []).map((p) => new X509Certificate(p));
-    this.intermediates = (trust.intermediatesPem ?? []).map((p) => new X509Certificate(p));
+    this.intermediates = (trust.intermediatesPem ?? CITIZEN_INTERMEDIATES_PEM).map((p) => new X509Certificate(p));
     this.requiredLevel = trust.requiredLevel ?? "QUALIFIED";
     this.skew = trust.clockSkewMs ?? 0;
     this.allowUntrusted = trust.allowUntrusted ?? false;
     this.revocation = trust.revocation;
     this.revocationMode = trust.revocationMode ?? "hard-fail";
-    if (trust.allowedIssuerSkis?.length) {
+    const explicitIssuers = trust.allowedIssuerSkis?.length ? trust.allowedIssuerSkis : undefined;
+    // Анхдагч allowlist зөвхөн гинж шалгах үед (anchor-тай) — allowUntrusted dev горимд issuer тогтоох гинж алга.
+    const issuerList = explicitIssuers ?? (!trust.allowAnyIssuer && this.anchors.length > 0 ? [CITIZEN_ISSUING_CA_SKI] : undefined);
+    if (issuerList) {
       this.allowedIssuers = new Set(
-        trust.allowedIssuerSkis.map((s) => {
+        issuerList.map((s) => {
           const ski = s.trim().replace(/:/g, "").toLowerCase();
           if (!/^(?:[0-9a-f]{2})+$/.test(ski)) throw new Error(`ResponseValidator: allowedIssuerSkis: "${s}" hex key identifier биш`);
           return ski;
         }),
       );
     }
-    this.checkKeyUsage = trust.checkKeyUsage ?? false;
+    this.checkKeyUsage = trust.checkKeyUsage ?? true;
     this.schemeName = trust.schemeName;
   }
 
@@ -214,7 +247,7 @@ export class ResponseValidator {
    * @param acsp — session эхлүүлэхэд SDK-ийн буцаасан `acsp` контекст (RP хадгалсан).
    */
   validateAuth(result: SessionResult, acsp: AcspContext, opts: ValidateAuthOptions = {}): VerifiedIdentity {
-    const leaf = this.precheck(result, "ACSP_V2");
+    const { leaf, level } = this.precheck(result, "ACSP_V2");
     const { serverRandom, userChallenge, flowType, interactionTypeUsed } = result;
     if (!serverRandom || Buffer.from(serverRandom, "base64").length < 18) throw new ValidationError("serverRandom алга/богино");
     if (!userChallenge || !/^[A-Za-z0-9_-]{43}$/.test(userChallenge)) throw new ValidationError("userChallenge буруу хэлбэртэй");
@@ -253,7 +286,7 @@ export class ResponseValidator {
       certificate: leaf,
       subject: leaf.subject,
       parsedSubject: parseSubject(leaf),
-      certificateLevel: String(result.certificateLevel ?? ""),
+      certificateLevel: level,
     };
   }
 
@@ -264,7 +297,7 @@ export class ResponseValidator {
   validateSign(result: SessionResult, digestB64: string, opts: string | ValidateSignOptions = {}): VerifiedSignature {
     const o: ValidateSignOptions = typeof opts === "string" ? { hashAlgorithm: opts } : opts;
     const { hashAlgorithm = "SHA-256", expectedFlowType } = o;
-    const leaf = this.precheck(result, "RAW_DIGEST_SIGNATURE");
+    const { leaf, level } = this.precheck(result, "RAW_DIGEST_SIGNATURE");
     if (expectedFlowType && result.flowType !== expectedFlowType) {
       throw new ValidationError(`flowType ${result.flowType} ≠ эхлүүлсэн урсгал ${expectedFlowType} (relay байж болзошгүй)`);
     }
@@ -286,6 +319,7 @@ export class ResponseValidator {
       certificate: leaf,
       subject: leaf.subject,
       parsedSubject: parseSubject(leaf),
+      certificateLevel: level,
     };
   }
 
@@ -297,12 +331,12 @@ export class ResponseValidator {
    */
   validateCertificateChoice(result: SessionResult, sessionId: string | null = null): Signer {
     this.sessionDone(result);
-    const leaf = this.leafOf(result, "RAW_DIGEST_SIGNATURE");
+    const { leaf, level } = this.leafOf(result, "RAW_DIGEST_SIGNATURE");
     return {
       documentNumber: result.documentNumber!,
       certificate: leaf,
       certificateDerB64: leaf.raw.toString("base64"),
-      certificateLevel: String(result.certificateLevel ?? ""),
+      certificateLevel: level,
       parsedSubject: parseSubject(leaf),
       certChoiceSessionId: sessionId,
     };
@@ -364,7 +398,7 @@ export class ResponseValidator {
   // ── дотоод ──
 
   /** state/endResult, cert байгаа эсэх, chain, validity, certLevel — нийтлэг шалгалт. */
-  private precheck(result: SessionResult, protocol: string): X509Certificate {
+  private precheck(result: SessionResult, protocol: string): { leaf: X509Certificate; level: CertificateLevel } {
     this.sessionDone(result);
     if (result.signatureProtocol && result.signatureProtocol !== protocol) {
       throw new ValidationError(`signatureProtocol ${result.signatureProtocol} ≠ ${protocol}`);
@@ -381,13 +415,30 @@ export class ResponseValidator {
   }
 
   /** Хариуны гэрчилгээ: documentNumber, задлалт, хугацаа, certLevel, зориулалт (protocol), гинж, issuer. */
-  private leafOf(result: SessionResult, protocol: string): X509Certificate {
+  private leafOf(result: SessionResult, protocol: string): { leaf: X509Certificate; level: CertificateLevel } {
     if (!result.certificateDerB64) throw new ValidationError("Хариунд гэрчилгээ алга");
     if (!result.documentNumber) throw new ValidationError("Хариунд documentNumber алга");
 
     const leaf = new X509Certificate(Buffer.from(result.certificateDerB64, "base64"));
     this.checkValidity(leaf);
-    this.checkLevel(String(result.certificateLevel ?? ""));
+    this.verifyCertificate(leaf, protocol);
+    const level = effectiveLevel(String(result.certificateLevel ?? ""), certificateLevelOf(leaf, protocol));
+    this.checkLevel(level);
+    return { leaf, level };
+  }
+
+  /**
+   * Токены нэвтрэлтийн гэрчилгээ ({@link TokenApi.authVerify}) — хугацаа, зориулалт (auth), гинж, issuer. Түвшинг
+   * шалгахгүй (USB токен ADVANCED).
+   * @internal
+   */
+  verifyTokenAuthCertificate(leaf: X509Certificate): void {
+    this.checkValidity(leaf);
+    this.verifyCertificate(leaf, "ACSP_V2");
+  }
+
+  /** Зориулалт (protocol), гинж, issuer — хугацаа/түвшнийг дуудагч шалгасан. */
+  private verifyCertificate(leaf: X509Certificate, protocol: string): void {
     this.checkPurpose(leaf, protocol);
     // Trust anchor ЗААВАЛ — хоосон бол fail-closed (allowUntrusted-аар л үл тоомсорлоно).
     // Өмнө нь anchor хоосон үед chain ЧИМЭЭГҮЙ алгасч, self-asserted leaf-д итгэдэг байсан.
@@ -401,7 +452,6 @@ export class ResponseValidator {
       this.verifyChain(leaf, protocol === "ACSP_V2" ? EKU_CLIENT_AUTH : EKU_EMAIL_PROTECTION);
     }
     this.checkIssuer(leaf);
-    return leaf;
   }
 
   /**
@@ -442,9 +492,8 @@ export class ResponseValidator {
 
   private checkLevel(level: string): void {
     // Дараалал ADVANCED < QUALIFIED < QSCD: шаардсанаас дээш түвшнийг хүлээн авна (QSCD нь QUALIFIED-ийг хангана).
-    const rank: Record<string, number> = { ADVANCED: 1, QUALIFIED: 2, QSCD: 3 };
-    const got = rank[level] ?? 0;
-    const need = rank[this.requiredLevel] ?? 2;
+    const got = LEVEL_RANK[level] ?? 0;
+    const need = LEVEL_RANK[this.requiredLevel] ?? 2;
     if (got < need) throw new ValidationError(`Гэрчилгээний түвшин хүрэлцэхгүй: ${level} < ${this.requiredLevel}`);
   }
 
@@ -706,6 +755,56 @@ function keyUsageBits(cert: X509Certificate): number {
   const bs = tlv(v, 0, v.length);
   if (bs.tag !== 0x03 || bs.end - bs.start < 2) return 0;
   return v[bs.start + 1]!;
+}
+
+const LEVEL_RANK: Record<string, number> = { ADVANCED: 1, QUALIFIED: 2, QSCD: 3 };
+const OID_QC_STATEMENTS = "1.3.6.1.5.5.7.1.3";
+const OID_QC_COMPLIANCE = "0.4.0.1862.1.1";
+const OID_QC_SSCD = "0.4.0.1862.1.4";
+
+/**
+ * Гэрчилгээнээс тогтоох түвшин (CA `crypto/ca_profile.go`): qcStatements-д QcCompliance → QUALIFIED (+ QcSSCD →
+ * QSCD); qcStatements алга бол — гарын үсгийн гэрчилгээ ADVANCED (USB токен), нэвтрэлтийн гэрчилгээ (CA AUTH-д
+ * qcStatements бичдэггүй) KeyUsage-аар: keyEncipherment-тэй (утасны P-CITIZEN-AUTH) → QUALIFIED, үгүй (токены
+ * P-CITIZEN-AUTH-TOKEN) → ADVANCED. `protocol` — "ACSP_V2" (auth) эсвэл "RAW_DIGEST_SIGNATURE" (sign).
+ */
+export function certificateLevelOf(cert: X509Certificate, protocol: string): CertificateLevel {
+  const qc = qcStatementIds(cert);
+  if (qc) {
+    if (!qc.includes(OID_QC_COMPLIANCE)) return "ADVANCED";
+    return qc.includes(OID_QC_SSCD) ? "QSCD" : "QUALIFIED";
+  }
+  if (protocol === "ACSP_V2" && keyUsageBits(cert) & 0x20) return "QUALIFIED";
+  return "ADVANCED";
+}
+
+/**
+ * Хариуны түвшин гэрчилгээнийхээс өндөр бол ValidationError (хуурамч/proxy хариу); бага бол хариуныхыг (RP-ийн хүссэн
+ * доод түвшин). Хариунд түвшин алга/үл таних бол гэрчилгээнийх.
+ */
+function effectiveLevel(claimed: string, fromCert: CertificateLevel): CertificateLevel {
+  const c = LEVEL_RANK[claimed];
+  if (c === undefined) return fromCert;
+  if (c > LEVEL_RANK[fromCert]!) {
+    throw new ValidationError(`Хариуны certificateLevel ${claimed} гэрчилгээнээс (${fromCert}) өндөр`);
+  }
+  return claimed as CertificateLevel;
+}
+
+/** qcStatements (1.3.6.1.5.5.7.1.3)-ийн statementId-ууд; extension алга бол undefined. */
+function qcStatementIds(cert: X509Certificate): string[] | undefined {
+  const v = certExtension(cert.raw, OID_QC_STATEMENTS);
+  if (!v) return undefined;
+  const seq = tlv(v, 0, v.length);
+  if (seq.tag !== 0x30) throw new ValidationError("qcStatements буруу");
+  const out: string[] = [];
+  for (let p = seq.start; p < seq.end; ) {
+    const st = tlv(v, p, seq.end);
+    if (st.tag !== 0x30) throw new ValidationError("qcStatements буруу");
+    out.push(oidOf(v, tlv(v, st.start, st.end)));
+    p = st.end;
+  }
+  return out;
 }
 
 /** ExtKeyUsage (2.5.29.37) OID-ууд; алга бол []. */

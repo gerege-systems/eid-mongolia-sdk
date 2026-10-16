@@ -27,6 +27,8 @@ export interface SignDefaults {
   certificateLevel: CertificateLevel;
   /** Sign / certificate-choice session-ий `expiresAt`-ийг тооцоолох хугацаа (мс); undefined = 600000. */
   sessionTtlMs?: number;
+  /** registerSignature-ийн HTTP хугацаа (мс); алга бол 80 000. */
+  pdfTimeoutMs?: number;
 }
 
 export interface SignOptions {
@@ -501,7 +503,7 @@ export class SignApi {
   }
 
   private async registerBody(body: Record<string, unknown>): Promise<RegisterSignatureResult> {
-    const { status, body: raw } = await this.http.postWithStatus(routePath(RP_ROUTES.pdfSignatures), body);
+    const { status, body: raw } = await this.http.postWithStatus(routePath(RP_ROUTES.pdfSignatures), body, this.defaults.pdfTimeoutMs ?? 80_000);
     const r = rec(raw);
     return {
       docID: String(r.docID ?? body.docID),
