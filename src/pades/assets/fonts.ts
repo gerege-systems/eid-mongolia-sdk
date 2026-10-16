@@ -1,4 +1,4 @@
-// ҮҮСГЭСЭН ФАЙЛ — бүү зас. scripts/sync-pades-golden.mjs (Go reference 0fc5f738868c pades/assets/fonts).
+// ҮҮСГЭСЭН ФАЙЛ — бүү зас. scripts/sync-pades-golden.mjs (Go reference 7c67790ca2be pades/assets/fonts).
 // Noto Sans Regular/Bold (subset), SIL OFL 1.1 — ./OFL.txt. stream = FontFile2-ийн байт (zlib, тогтмол), base64.
 
 export interface FontAsset {
