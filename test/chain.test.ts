@@ -16,7 +16,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { ResponseValidator, ValidationError, buildAcspV2Payload, parseSessionResult, randomChallenge, userChallengeOf } from "../dist/index.js";
+import { CITIZEN_INTERMEDIATES_PEM, CITIZEN_ISSUING_CA_SKI, NATIONAL_ROOT_CA_PEM, ResponseValidator, ValidationError, buildAcspV2Payload, certificateLevelOf, parseSessionResult, randomChallenge, userChallengeOf } from "../dist/index.js";
 
 const DIR = mkdtempSync(join(tmpdir(), "eid-chain-"));
 process.on("exit", () => rmSync(DIR, { recursive: true, force: true }));
@@ -80,12 +80,13 @@ const MDDC = issue("mddc", ROOT, caExt(undefined, "keyUsage=critical,digitalSign
 const GEREGE = issue("gerege", MDDC, caExt());
 const ISSUING = issue("issuing", GEREGE, caExt(0));
 const CHAIN = [MDDC.pem, GEREGE.pem, ISSUING.pem];
+// Тестийн 04-ийн SKI нь CITIZEN_ISSUING_CA_SKI биш — анхдагч issuer allowlist-ийг (0.19.0) энд унтраана.
 const validator = (anchor = ROOT, inter = CHAIN, extra: Record<string, unknown> = {}) =>
-  new ResponseValidator({ trustAnchorsPem: [anchor.pem], intermediatesPem: inter, ...extra });
+  new ResponseValidator({ trustAnchorsPem: [anchor.pem], intermediatesPem: inter, allowAnyIssuer: true, ...extra });
 
 const INTERACTIONS = Buffer.from(JSON.stringify([{ type: "displayTextAndPIN", displayText60: "x" }])).toString("base64");
 
-function authOf(leaf: Cert) {
+function authOf(leaf: Cert, level = "QUALIFIED") {
   const acsp = {
     rpChallenge: randomChallenge(), relyingPartyName: "DEMO", brokeredRpName: "", interactions: INTERACTIONS,
     initialCallbackUrl: "", flowTypes: ["QR"], signatureAlgorithm: "rsassa-pss", hashAlgorithm: "SHA-256",
@@ -104,18 +105,18 @@ function authOf(leaf: Cert) {
     state: "COMPLETE", result: { endResult: "OK", documentNumber: "d1" }, signatureProtocol: "ACSP_V2", interactionTypeUsed: "displayTextAndPIN",
     signature: { value: sig.toString("base64"), serverRandom, userChallenge, flowType: "QR", initialCallbackUrl: "",
       signatureAlgorithm: ec ? "ecdsa-with-SHA256" : "rsassa-pss", signatureAlgorithmParameters: { hashAlgorithm: "SHA-256" } },
-    cert: { value: leaf.cert.raw.toString("base64"), certificateLevel: "QUALIFIED" },
+    cert: { value: leaf.cert.raw.toString("base64"), certificateLevel: level },
   });
   return { result, acsp: acsp as unknown as Parameters<ResponseValidator["validateAuth"]>[1] };
 }
 
-function signOf(leaf: Cert) {
+function signOf(leaf: Cert, level = "QUALIFIED") {
   const digest = createHash("sha256").update("баримт").digest();
   const sig = cryptoSign("sha256", Buffer.from("баримт"), { key: leaf.key, padding: constants.RSA_PKCS1_PSS_PADDING, saltLength: 32 });
   const result = parseSessionResult({
     state: "COMPLETE", result: { endResult: "OK", documentNumber: "d1" }, signatureProtocol: "RAW_DIGEST_SIGNATURE",
     signature: { value: sig.toString("base64"), signatureAlgorithm: "rsassa-pss", signatureAlgorithmParameters: { hashAlgorithm: "SHA-256" } },
-    cert: { value: leaf.cert.raw.toString("base64"), certificateLevel: "QUALIFIED" },
+    cert: { value: leaf.cert.raw.toString("base64"), certificateLevel: level },
   });
   return { result, digest: digest.toString("base64") };
 }
@@ -124,7 +125,7 @@ const rejects = (fn: () => unknown, re: RegExp) =>
   assert.throws(fn, (e: unknown) => e instanceof ValidationError && re.test(e.message), String(re));
 
 test("гинж — бодит профайл (01 → 02 → 03 → 04 → иргэн) амжина: auth, sign, токены EC", () => {
-  const strict = validator(ROOT, CHAIN, { checkKeyUsage: true });
+  const strict = validator(); // 0.19.0-аас checkKeyUsage анхдагч true
   const auth = issue("auth", ISSUING, AUTH_EXT, { subj: CITIZEN });
   const a = authOf(auth);
   validator().validateAuth(a.result, a.acsp);
@@ -139,10 +140,61 @@ test("гинж — бодит профайл (01 → 02 → 03 → 04 → ирг
   // Гарын үсгийн гэрчилгээ (emailProtection) нэвтрэлтэд → clientAuth алга.
   const wrong = authOf(sign);
   rejects(() => validator().validateAuth(wrong.result, wrong.acsp), /ExtKeyUsage/);
-  // Нэвтрэлтийн гэрчилгээ (clientAuth+emailProtection) sign-д EKU-гаар тэнцэнэ; KU-г checkKeyUsage шалгана.
-  const sa = signOf(auth);
-  validator().validateSign(sa.result, sa.digest);
+  // Нэвтрэлтийн (PIN1) гэрчилгээ (clientAuth+emailProtection) sign-д EKU-гаар тэнцэнэ — анхдагчаар KU (nonRepudiation)
+  // алга тул унана (0.18.x-д checkKeyUsage=false анхдагч байсан тул тэнцдэг байв). Хариу ADVANCED гэж зарласан ч.
+  const sa = signOf(auth, "ADVANCED");
   rejects(() => strict.validateSign(sa.result, sa.digest), /nonRepudiation/);
+  rejects(() => validator(ROOT, CHAIN, { requiredLevel: "ADVANCED" }).validateSign(sa.result, sa.digest), /nonRepudiation/);
+  validator(ROOT, CHAIN, { checkKeyUsage: false, requiredLevel: "ADVANCED" }).validateSign(sa.result, sa.digest); // хуучин зан (зөвлөхгүй)
+});
+
+test("issuer allowlist — анхдагч CITIZEN_ISSUING_CA_SKI (anchor-тай үед); allowAnyIssuer / өөр жагсаалт", () => {
+  const auth = issue("authIss", ISSUING, AUTH_EXT, { subj: CITIZEN });
+  const a = authOf(auth);
+  const def = new ResponseValidator({ trustAnchorsPem: [ROOT.pem], intermediatesPem: CHAIN });
+  rejects(() => def.validateAuth(a.result, a.acsp), /allowedIssuerSkis/);
+  const ski = execFileSync("openssl", ["x509", "-in", f("issuing.pem"), "-noout", "-ext", "subjectKeyIdentifier"])
+    .toString().split("\n")[1]!.trim();
+  new ResponseValidator({ trustAnchorsPem: [ROOT.pem], intermediatesPem: CHAIN, allowedIssuerSkis: [ski] }).validateAuth(a.result, a.acsp);
+  validator().validateAuth(a.result, a.acsp);
+});
+
+test("certificateLevel — гэрчилгээнээс: SIGN qcStatements → QUALIFIED, qc-гүй → ADVANCED; AUTH KE → QUALIFIED, токен → ADVANCED", () => {
+  const v = validator();
+  const adv = validator(ROOT, CHAIN, { requiredLevel: "ADVANCED" });
+  // Утасны SIGN (qcStatements QcCompliance)
+  const sign = issue("lvSign", ISSUING, SIGN_EXT, { subj: CITIZEN });
+  assert.equal(certificateLevelOf(sign.cert, "RAW_DIGEST_SIGNATURE"), "QUALIFIED");
+  assert.equal(v.validateSign(signOf(sign).result, signOf(sign).digest).certificateLevel, "QUALIFIED");
+  // Хариу QSCD гэж худал зарлавал (QcSSCD алга) → татгалзана.
+  const q = signOf(sign, "QSCD");
+  rejects(() => v.validateSign(q.result, q.digest), /гэрчилгээнээс \(QUALIFIED\) өндөр/);
+  // Хариу доогуур (ADVANCED) — хариуныхыг авна, QUALIFIED шаардвал унана.
+  const lo = signOf(sign, "ADVANCED");
+  rejects(() => v.validateSign(lo.result, lo.digest), /хүрэлцэхгүй/);
+  assert.equal(adv.validateSign(lo.result, lo.digest).certificateLevel, "ADVANCED");
+  // Хариунд түвшин алга → гэрчилгээнийх.
+  const none = signOf(sign, "");
+  assert.equal(v.validateSign(none.result, none.digest).certificateLevel, "QUALIFIED");
+  // Токены SIGN (qcStatements үгүй) → ADVANCED: QUALIFIED гэж зарласан хариу татгалзагдана.
+  const tokSign = issue("lvTokSign", ISSUING, SIGN_EXT.filter((e) => !e.startsWith("1.3.6.1.5.5.7.1.3")), { subj: CITIZEN });
+  assert.equal(certificateLevelOf(tokSign.cert, "RAW_DIGEST_SIGNATURE"), "ADVANCED");
+  const ts = signOf(tokSign);
+  rejects(() => v.validateSign(ts.result, ts.digest), /QUALIFIED гэрчилгээнээс \(ADVANCED\) өндөр/);
+  // QcSSCD → QSCD
+  const qscd = issue("lvQscd", ISSUING, [...SIGN_EXT.filter((e) => !e.startsWith("1.3.6.1.5.5.7.1.3")),
+    "1.3.6.1.5.5.7.1.3=DER:30:14:30:08:06:06:04:00:8e:46:01:01:30:08:06:06:04:00:8e:46:01:04"], { subj: CITIZEN });
+  assert.equal(certificateLevelOf(qscd.cert, "RAW_DIGEST_SIGNATURE"), "QSCD");
+  // Утасны AUTH (KU keyEncipherment, P-CITIZEN-AUTH) → QUALIFIED; токены AUTH (KU DS, P-CITIZEN-AUTH-TOKEN) → ADVANCED.
+  const auth = issue("lvAuth", ISSUING, AUTH_EXT, { subj: CITIZEN });
+  assert.equal(certificateLevelOf(auth.cert, "ACSP_V2"), "QUALIFIED");
+  const tokAuth = issue("lvTokAuth", ISSUING, [...LEAF_COMMON, "keyUsage=critical,digitalSignature", "extendedKeyUsage=clientAuth,emailProtection"],
+    { subj: CITIZEN, key: "ec" });
+  assert.equal(certificateLevelOf(tokAuth.cert, "ACSP_V2"), "ADVANCED");
+  const ta = authOf(tokAuth);
+  rejects(() => v.validateAuth(ta.result, ta.acsp), /өндөр/);
+  const ta2 = authOf(tokAuth, "ADVANCED");
+  assert.equal(adv.validateAuth(ta2.result, ta2.acsp).certificateLevel, "ADVANCED");
 });
 
 test("гинж — татгалзах: pathLen, завсрын EKU, CA:false, keyCertSign-гүй, хугацаа дууссан, буруу root, MDDC дутуу", () => {
@@ -196,4 +248,18 @@ test("гинж — бодит нийтийн 04 нь 03-аас (pathlen:0, keyCe
   v.verifyChain(new X509Certificate(ca04), "1.3.6.1.5.5.7.3.2");
   const wrongAnchor = new ResponseValidator({ trustAnchorsPem: [ROOT.pem] }) as unknown as { verifyChain(c: X509Certificate, usage: string): void };
   rejects(() => wrongAnchor.verifyChain(new X509Certificate(ca04), "1.3.6.1.5.5.7.3.2"), /trust anchor/);
+});
+
+test("NATIONAL_ROOT_CA_PEM + CITIZEN_INTERMEDIATES_PEM — бодит 01 → 02 → 03 → 04; 04-ийн SKI = CITIZEN_ISSUING_CA_SKI", () => {
+  const root = new X509Certificate(NATIONAL_ROOT_CA_PEM);
+  assert.equal(root.fingerprint256, "CB:E7:F3:FE:1F:04:80:37:C2:15:DA:32:1E:58:CA:A4:F3:63:DE:9E:54:BB:C4:42:A3:BF:D6:2F:AD:83:44:82");
+  const [mddc, gerege, issuing] = CITIZEN_INTERMEDIATES_PEM.map((p) => new X509Certificate(p));
+  assert.equal(CITIZEN_INTERMEDIATES_PEM.length, 3);
+  assert.ok(mddc!.checkIssued(root) && gerege!.checkIssued(mddc!) && issuing!.checkIssued(gerege!));
+  assert.ok(mddc!.verify(root.publicKey) && gerege!.verify(mddc!.publicKey) && issuing!.verify(gerege!.publicKey));
+  assert.equal(issuing!.subject.includes("eID Mongolia Issuing CA"), true);
+  const ski = execFileSync("openssl", ["x509", "-noout", "-ext", "subjectKeyIdentifier"], { input: CITIZEN_INTERMEDIATES_PEM[2] })
+    .toString().split("\n")[1]!.trim().replace(/:/g, "").toLowerCase();
+  assert.equal(ski, CITIZEN_ISSUING_CA_SKI);
+  assert.ok(Object.isFrozen(CITIZEN_INTERMEDIATES_PEM));
 });

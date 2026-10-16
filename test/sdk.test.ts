@@ -369,13 +369,20 @@ test("browser entry — sessionSecret шаарддаг buildDeviceLink ОРОХ�
 });
 
 // ── ResponseValidator.validateAuth — flowType/verifier (device-link relay хаалт) ──
+// 0.19.0: checkKeyUsage анхдагч true, түвшин гэрчилгээнээс — тестийн «бүх зориулалттай» cert: KU DS+KE+NR, EKU
+// clientAuth+emailProtection, qcStatements QcCompliance (QUALIFIED).
+const TEST_EXT = [
+  "-addext", "keyUsage=critical,digitalSignature,keyEncipherment,nonRepudiation",
+  "-addext", "extendedKeyUsage=clientAuth,emailProtection",
+  "-addext", "1.3.6.1.5.5.7.1.3=DER:30:0a:30:08:06:06:04:00:8e:46:01:01",
+];
 // Тестийн түр self-signed cert-ийг openssl-ээр үүсгэнэ (репод түлхүүр хадгалахгүй).
 const FIX = (() => {
   const dir = mkdtempSync(join(tmpdir(), "eid-sdk-"));
   try {
     execFileSync("openssl", [
       "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "2",
-      "-keyout", join(dir, "k.pem"), "-out", join(dir, "c.pem"), "-subj", "/C=MN/CN=TEST",
+      "-keyout", join(dir, "k.pem"), "-out", join(dir, "c.pem"), "-subj", "/C=MN/CN=TEST", ...TEST_EXT,
     ], { stdio: "ignore" });
     return { key: readFileSync(join(dir, "k.pem"), "utf8"), cert: new X509Certificate(readFileSync(join(dir, "c.pem"))) };
   } finally {
@@ -630,7 +637,7 @@ function mkCert(subj: string, keyArgs: string[]) {
   try {
     execFileSync("openssl", [
       "req", "-x509", ...keyArgs, "-nodes", "-days", "2", "-utf8",
-      "-keyout", join(dir, "k.pem"), "-out", join(dir, "c.pem"), "-subj", subj,
+      "-keyout", join(dir, "k.pem"), "-out", join(dir, "c.pem"), "-subj", subj, ...TEST_EXT,
     ], { stdio: "ignore" });
     return { key: readFileSync(join(dir, "k.pem"), "utf8"), cert: new X509Certificate(readFileSync(join(dir, "c.pem"))) };
   } finally {

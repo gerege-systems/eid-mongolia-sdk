@@ -2,12 +2,19 @@
 // ResponseValidator-ийн өөрийн тестэд (sdk.test.ts) — энд validateAuth-ийг орлуулж ямар урсгал/verifier-ээр
 // дуудагдсаныг тулгана.
 import { mock, test } from "node:test";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { X509Certificate } from "node:crypto";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import assert from "node:assert/strict";
 
 import {
   createEidLogin,
   defaultRateLimit,
+  memoryLoginStore,
+  LoginStoreFullError,
+  MEMORY_LOGIN_STORE_MAX,
   EidClient,
   forwardedClientIp,
   ocspRevocationChecker,
@@ -28,6 +35,19 @@ interface Fake {
   /** notification start-ын хариу: undefined = бодит session; "json400" — eID-ийн татгалзал; "proxy400" — JSON бус 4xx; "500"; "401". */
   refuse?: "json400" | "proxy400" | "500" | "401";
 }
+
+// validateAuth-ийн stub-ийн гэрчилгээ (AIA-гүй self-signed): revocation шалгагч issuer-ийг trust pool-оос (0.19.0-аас
+// анхдагч 02–04 завсрын CA-тай) хайдаг тул null биш X509Certificate байх ёстой.
+const STUB_CERT = (() => {
+  const dir = mkdtempSync(join(tmpdir(), "eid-login-"));
+  try {
+    execFileSync("openssl", ["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "2", "-keyout", join(dir, "k.pem"),
+      "-out", join(dir, "c.pem"), "-subj", "/C=MN/CN=TEST"], { stdio: "ignore" });
+    return new X509Certificate(readFileSync(join(dir, "c.pem")));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+})();
 
 function setup(opts: Partial<Parameters<typeof createEidLogin>[0]> = {}) {
   const fake: Fake = { session: { state: "RUNNING" }, calls: [] };
@@ -59,7 +79,7 @@ function setup(opts: Partial<Parameters<typeof createEidLogin>[0]> = {}) {
       documentNumber: "doc-1",
       certificateLevel: "QUALIFIED",
       subject: "",
-      certificate: null,
+      certificate: STUB_CERT,
       parsedSubject: { givenName: "BAT", surname: "DORJ", serialNumber: "PNOMN-111949212017", country: "MN", name: "BAT DORJ", attributes: {} },
     };
   };
@@ -215,11 +235,55 @@ test("rateLimit объект: push-ийг дарна ({limit,windowMs}, функ
   assert.deepEqual(st, [200, 200, 429]);
 });
 
-test("defaultRateLimit: push 3/60с, frozen; буруу түлхүүр/утга → throw", () => {
-  assert.deepEqual(defaultRateLimit, { push: { limit: 3, windowMs: 60_000 } });
+test("defaultRateLimit: start 20/60с (0.19.0), push 3/60с, frozen; буруу түлхүүр/утга → throw", () => {
+  assert.deepEqual(defaultRateLimit, { start: { limit: 20, windowMs: 60_000 }, push: { limit: 3, windowMs: 60_000 } });
   assert.ok(Object.isFrozen(defaultRateLimit));
   assert.throws(() => setup({ rateLimit: { pin: false } as never }), /rateLimit\.pin/);
   assert.throws(() => setup({ rateLimit: { push: { limit: 0, windowMs: 1 } } }), /rateLimit\.push/);
+});
+
+test("start: анхдагчаар нэг IP-ээс 60 секундэд 20 (21 дэх нь 429); start: false — хязгааргүй", async () => {
+  const store = new Map<string, unknown>();
+  const mapStore = { get: (k: string) => store.get(k) as never, set: (k: string, tx: unknown) => void store.set(k, tx), delete: (k: string) => store.delete(k) };
+  const { login } = setup({ store: mapStore });
+  const qr = { ...req("POST", "/auth/eid/start", { body: { mode: "qr" } }), ip: "192.0.2.1" };
+  for (let i = 0; i < 20; i++) assert.equal((await login.handleRequest(qr)).status, 200, `#${i}`);
+  assert.equal((await login.handleRequest(qr)).status, 429);
+  assert.equal((await login.handleRequest({ ...qr, ip: "192.0.2.2" })).status, 200);
+  const off = setup({ store: mapStore, rateLimit: { start: false } }).login;
+  for (let i = 0; i < 25; i++) assert.equal((await off.handleRequest(qr)).status, 200);
+});
+
+test("хязгаарлагч: 10 000 түлхүүрээр дүүргэж тухайн түлхүүрийн хязгаарыг тойрох боломжгүй (шинэ түлхүүр fail-closed)", async () => {
+  const store = new Map<string, unknown>();
+  const mapStore = { get: (k: string) => store.get(k) as never, set: (k: string, tx: unknown) => void store.set(k, tx), delete: (k: string) => store.delete(k) };
+  const { login } = setup({ store: mapStore, rateLimit: { start: { limit: 1, windowMs: 60_000 } } });
+  const qr = (ip: string) => ({ ...req("POST", "/auth/eid/start", { body: { mode: "qr" } }), ip });
+  assert.equal((await login.handleRequest(qr("victim"))).status, 200);
+  assert.equal((await login.handleRequest(qr("victim"))).status, 429);
+  let denied = 0;
+  for (let i = 0; i < 10_000; i++) if ((await login.handleRequest(qr(`10.0.${i >> 8}.${i & 255}`))).status === 429) denied++;
+  assert.equal(denied, 1); // 9 999 шинэ түлхүүр орж, 10 000 дахь нь дүүрсэн тул татгалзагдана
+  assert.equal((await login.handleRequest(qr("victim"))).status, 429); // 0.18.x-д бүгд цэвэрлэгдээд 200 болдог байв
+  assert.equal((await login.handleRequest(qr("new-ip"))).status, 429);
+});
+
+test("memoryLoginStore: дээд хэмжээ — дүүрвэл хугацаа дууссаныг цэвэрлэж, үгүй бол LoginStoreFullError (хуучныг устгахгүй)", async () => {
+  const st = memoryLoginStore(2);
+  const tx = { sessionId: "a" } as never;
+  await st.set("a", tx, 60_000);
+  await st.set("b", tx, 1);
+  await new Promise((r) => setTimeout(r, 5));
+  await st.set("c", tx, 60_000); // b хугацаа дууссан → цэвэрлэгдэнэ
+  assert.throws(() => st.set("d", tx, 60_000), LoginStoreFullError);
+  assert.ok(st.get("a") && st.get("c"));
+  await st.set("a", tx, 60_000); // байгаа түлхүүрийг шинэчлэх нь хэмжээ нэмэхгүй
+  assert.equal(MEMORY_LOGIN_STORE_MAX, 10_000);
+  // start: store дүүрсэн → 503 busy
+  const full = { get: () => undefined, set: () => { throw new LoginStoreFullError(); }, delete: () => false };
+  const r = await setup({ store: full }).login.handleRequest(req("POST", "/auth/eid/start", { body: { mode: "qr" } }));
+  assert.equal(r.status, 503);
+  assert.deepEqual(JSON.parse(String(r.body)), { error: "busy" });
 });
 
 test("onSuccess: tx-ийг дуусгасны дараа дуудагдана — onSuccess дотор store-оос уншвал алга (нэг удаа)", async () => {

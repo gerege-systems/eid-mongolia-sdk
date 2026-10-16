@@ -51,11 +51,12 @@ Smart-ID-тэй RP-үүдийн хэв маяг: хөтөчид **нэг тов�
 **Backend** (нэг instance-ийг модулийн түвшинд):
 
 ```ts
-import { EidClient, createEidLogin } from "@gerege-systems/eid-mongolia-sdk";
+import { EidClient, NATIONAL_ROOT_CA_PEM, createEidLogin } from "@gerege-systems/eid-mongolia-sdk";
 
 const eid = new EidClient({
   credentials: { rpUUID: process.env.EID_RP_UUID!, rpName: "Интернэт банк", apiSecret: process.env.EID_SECRET! },
-  trust: { trustAnchorsPem: [process.env.EID_NATIONAL_ROOT_CA_PEM!] },
+  // Root (01) — итгэлийн тулгуур; завсрын 02 → 03 → 04 нь SDK-д суусан (CITIZEN_INTERMEDIATES_PEM, анхдагч).
+  trust: { trustAnchorsPem: [NATIONAL_ROOT_CA_PEM] },
 });
 
 export const eidLogin = createEidLogin({
@@ -100,8 +101,12 @@ export const POST = (req: Request) => eidLogin.handle(req);
 (Express `req.ip`, `app.set("trust proxy", …)`-тэй) шууд хэрэглэгдэнэ. Go: `eidlogin.Config.ClientIP` (`eidlogin.ForwardedClientIP(n)`) — ижил дүрэм.
 
 **Хязгаарлалт** (`rateLimit`). Түлхүүр: `start:<ip>` (IP мэдэгдэж байвал), `push:<idCode>`; татгалзвал 429 + `Retry-After: 60`.
-Анхдагч `defaultRateLimit` = `{ push: { limit: 3, windowMs: 60_000 } }` — нэг дугаарт минутад 3 мэдэгдэл (MFA fatigue);
-`start`-ийг анхдагчаар хязгаарладаггүй.
+Анхдагч `defaultRateLimit` = `{ start: { limit: 20, windowMs: 60_000 }, push: { limit: 3, windowMs: 60_000 } }` — нэг
+IP-ээс минутад 20 эхлэл (0.19.0-аас; IP мэдэгдэж байвал — `req.ip` / `trustProxy`), нэг дугаарт минутад 3 мэдэгдэл
+(MFA fatigue). Санах ойн хязгаарлагч төрөл тус бүрд ≤ 10 000 түлхүүр: дүүрвэл цонх нь өнгөрсөнийг цэвэрлэж, хоосроогүй
+бол **шинэ** түлхүүрийг 429-өөр татгалзана (fail-closed) — байгаа тоолуурыг хэзээ ч арилгахгүй тул олон IP/дугаараар
+дүүргэж хязгаарыг тойрох боломжгүй. `memoryLoginStore(max = 10_000)` ч мөн адил: дүүрвэл start 503 `{ error: "busy" }`,
+эхэлсэн нэвтрэлтийг устгахгүй. Олон instance бол Redis store/limiter.
 
 - **Объект** `{ start?, push? }` — анхдагчтай **нэгтгэгдэнэ**: өгсөн төрөл анхдагчийг дарна, өгөөгүй нь анхдагчаараа үлдэнэ.
   Утга: `{ limit, windowMs }` (процессын санах ойн гулсах цонх), `(key) => boolean | Promise<boolean>` (Redis г.м.),
@@ -111,7 +116,8 @@ export const POST = (req: Request) => eidLogin.handle(req);
 
 ```ts
 import { defaultRateLimit } from "@gerege-systems/eid-mongolia-sdk";
-rateLimit: { start: { limit: 20, windowMs: 60_000 } },             // push 3/мин хэвээр
+rateLimit: { start: { limit: 60, windowMs: 60_000 } },             // NAT-ын ард олон хэрэглэгчтэй бол; push 3/мин хэвээр
+rateLimit: { start: false },                                       // start-ийг өөрийн давхаргад (nginx/gateway) хязгаарладаг бол
 rateLimit: { ...defaultRateLimit, start: (k) => redis.allow(k) },  // ижил — анхдагчийг илэрхий бичсэн
 rateLimit: { push: (k) => redis.allow(k, 3, 60) },                 // олон instance: push-ийг Redis-ээр солино
 ```
@@ -280,7 +286,7 @@ const eid = new EidClient({
     rpName: "Интернэт банк", // дэд системийн нэр, ≤120 тэмдэгт
     apiSecret: process.env.EID_SECRET!, // rp_sk_…
   },
-  trust: { trustAnchorsPem: [process.env.EID_NATIONAL_ROOT_CA_PEM!] }, // ← Mongolian National Root CA, production-д ЗААВАЛ
+  trust: { trustAnchorsPem: [NATIONAL_ROOT_CA_PEM] }, // ← Mongolian National Root CA, production-д ЗААВАЛ (завсрын 02–04 SDK-д суусан)
 });
 
 // ETSI (PNOMN-<иргэний дугаар>) / регистр / иргэний дугаар — аль нь ч болно (сервер танина)
@@ -454,7 +460,10 @@ verifyTokenCertificates(res, csrAuth, csrSign); // гэрчилгээ бүр CSR
 // токеноор нэвтрэх (AUTH эрх)
 const ch = await eid.token.authChallenge();
 const digest = tokenAuthDigest(ch.rpUUID, ch.challenge); // токен CKM_ECDSA → түүхий r||s
-const who = await eid.token.authVerify(ch.challengeId, authCertDer, rs);
+// 0.19.0-аас challenge-ийг бүтнээр нь өгнө (RP хадгалсан, эсвэл клиентээс буцаж ирсэн — CA challengeId-ээр тулгана):
+// SDK CA-ийн OK-д дангаар итгэхгүй — r||s-ийг гэрчилгээний түлхүүрээр, rpUUID-ийг өөрийнхтэй, гэрчилгээг trust-аар
+// (гинж, issuer, зориулалт auth) шалгаад дараа нь CA руу илгээнэ.
+const who = await eid.token.authVerify(ch, authCertDer, rs);
 
 // токеноор PDF: §3d — prepare() → токен CKM_ECDSA(dtbs) → r||s → complete() → registerSignature() (sessionID-гүй, medium "token")
 ```
@@ -600,6 +609,10 @@ Go backend-д `complete` хийж болно).
 
 0.15.0-д `eid.pdf` (`prepare`, `document`, `documentVerified`, `tokenPrepare`, `tokenFinalize`, `tokenDocument`) ба
 `pdfTimeoutMs` / `pdfMaxBytes` устсан — PDF upload endpoint-ууд CA-д байхгүй (2026-10-14-нд устсан, 404).
+
+**Хугацаа.** `registerSignature` (`POST /pdf/signatures` — CA CMS + TSA + LTV-г шалгадаг) 0.19.0-аас өөрийн
+`pdfTimeoutMs`-тэй, анхдагч **80 с** (`DEFAULT_PDF_TIMEOUT_MS`; Go SDK `Config.PDFTimeout` / `DefaultPDFTimeout`-тэй ижил);
+бусад дуудлага `timeoutMs` (анхдагч 15 с). 0.18.x-д бүртгэл ердийн 15 с-ээр тасардаг байв.
 
 ## 3e. Word → PDF хөтөч дотор — `@gerege-systems/eid-mongolia-sdk/convert`
 
@@ -804,8 +817,13 @@ OK ирж болзошгүй. Иймд `ResponseValidator`:
    **pathLenConstraint** (04 нь `pathlen:0`), CA-ийн keyUsage keyCertSign, CA бүрийн хугацаа, **EKU** (auth →
    clientAuth, sign → emailProtection — CA-ийн профайл; CA-д EKU байвал түүнд багтах), үл таних **critical
    extension** → татгалзана. **Name constraints**-тэй CA гинжинд байвал fail-closed (CA-ийн бодит гинжинд алга).
-   `intermediatesPem`-д 02, 03, 04-ийг бүгдийг өгнө (хариунд гинж ирдэггүй). certificatePolicies-ийг шалгахгүй.
-3. Гэрчилгээ хүчинтэй хугацаанд + шаардсан `certificateLevel` (default `QUALIFIED`)
+   Хариунд гинж ирдэггүй — `intermediatesPem` өгөөгүй бол SDK-д суусан 02, 03, 04 (`CITIZEN_INTERMEDIATES_PEM`,
+   0.19.0-аас). certificatePolicies-ийг шалгахгүй.
+3. Гэрчилгээ хүчинтэй хугацаанд + шаардсан `certificateLevel` (default `QUALIFIED`). **0.19.0-аас түвшинг
+   гэрчилгээнээс тогтооно** (`certificateLevelOf`): гарын үсгийн гэрчилгээнд qcStatements QcCompliance → QUALIFIED
+   (+ QcSSCD → QSCD), qcStatements-гүй (USB токен) → ADVANCED; нэвтрэлтийн гэрчилгээнд CA qcStatements бичдэггүй тул
+   профайлаар — KeyUsage keyEncipherment (утасны P-CITIZEN-AUTH) → QUALIFIED, үгүй (токены) → ADVANCED. Хариуны
+   `certificateLevel` түүнээс өндөр бол татгалзана; бага бол хариуныхыг авна. Буцаах `certificateLevel` = энэ утга.
 4. Гарын үсгийг иргэний public key-ээр шалгана:
    - **auth** → ACSP_V2 payload (`smart-id|ACSP_V2|serverRandom|rpChallenge|userChallenge|B64(rpName)|B64(brokeredRpName)|B64(SHA-256(interactions))|interactionTypeUsed|initialCallbackUrl|flowType`, hash = хүсэлтийн `hashAlgorithm`) дээр — `flowType`, `userChallenge`, `serverRandom` ба алгоритмын downgrade-ийг мөн шалгана;
      `expectedFlowType` өгвөл `flowType` эхлүүлсэн урсгалтай ЯГ таарах, Web2App/App2App-д `userChallengeVerifier` заавал
@@ -822,9 +840,11 @@ OK ирж болзошгүй. Иймд `ResponseValidator`:
 5. Цуцлалт — `trust.revocation` (OCSP/CRL hook) → `checkRevocation`, эсвэл `checkRevocationStatus` (`"good"` /
    `"unchecked"` (soft-fail) / `"skipped"` (hook алга)). Бэлэн hook: `ocspRevocationChecker()` — гэрчилгээний AIA OCSP
    (revoked/unknown → `"revoked"`; хариугүй → `"unknown"`, горим шийднэ). Өөр checker/горимоор нэг удаа: `checkRevocationWith`.
-6. Нэмэлт (сонголттой): `allowedIssuerSkis: [CITIZEN_ISSUING_CA_SKI]` — зөвхөн иргэний Issuing CA (04)-ийн гэрчилгээ;
-   `checkKeyUsage: true` — auth → clientAuth, sign → nonRepudiation (CA-ийн профайл); `schemeName` — CA-ийн
-   `acsp_scheme_name` (анхдагч `smart-id`).
+6. **Issuer ба зориулалт (0.19.0-аас анхдагч):** `allowedIssuerSkis` анхдагч `[CITIZEN_ISSUING_CA_SKI]` (trust anchor
+   тохируулсан үед) — зөвхөн иргэний Issuing CA (04)-ийн гэрчилгээ (ижил root-ийн доорх байгууллагын 05 г.м. хаагдана;
+   унтраах: `allowAnyIssuer: true`); `checkKeyUsage` анхдагч `true` — auth → KU digitalSignature + EKU clientAuth,
+   sign → KU nonRepudiation (CA-ийн профайл) — нэвтрэлтийн (PIN1) түлхүүрийн гарын үсэг `validateSign`-д тэнцэхгүй
+   (унтраах: `checkKeyUsage: false`, зөвлөхгүй). `schemeName` — CA-ийн `acsp_scheme_name` (анхдагч `smart-id`).
 
 Аль нэг алхам бүтэлгүйтвэл `ValidationError` шиднэ — хариунд **итгэхгүй**. Алдааны текстэд иргэний нэр, PNOMN, РД
 ордоггүй (`NetworkError.op`-д замыг `/etsi/…` болгоно) — шууд лог руу бичиж болно.

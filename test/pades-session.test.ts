@@ -5,6 +5,8 @@ import { createHash } from "node:crypto";
 
 import {
   EidClient,
+  DEFAULT_PDF_TIMEOUT_MS,
+  NetworkError,
   ValidationError,
   ApiError,
   PDF_REGISTER_ERROR_CODES,
@@ -270,4 +272,22 @@ test("getRepresentations — claimedRole дамжина", async () => {
     { orgEtsi: "NTRMN-6235972", claimedRole: "Гүйцэтгэх захирал, Гэрэгэ Системс ХХК (NTRMN-6235972)" }] } }));
   const r = await eid.organization.getRepresentations("PNOMN-1");
   assert.equal(r.representations[0]!.claimedRole, "Гүйцэтгэх захирал, Гэрэгэ Системс ХХК (NTRMN-6235972)");
+});
+
+test("registerSignature — анхдагч хугацаа 80 с (Go DefaultPDFTimeout); pdfTimeoutMs, ердийн timeoutMs-ээс тусдаа", async () => {
+  assert.equal(DEFAULT_PDF_TIMEOUT_MS, 80_000);
+  const docID = "11111111-1111-4111-8111-111111111111";
+  const sha = (s: string) => createHash("sha256").update(s).digest("hex");
+  const input = { docID, sessionID: "s1", cms: new Uint8Array([0x30, 1]), outSha256: sha("o"), sigRevSha256: sha("r"),
+    inSha256: sha("i"), pageSha256: sha("p"), fileName: "a.pdf", revIndex: 1 };
+  // Хариу 60 мс-ийн дараа: timeoutMs 20 (ердийн) ч PDF бүртгэлд хамаарахгүй; pdfTimeoutMs 20 бол тасарна.
+  const slow = (pdfTimeoutMs?: number) => new EidClient({
+    credentials: CREDS, trust: { allowUntrusted: true }, timeoutMs: 20, ...(pdfTimeoutMs ? { pdfTimeoutMs } : {}),
+    fetchImpl: (_url, init) => new Promise((resolve, reject) => {
+      const t = setTimeout(() => resolve(new Response(JSON.stringify({ docID, revIndex: 1 }), { status: 201 })), 60);
+      init?.signal?.addEventListener("abort", () => { clearTimeout(t); reject(init.signal!.reason); });
+    }),
+  });
+  assert.equal((await slow().registerSignature(input)).created, true);
+  await assert.rejects(() => slow(20).registerSignature(input), (e: unknown) => e instanceof NetworkError && e.timeout === true);
 });

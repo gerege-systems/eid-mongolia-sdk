@@ -1,6 +1,6 @@
 // @gerege-systems/eid-mongolia-sdk — нийтийн гадаргуу.
 
-export { EidClient, DEFAULT_BASE_URL, resolveBaseUrl, type ClientConfig } from "./client.js";
+export { EidClient, DEFAULT_BASE_URL, DEFAULT_PDF_TIMEOUT_MS, resolveBaseUrl, type ClientConfig } from "./client.js";
 export { Http, type HttpConfig } from "./http.js";
 export { AuthApi, type AuthOptions, type AuthDefaults } from "./auth.js";
 export {
@@ -77,6 +77,9 @@ export {
   type RevocationStatus,
   type RevocationOutcome,
   CITIZEN_ISSUING_CA_SKI,
+  NATIONAL_ROOT_CA_PEM,
+  CITIZEN_INTERMEDIATES_PEM,
+  certificateLevelOf,
   verifyPayloadSignature,
   verifyPrehashedSignature,
   userChallengeOf,
@@ -104,6 +107,8 @@ export {
 export {
   createEidLogin,
   memoryLoginStore,
+  MEMORY_LOGIN_STORE_MAX,
+  LoginStoreFullError,
   withReturnHint,
   forwardedClientIp,
   defaultRateLimit,

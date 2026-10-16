@@ -49,6 +49,11 @@ export interface ClientConfig {
   defaultCertificateLevel?: CertificateLevel;
   /** HTTP timeout (мс). */
   timeoutMs?: number;
+  /**
+   * `registerSignature` (`POST /pdf/signatures`)-ийн хугацаа (мс). Анхдагч {@link DEFAULT_PDF_TIMEOUT_MS} (80 с — CA CMS +
+   * TSA + LTV-г шалгадаг; nginx proxy_read_timeout-оос бага; Go SDK `Config.PDFTimeout`-тэй ижил). 0.18.x-д ердийн 15 с.
+   */
+  pdfTimeoutMs?: number;
   /** undici Dispatcher (mTLS client cert). */
   dispatcher?: unknown;
   /** fetch орлуулагч (тест). */
@@ -70,6 +75,9 @@ export interface ClientConfig {
 
 /** RP-API-ийн албан ёсны хост (2026-09-28-наас бүх RP, /v3-гүй). */
 export const DEFAULT_BASE_URL = "https://rp.eidmongolia.mn";
+
+/** `registerSignature`-ийн анхдагч хугацаа (мс) — Go SDK `DefaultPDFTimeout` (80s)-тэй ижил. */
+export const DEFAULT_PDF_TIMEOUT_MS = 80_000;
 
 // Хуучин (0.2.x) хэлбэр: ca. хост руу /v3 залгадаг байсан. ca. дээр RP-API /v3-гүй байхгүй тул чимээгүй 404-ийн
 // оронд тодорхой алдаа.
@@ -119,12 +127,12 @@ export class EidClient {
     const level: CertificateLevel = cfg.defaultCertificateLevel ?? "QUALIFIED";
 
     this.auth = new AuthApi(http, cfg.credentials, { certificateLevel: level });
-    this.sign = new SignApi(http, cfg.credentials, { certificateLevel: level, sessionTtlMs: cfg.signSessionTtlMs });
+    this.sign = new SignApi(http, cfg.credentials, { certificateLevel: level, sessionTtlMs: cfg.signSessionTtlMs, pdfTimeoutMs: cfg.pdfTimeoutMs });
     this.organization = new OrganizationApi(http);
     this.person = new PersonApi(http);
-    this.token = new TokenApi(http, cfg.credentials);
-    this.session = new SessionApi(http);
     this.validator = new ResponseValidator(cfg.trust ?? {});
+    this.token = new TokenApi(http, cfg.credentials, this.validator);
+    this.session = new SessionApi(http);
     this.rpName = cfg.credentials.rpName;
     this.http = http;
   }
