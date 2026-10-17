@@ -4,6 +4,7 @@
 import { EidError } from "./errors.js";
 import { NATIONAL_ROOT, INTERMEDIATES, EID_ISSUERS } from "./pades/assets/chain.js";
 import { fromB64 } from "./pades/bytes.js";
+import { subtle } from "./pades/crypto.js";
 import { Fetcher, isBrowser, type FetchFn } from "./pades/fetch.js";
 import { parseCertificate, type Certificate } from "./pades/x509.js";
 import { DSSStatus, Evaluator, OnlineStatus, signLevelOf, type PdfReport, type SignatureReport, type StatusSource } from "./pades/validate/evaluate.js";
@@ -12,8 +13,19 @@ import { fromDate } from "./pades/validate/gofmt.js";
 
 export type { CertInfo, Indication, LTVInfo, PdfReport, Revocation, SignatureReport, TimestampInfo } from "./pades/validate/evaluate.js";
 
-/** validatePdf-ийн алдааны кодууд (CA: too_large / not_pdf / no_signature / too_many_signatures). */
-export type ValidatePdfErrorCode = "PDF_TOO_LARGE" | "PDF_INVALID" | "PDF_NO_SIGNATURE" | "PDF_TOO_MANY_SIGNATURES" | "REQUEST_INVALID";
+/**
+ * validatePdf-ийн алдааны кодууд (CA: too_large / not_pdf / encrypted / no_signature / too_many_signatures).
+ * - `PDF_ENCRYPTED` (0.20.1) — `/Encrypt`-тэй баримт (RC4 / AES, хоосон нууц үгтэй ч): шалгахгүй.
+ * - `UNSUPPORTED_ENVIRONMENT` (0.20.1) — Web Crypto (`crypto.subtle`) алга: http (secure биш) хуудас эсвэл хуучин хөтөч.
+ */
+export type ValidatePdfErrorCode =
+  | "PDF_TOO_LARGE"
+  | "PDF_INVALID"
+  | "PDF_ENCRYPTED"
+  | "PDF_NO_SIGNATURE"
+  | "PDF_TOO_MANY_SIGNATURES"
+  | "REQUEST_INVALID"
+  | "UNSUPPORTED_ENVIRONMENT";
 
 export class ValidatePdfError extends EidError {
   constructor(
@@ -66,6 +78,12 @@ const embedded = (b64: string[]): Certificate[] => b64.map((x) => parseCertifica
 export async function validatePdf(pdf: Uint8Array | ArrayBuffer, opts: ValidatePdfOptions = {}): Promise<PdfReport> {
   const doc = pdf instanceof Uint8Array ? pdf : new Uint8Array(pdf);
   if (doc.length > MAX_PDF_BYTES) throw new ValidatePdfError("PDF_TOO_LARGE", "PDF 10 MiB-аас их");
+  try {
+    await subtle();
+  } catch {
+    // Хөтчид crypto.subtle зөвхөн secure context-д (https, localhost) — эс бөгөөс гарын үсэг шалгах боломжгүй.
+    throw new ValidatePdfError("UNSUPPORTED_ENVIRONMENT", "Web Crypto (crypto.subtle) алга — https хуудас эсвэл шинэ хөтөч шаардлагатай");
+  }
   const roots = opts.roots && opts.roots.length > 0 ? ders(opts.roots, "roots") : embedded(NATIONAL_ROOT);
   const extraInter = ders(opts.intermediates, "intermediates");
   const issuers = [...embedded(EID_ISSUERS), ...ders(opts.issuers, "issuers")];
@@ -76,6 +94,7 @@ export async function validatePdf(pdf: Uint8Array | ArrayBuffer, opts: ValidateP
     if (e instanceof ExtractError) {
       if (e.code === "no_signature") throw new ValidatePdfError("PDF_NO_SIGNATURE", e.message);
       if (e.code === "too_many") throw new ValidatePdfError("PDF_TOO_MANY_SIGNATURES", e.message);
+      if (e.code === "encrypted") throw new ValidatePdfError("PDF_ENCRYPTED", e.message);
     }
     throw new ValidatePdfError("PDF_INVALID", "PDF задарсангүй");
   }

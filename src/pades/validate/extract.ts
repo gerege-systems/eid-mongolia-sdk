@@ -14,11 +14,21 @@ import { Revisions, type SigMeta } from "./revisions.js";
 export const MAX_PDF_BYTES = 10 << 20;
 const MAX_SIGNATURES = 16;
 
+const MESSAGES = {
+  not_pdf: "PDF файл задарсангүй",
+  encrypted: "шифрлэгдсэн PDF-ийг шалгах боломжгүй — нууцлалыг арилгаад дахин оролдоно уу",
+  no_signature: "баримтад цахим гарын үсэг алга",
+  too_many: "баримтад хэт олон гарын үсэг байна",
+} as const;
+
 export class ExtractError extends Error {
-  constructor(readonly code: "not_pdf" | "no_signature" | "too_many") {
-    super(code === "not_pdf" ? "PDF файл задарсангүй" : code === "no_signature" ? "баримтад цахим гарын үсэг алга" : "баримтад хэт олон гарын үсэг байна");
+  constructor(readonly code: keyof typeof MESSAGES) {
+    super(MESSAGES[code]);
   }
 }
+
+/** trailer / xref stream-ийн /Encrypt лавлагаа (Go encryptRef). */
+const ENCRYPT_REF = /\/Encrypt\s+\d+\s+\d+\s+R/;
 
 export interface RawTimestamp {
   time: GoTime;
@@ -81,12 +91,13 @@ export async function extract(doc: Uint8Array, profile: Profile = "own"): Promis
   let rdr: Reader;
   try {
     rdr = new Reader(doc);
-    // digitorus: /Encrypt-тэй баримтыг (хоосон нууц үгээр тайлах гэж оролдоно; AES-256 г.м. — алдаа) задлахгүй. TS
-    // уншигч шифр тайлдаггүй тул бүгдийг not_pdf (RC4/AES-128 хоосон нууц үгтэй гарын үсэгтэй PDF-д Go-оос зөрнө).
-    if (!rdr.trailerValue().key("Encrypt").isNull()) throw new Error("encrypted");
   } catch {
-    throw new ExtractError("not_pdf");
+    // Go: digitorus AES-256 / нууц үгтэй баримтыг нээхгүй — /Encrypt лавлагаагаар encrypted.
+    throw new ExtractError(ENCRYPT_REF.test(fromLatin1(doc)) ? "encrypted" : "not_pdf");
   }
+  // /Encrypt — ямар ч шифрлэлт (хоосон нууц үгтэй ч) encrypted: Go/CA (digitorus) RC4-д /Contents-ийг эвддэг, AES-128-д
+  // panic хийдэг тул гурвуулаа шалгахгүй. keys() — resolve хийхгүй (Go trailer Keys()).
+  if (rdr.trailerValue().keys().includes("Encrypt")) throw new ExtractError("encrypted");
   const sigs: RawSignature[] = [];
   const visible = new Map<number, boolean>();
   let docID = "";

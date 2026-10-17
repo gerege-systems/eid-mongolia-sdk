@@ -759,9 +759,14 @@ try {
     s.signer_name; s.signing_time; s.signature_level; s.certificate_level; s.problems; s.visible; s.key_medium;
   }
 } catch (e) {
-  if (e instanceof ValidatePdfError) e.code; // PDF_NO_SIGNATURE | PDF_INVALID | PDF_TOO_LARGE | PDF_TOO_MANY_SIGNATURES
+  if (e instanceof ValidatePdfError) e.code; // PDF_NO_SIGNATURE | PDF_INVALID | PDF_ENCRYPTED | PDF_TOO_LARGE | PDF_TOO_MANY_SIGNATURES | UNSUPPORTED_ENVIRONMENT
 }
 ```
+
+- Алдааны кодууд (0.20.1): `PDF_ENCRYPTED` — `/Encrypt`-тэй баримт (RC4, AES-128, AES-256; хоосон хэрэглэгчийн нууц үгтэй
+  ч) шалгагдахгүй: «Шифрлэгдсэн PDF-ийг шалгах боломжгүй — нууцлалыг арилгаад дахин оролдоно уу» (Go `pades.ValidatePDF`,
+  CA ижил). `UNSUPPORTED_ENVIRONMENT` — `crypto.subtle` алга (http хуудас — secure context биш, эсвэл хуучин хөтөч):
+  https хуудас эсвэл шинэ хөтөч шаардлагатай (өмнө нь `PDF_INVALID`).
 
 - Шалгалт: ByteRange (завсар нь яг `/Contents`) ба messageDigest, CMS гарын үсэг (WebCrypto), signingCertificateV2,
   гинж (үндэсний 01 → 02/03 → 04/05), KU/EKU, хугацаа (цагийн тэмдгийн цагт), RFC 3161 токен, гарын үсгийн ДАРААХ revision

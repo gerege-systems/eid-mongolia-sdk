@@ -16,8 +16,8 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const GO_SDK_REPO = "https://github.com/gerege-systems/eid-mongolia-sdk-go";
-// Tag v0.7.0 (pades-golden-v3 + pades/testdata/validate).
-export const GO_SDK_COMMIT = "7c67790ca2befb717679c9192ac1ec5a8fd550b5";
+// Tag v0.7.1 (pades-golden-v3 + pades/testdata/validate, шифрлэгдсэн тохиолдол).
+export const GO_SDK_COMMIT = "7ae6557a357fab006d51fcdb8d7e832e55ec816d";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const check = process.argv.includes("--check");
