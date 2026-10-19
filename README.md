@@ -751,6 +751,8 @@ if (isWordFile(file)) {
   Libertine…), Calc/Impress/Draw/Math-ийн UI тохиргоо, дүрсний сан, gallery хасагдана; NotoSans/NotoSerif (Ө Ү-ийн
   орлуулагч) ба бүх `registry/*.xcd` (OMML томьёо) үлдэнэ. upstream `soffice.data` / `soffice.js`-ийн sha256 таарахгүй бол
   хуулалт унана. 4 баримт дээр (хүснэгт, зураг, диаграм, томьёо, 11 фонтоор кирилл) PDF пиксел-ижил.
+  **Upstream хувилбар шинэчлэхэд** (`@matbee/libreoffice-converter` 2.7.2 → …): `DATA_TRIM`-ийн sha256 ба хасах жагсаалтыг
+  шинэ build дээр дахин гаргаж `npm run test:convert-e2e`-ээр (Chromium + WebKit) батал — хүснэгт, Ө Ү, томьёо.
 - Worker-ийн скриптүүдэд (`<assetsBase><хувилбар>/*.js`) **тусдаа CSP**: `default-src 'self'; script-src 'self'
   'wasm-unsafe-eval' 'unsafe-eval'` (Emscripten-д `eval` хэрэгтэй — зөвхөн worker-т). Хуудасны хатуу CSP (nonce +
   `'strict-dynamic'`) хэвээр байна; хуудсанд `connect-src 'self'` хангалттай.
