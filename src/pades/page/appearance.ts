@@ -272,6 +272,60 @@ export function nthPage(root: Value, n: number): Value | undefined {
   return walk(root, 0);
 }
 
+/** isVerifyPage-ийн уншиx /Annots-ийн дээд тоо (Go maxVerifyAnnots, PLACEMENT_SPEC §3.7-тэй ижил). */
+const MAX_VERIFY_ANNOTS = 10000;
+
+/**
+ * Go core.DefaultStampPage — `appearance.page` 0 / байхгүй үеийн хуудас (PLACEMENT_SPEC §1a): баримтын (модны
+ * дарааллаар) eID verify хуудас БИШ сүүлийн хуудас (1-ээс) ба хуудасны тоо n. Verify хуудас = /Annots-д
+ * `/Subtype /Link`, `/A << /S /URI /URI verifyUri >>` (байт-ижил) annotation-тай хуудас. Бүх хуудас verify бол n.
+ */
+export function defaultStampPage(doc: Uint8Array, verifyUri: string): { page: number; n: number } {
+  const inc = new Incremental(doc);
+  const pages: Value[] = [];
+  const walk = (v: Value, depth: number): void => {
+    if (depth > MAX_DEPTH || pages.length > 1 << 16) return;
+    switch (v.key("Type").name()) {
+      case "Page":
+        pages.push(v);
+        break;
+      case "Pages": {
+        const kids = v.key("Kids");
+        for (let i = 0; i < kids.len(); i++) walk(kids.index(i), depth + 1);
+      }
+    }
+  };
+  walk(inc.root().key("Pages"), 0);
+  const n = pages.length;
+  for (let i = n - 1; i >= 0; i--) {
+    if (!isVerifyPage(pages[i]!, verifyUri)) return { page: i + 1, n };
+  }
+  return { page: n, n };
+}
+
+/** Go isVerifyPage — хуудсын /Annots-д verifyUri руу заасан Link байгаа эсэх; уншиж чадахгүй бол false (агуулга). */
+function isVerifyPage(page: Value, verifyUri: string): boolean {
+  try {
+    const annots = page.key("Annots");
+    if (annots.kind() !== "array") return false;
+    const want = latin1(verifyUri);
+    const m = Math.min(annots.len(), MAX_VERIFY_ANNOTS);
+    for (let i = 0; i < m; i++) {
+      const a = annots.index(i);
+      if (a.kind() !== "dict" || a.key("Subtype").name() !== "Link") continue;
+      const act = a.key("A");
+      if (act.kind() !== "dict" || act.key("S").name() !== "URI") continue;
+      const u = act.key("URI");
+      if (u.kind() !== "string") continue;
+      const got = u.rawString();
+      if (got.length === want.length && got.every((b, j) => b === want[j])) return true;
+    }
+  } catch {
+    /* Go: recover → false */
+  }
+  return false;
+}
+
 /** Баримтын /Pages модны /Page объектын тоо (модыг тоолно, /Count-д итгэхгүй). */
 export function pageCount(doc: Uint8Array): number {
   const inc = new Incremental(doc);
