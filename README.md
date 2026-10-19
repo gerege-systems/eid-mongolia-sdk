@@ -690,7 +690,7 @@ Go backend-д `complete` хийж болно).
 
 ```bash
 npm install @gerege-systems/eid-mongolia-sdk @matbee/libreoffice-converter@2.7.2   # optional peer — зөвхөн /convert-д
-npx eid-mongolia-convert-assets public/eid-convert                                 # build үед; git-д commit хийхгүй (~250 MB)
+npx eid-mongolia-convert-assets public/eid-convert                                 # build үед; git-д commit хийхгүй (~190 MB + .br/.gz)
 ```
 
 ```ts
@@ -711,7 +711,7 @@ if (isWordFile(file)) {
 | Функц | Тайлбар |
 |---|---|
 | `wordToPdf(file, { assetsBase, onProgress?, signal?, fileName?, verbose? })` | `{ pdf, pages, warnings }`. Нэг worker-ийг дахин ашиглана, дуудлагууд дараалалд. `verbose: true` — LibreOffice-ийн оношилгооны лог консолд (анхдагч чимээгүй; утга солигдвол worker дахин асна) |
-| `converterStatus({ assetsBase })` | `{ cached, downloadBytes }` — татахаас өмнө хэмжээг хэлэх (gzip хэмжээ, кэштэй бол 0) |
+| `converterStatus({ assetsBase })` | `{ cached, downloadBytes }` — татахаас өмнө хэмжээг хэлэх (brotli хэмжээ, кэштэй бол 0) |
 | `isWordFile(file \| name)` | .docx / .doc эсэх (нэр, MIME). Агуулгыг `wordToPdf` эхний байтаар шалгана |
 | `disposeConverter()` | worker-ийг зогсоож санах ойг чөлөөлнө (кэш үлдэнэ) |
 
@@ -720,9 +720,39 @@ if (isWordFile(file)) {
   require-corp` (SharedArrayBuffer). Зөвхөн тэр route-д тавьж болно — тэгвэл тэр хуудас руу **hard navigation**
   (`<a href>`, client-side router биш). Үгүй бол `wordToPdf` шууд `NOT_ISOLATED` (хүлээхгүй). COEP-ийн дор гадны
   CORP/CORS-гүй зураг, iframe ачаалагдахгүй.
-- Asset-ууд **өөрийн хост** дээр (`assetsBase`): `manifest.json` — `Cache-Control: no-cache`; `<хувилбар>/*` — урт кэш
-  (`public, max-age=31536000, immutable`), `.wasm` → `application/wasm`, gzip/brotli шахалттай (≈250 MB → gzip 77 MB).
-  Эхний удаа татсаныг SDK Cache Storage-д хадгална (дахин татахгүй); хувилбар солигдвол хуучныг устгана.
+- Asset-ууд **өөрийн хост** дээр (`assetsBase`): `manifest.json` — `Cache-Control: no-cache`; `<хувилбар>-<hash>/*` —
+  урт кэш (`public, max-age=31536000, immutable`), `.wasm` → `application/wasm`. Эхний удаа татсаныг SDK Cache Storage-д
+  хадгална (дахин татахгүй); хавтас солигдвол хуучныг устгана.
+- **Шахалт.** `eid-mongolia-convert-assets` файл бүрийн хажууд `.br` (brotli 11) ба `.gz` (gzip 9) бичнэ —
+  серверт `brotli_static` / `gzip_static`-ээр өг (динамик шахалт 147 MB-ийн wasm-д хэт удаан). Хэмжээ (2.7.2):
+
+  | файл | задарсан | gzip | brotli |
+  |---|---|---|---|
+  | soffice.wasm | 147.4 MB | 48.5 MB | 33.8 MB |
+  | soffice.data | 43.2 MB (upstream 99.7 MB) | 11.9 MB | 7.1 MB |
+  | soffice.js + бусад JS | 0.5 MB | 0.1 MB | 0.1 MB |
+
+  Нийт эхний татал ≈ 41.0 MB brotli / 60.6 MB gzip (өмнө нь 77 MB gzip). brotli 11 нь soffice.wasm-д удаан (M4 Pro
+  дээр ~4 мин) — build-ийг хурдасгах бол `EID_CONVERT_BROTLI_QUALITY=9` (wasm 39.2 MB, ~9 с). nginx (ngx_brotli модуль):
+
+  ```nginx
+  location /eid-convert/ {
+      brotli_static on;          # <файл>.br, Accept-Encoding: br үед
+      gzip_static   on;          # <файл>.gz, бусад үед
+      types { application/wasm wasm; application/octet-stream data; text/javascript js; application/json json; }
+      add_header Cache-Control "public, max-age=31536000, immutable";   # + доорх worker CSP (*.js)
+      location = /eid-convert/manifest.json { add_header Cache-Control "no-cache"; }
+  }
+  ```
+
+  SDK задарсан байтыг тоолж (`onProgress`-ийн `loaded`/`total`) manifest-ийн `bytes`-тэй тулгадаг тул сервер аль
+  шахалтаар ч өгсөн progress зөв. Safari brotli-г зөвхөн HTTPS-ээр хүсдэг.
+- **soffice.data-г багасгасан** (99.7 → 43.2 MB): Writer → PDF-д хэрэггүй фонт (араб, еврей, армян, гүрж,
+  Libertine…), Calc/Impress/Draw/Math-ийн UI тохиргоо, дүрсний сан, gallery хасагдана; NotoSans/NotoSerif (Ө Ү-ийн
+  орлуулагч) ба бүх `registry/*.xcd` (OMML томьёо) үлдэнэ. upstream `soffice.data` / `soffice.js`-ийн sha256 таарахгүй бол
+  хуулалт унана. 4 баримт дээр (хүснэгт, зураг, диаграм, томьёо, 11 фонтоор кирилл) PDF пиксел-ижил.
+  **Upstream хувилбар шинэчлэхэд** (`@matbee/libreoffice-converter` 2.7.2 → …): `DATA_TRIM`-ийн sha256 ба хасах жагсаалтыг
+  шинэ build дээр дахин гаргаж `npm run test:convert-e2e`-ээр (Chromium + WebKit) батал — хүснэгт, Ө Ү, томьёо.
 - Worker-ийн скриптүүдэд (`<assetsBase><хувилбар>/*.js`) **тусдаа CSP**: `default-src 'self'; script-src 'self'
   'wasm-unsafe-eval' 'unsafe-eval'` (Emscripten-д `eval` хэрэгтэй — зөвхөн worker-т). Хуудасны хатуу CSP (nonce +
   `'strict-dynamic'`) хэвээр байна; хуудсанд `connect-src 'self'` хангалттай.
@@ -730,7 +760,8 @@ if (isWordFile(file)) {
   `eid-mongolia-convert-assets` (≥ 0.18.2) upstream worker-ийг (`@matbee/libreoffice-converter@2.7.2`-ийн sha256-аар
   баталгаажсан үед л) patch хийж эдгээрийг `verbose: true`-гүй бол гаргахгүй; `manifest.json`-д `"patched": true`. Hash
   таарахгүй бол patch-гүй хуулж анхааруулна — хувиргалт ажиллана, лог л гарна. SDK шинэчилсний дараа asset-ийг дахин
-  хуул (`rev` солигдож worker-ийн immutable кэш шинэчлэгдэнэ; soffice.wasm/.data дахин татагдахгүй).
+  хуул (`rev` солигдож worker-ийн immutable кэш шинэчлэгдэнэ; soffice.js өөрчлөгдөөгүй бол soffice.wasm/.data дахин
+  татагдахгүй).
 - Удаан CPU (0.21.0): upstream `soffice.js`-ийн `pthreadPoolSize=4` нь удаан компьютер дээр баримт ачаалахад
   гацдаг (deadlock) тул `eid-mongolia-convert-assets` үүнийг 8 болгоно (`manifest.json`-д `"pthreadPoolSize": 8`;
   зөвхөн JS). `soffice.js`-ийн sha256 мэдэгдэж буй 2.7.2-тэй таарахгүй бол хуулалт унана — asset-ийг дахин хуул.
@@ -745,7 +776,7 @@ Calibri / Cambria / Courier New-ийн Liberation / Carlito / Caladea орлуу
 `limit` — §3d `prepare`-ийн 10 223 616 байт). Фонтын анхааруулга .docx-д л (heuristic); .doc-д үгүй.
 
 Шалгасан: Chromium ба WebKit (Playwright, `npm run test:convert-e2e`) — .docx ба .doc → PDF → `prepare`, кэштэй дахин
-ажиллуулахад татахгүй, цуцлалт, COEP-гүй хуудас. Мобайл хөтөчид 250 MB WASM санах ой их шаардана — сул утсанд унаж
+ажиллуулахад татахгүй, цуцлалт, COEP-гүй хуудас. Мобайл хөтөчид 147 MB WASM санах ой их шаардана — сул утсанд унаж
 болзошгүй.
 
 ## 3f. Гарын үсэгтэй файлыг имэйлээр — `eid.share()` (`SIGN` эрх)
