@@ -8,5 +8,5 @@
 - **Яагаад:** портал хоёр дахь гарын үсэгт `page: 0` дамжуулдаг — тэмдэг эхний гарын үсгийн verify хуудсан дээр бууж
   байв (0.25.0).
 - **Хаана:** `src/pades/page/appearance.ts`, `src/pades.ts` (`visibleSpec`, `PadesAppearance.page` JSDoc), README;
-  golden pin Go `52c8dd8` (#35, golden v6: +5 кейс); `test/pades-placement.test.ts` (`defaultStampPage`).
+  golden pin Go `874ae48` (#35, golden v6: +5 кейс); `test/pades-placement.test.ts` (`defaultStampPage`).
 - **Шалгасан:** `npm run lint`, `npm test`, `node scripts/sync-pades-golden.mjs --check`; golden 28 кейс байт-ижил.
