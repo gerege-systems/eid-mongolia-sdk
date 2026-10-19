@@ -465,6 +465,15 @@ Session-ий `onBehalfOf` блок (`role`/`roleLabel`/`rightType`/`rightTypeLab
 нэр: `keyCompromise`, `superseded`, `cessationOfOperation` …). `status` өөрчлөгдөхгүй: сунгалт/дахин бүртгэлээр
 солигдсон мөр `SUSPENDED` + `revocationReason: "superseded"`, `revokedAt`-гүй.
 
+`keyMedium: "TOKEN"` мөрөнд `organization?` (байгууллагын токен) ба `tokenSerial?` — гэрчилгээ олгогдсон USB токены
+серийн дугаар. Нэг токены AUTH + SIGN-ийг байгууллага/огноогоор таамаглахгүй, `tokenSerial`-аар бүлэглэ (сунгалтаар
+солигдсон мөр ч өөрийн токены дугаартай). MOBILE/HSM мөрөнд болон хуучин CA-д талбар байхгүй.
+
+```ts
+const { certificates } = await eid.person.certificates(etsi);
+const byToken = Map.groupBy(certificates.filter((c) => c.tokenSerial), (c) => c.tokenSerial!);
+```
+
 ## 3c. USB токен
 
 ```ts
