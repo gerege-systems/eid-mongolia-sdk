@@ -21,7 +21,7 @@ import { LTVError, collectLTVWithWait, timestampToken } from "./pades/ltv.js";
 import { checkStructure } from "./pades/pdf/nesting.js";
 import { CertificateRevokedError } from "./pades/revocation.js";
 import { MAX_INPUT_BYTES } from "./pades/limits.js";
-import { AppearanceError, pageCount, round100, type Visible } from "./pades/page/appearance.js";
+import { AppearanceError, defaultStampPage, round100, type Visible } from "./pades/page/appearance.js";
 import { appendVerifyPage } from "./pades/page/page.js";
 import { appendDSS } from "./pades/pdf/dss.js";
 import { embedCMS, PlaceholderOverflowError, prepareSignature, signatureContents } from "./pades/pdf/signature.js";
@@ -133,7 +133,11 @@ export interface PadesPrepareOptions {
  * байрлал {@link PadesPrepared.placement}-д.
  */
 export interface PadesAppearance {
-  /** Оролтын баримтын хуудас, 1-ээс; 0/байхгүй = оролтын сүүлийн хуудас (энэ prepare-ийн нэмэх verify хуудас тооцогдохгүй). */
+  /**
+   * Оролтын баримтын хуудас, 1-ээс (тодорхой дугаар — юуг ч алгасахгүй); 0/байхгүй = оролтын eID verify хуудас БИШ
+   * сүүлийн хуудас: энэ prepare-ийн нэмэх ба өмнөх гарын үсгүүдийн нэмсэн verify хуудас тооцогдохгүй (0.26.0+,
+   * PLACEMENT_SPEC §1a — `/Annots`-д энэ баримтын `https://ca.eidmongolia.mn/verify/<docId>` Link-тэй хуудас).
+   */
   page?: number;
   x: number;
   y: number;
@@ -452,17 +456,18 @@ function checkAppearance(o: PadesPrepareOptions): void {
   if (role !== "" && /[\p{Cc}\p{Cf}\p{Cs}]/u.test(role)) throw bad("claimedRole-д удирдах тэмдэгт");
 }
 
-/** Go visibleSpec: хуудас (0 → оролтын сүүлийн), h100, хэл, огноо (+08), verify URL. */
+/** Go visibleSpec: хуудас (0 → verify биш сүүлийн — PLACEMENT_SPEC §1a), h100, хэл, огноо (+08), verify URL. */
 function visibleSpec(doc: Uint8Array, o: PadesPrepareOptions, name: string, now: Date, docId: string, revIndex: number): Visible {
   const a = o.appearance!;
   if (docId === "") throw new PadesError("REQUEST_INVALID", "appearance: docId заавал (баримтад verify хуудас алга)");
-  let n: number;
+  // page 0 / байхгүй = eID verify хуудас БИШ сүүлийн хуудас (PLACEMENT_SPEC §1a); тодорхой дугаар хэвээр.
+  let last: number, n: number;
   try {
-    n = pageCount(doc);
+    ({ page: last, n } = defaultStampPage(doc, VERIFY_URL_PREFIX + docId));
   } catch (e) {
     throw new PadesError("PDF_INVALID", "PDF задарсангүй", { cause: e });
   }
-  const page = a.page || n;
+  const page = a.page || last;
   if (page > n) throw new PadesError("REQUEST_INVALID", `appearance: page ${page} > хуудасны тоо ${n}`);
   const z = new Date(now.getTime() + 8 * 3600_000);
   const p2 = (v: number): string => String(v).padStart(2, "0");

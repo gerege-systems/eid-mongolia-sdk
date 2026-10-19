@@ -23,6 +23,7 @@ interface Internals {
   nthPage(root: unknown, n: number): { key(k: string): unknown } | undefined;
   pageGeometry(page: unknown): { box: number[]; rot: number };
   round100(v: number): number;
+  defaultStampPage(doc: Uint8Array, verifyUri: string): { page: number; n: number };
   Incremental: new (b: Uint8Array) => { root(): { key(k: string): unknown } };
 }
 
@@ -32,7 +33,7 @@ async function internals(): Promise<Internals> {
     stdin: {
       contents: [
         `export { occupancy, placeVisible, placeCandidates, UnscannableError } from "./src/pades/page/occupancy.ts";`,
-        `export { nthPage, pageGeometry, round100 } from "./src/pades/page/appearance.ts";`,
+        `export { nthPage, pageGeometry, round100, defaultStampPage } from "./src/pades/page/appearance.ts";`,
         `export { Incremental } from "./src/pades/pdf/incremental.ts";`,
       ].join("\n"),
       resolveDir: root,
@@ -338,4 +339,33 @@ test("placement fonts — хэт том /FirstChar, /W CID нь saturating int (
     [7200, 49700, 7800, 51000],
     [7200, 39700, 10200, 41000],
   ]);
+});
+
+// ── appearance.page 0 = the last page that is not this document's eID verify page (PLACEMENT_SPEC §1a; Go
+// TestDefaultStampPage) ──
+
+test("defaultStampPage — skips only the document's own verify pages", () => {
+  const docA = "f5a6b7c8-d9e0-4f1a-8b2c-3d4e5f607182";
+  const quartzDoc = "6f0c2b9e-3a1d-4c55-9b7e-0a1b2c3d4e5f";
+  const uri = (id: string): string => `https://ca.eidmongolia.mn/verify/${id}`;
+  const rd = (f: string): Uint8Array => readFileSync(new URL(f, G));
+  const cases: [string, Uint8Array, string, number, number][] = [
+    ["no verify page", rd("input/quartz-pdf13.pdf"), uri(quartzDoc), 1, 1],
+    ["one verify page (first signature)", rd("output/quartz-pdf13.pdf"), uri(quartzDoc), 1, 2],
+    ["two verify pages", rd("input/two-verify.pdf"), uri(docA), 1, 3],
+    ["other docId", rd("output/quartz-pdf13.pdf"), uri(docA), 2, 2],
+    ["fake verify (other docId, /rev suffix)", rd("input/fake-verify.pdf"), uri(docA), 2, 2],
+  ];
+  const page = (annots: string): Uint8Array =>
+    fxPDF([
+      s("<< /Type /Catalog /Pages 2 0 R >>"),
+      s("<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+      s(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Annots ${annots} >>`),
+      s(`<< /Type /Annot /Subtype /Link /Rect [0 0 1 1] /A << /S /URI /URI (${uri(docA)}) >> >>`),
+    ]);
+  // Every page is a verify page → the last page; a direct annotation dictionary counts too.
+  cases.push(["only verify pages", page("[4 0 R]"), uri(docA), 1, 1]);
+  cases.push(["direct annotation", page(`[<< /Subtype /Link /A << /S /URI /URI (${uri(docA)}) >> >>]`), uri(docA), 1, 1]);
+  cases.push(["byte-different URI", page("[4 0 R]"), uri(docA) + "/", 1, 1]);
+  for (const [name, doc, u, p, n] of cases) assert.deepEqual(I.defaultStampPage(doc, u), { page: p, n }, name);
 });
