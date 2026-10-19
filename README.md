@@ -506,6 +506,13 @@ const who = await eid.token.authVerify(ch, authCertDer, rs);
 байхгүй. Scope солих = иргэн eID апп-аас токеноо цуцлаад (`/v3/mobile/tokens/{tokenSerial}/revoke`) шинээр олгуулна;
 хэрэглэгчид: «Токены төрлийг (хувийн/байгууллага) солихын тулд eID апп-аас токеныг цуцлаад шинээр олгуулна уу».
 
+**Хувийн токены автомат солилт** (CA 2026-10-19, discovery `tokenCertificate.personalAutoSupersede: true`): хувийн
+хязгаар хүрсэн үед өөр `tokenSerial`-тай шинэ хувийн токен 409 биш — `st.supersedes` (`{ tokenSerial }[]`) ирнэ; хувийн
+токенд шинэ олголт амжилттай болбол (PIN2 + гэрчилгээ) өмнөх хувийн токены AUTH + SIGN superseded (4)-оор цуцлагдана.
+Татгалзсан / хугацаа дууссан олголт өмнөхийг хөндөхгүй. PIN2-оос өмнө: «Таны өмнөх USB токен (EP2003-…)-ийн гэрчилгээ
+хүчингүй болно». 409 `TOKEN_LIMIT_REACHED` `kind: "PERSONAL"` зөвхөн `limit: 0` (хувийн олголт хаалттай) үед;
+байгууллагын токен хатуу хязгаар хэвээр.
+
 **Апп баталгаа (`appTransaction`, заавал биш)** (CA 2026-10-19, discovery `tokenCertificate.appTransaction:
 "optional"` — `eid.token.certificateInfo().appTransaction`): macOS App Store build нь StoreKit 2 `AppTransaction`-ийн
 JWS (compact) мөрийг desktop-оос дамжуулна — `issueCertificate({ …, appTransaction: jws })`. CA Apple-ийн сервер рүү

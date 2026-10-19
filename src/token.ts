@@ -53,6 +53,12 @@ export interface TokenCertStart {
   csrAuthSha256: string;
   csrSignSha256: string;
   expiresAt?: string;
+  /**
+   * Хувийн олголтод, иргэний хувийн токены хязгаар хүрсэн үед: олголт амжилттай болоход AUTH + SIGN нь superseded (4)-оор
+   * автоматаар цуцлагдах өөр serial-тай хувийн токенууд (CA 2026-10-19). Бусад үед алга. Эхлэлийн мөчийнх — PIN2-оос өмнө
+   * иргэнд анхааруул («Таны өмнөх USB токен (…)-ийн гэрчилгээ хүчингүй болно»).
+   */
+  supersedes?: { tokenSerial: string }[];
 }
 
 export interface TokenCertItem {
@@ -154,6 +160,11 @@ export interface TokenCertInfo {
   scopeLockedOnRenewal: boolean;
   /** `"optional"` — `appTransaction`-ийг CA хүлээн авна. Хуучин CA-д "" (талбар илгээвэл 400). */
   appTransaction: string;
+  /**
+   * true — хувийн хязгаар хүрсэн үед өөр serial-тай шинэ хувийн токен 409 биш: `supersedes` ирж, олголт амжилттай болоход
+   * өмнөх хувийн токен солигдоно; 409 `TOKEN_LIMIT_REACHED` kind=PERSONAL зөвхөн limit=0 үед. Хуучин CA-д false.
+   */
+  personalAutoSupersede: boolean;
   raw: unknown;
 }
 
@@ -213,6 +224,9 @@ export class TokenApi {
       csrAuthSha256: String(r.csrAuthSha256).toLowerCase(),
       csrSignSha256: String(r.csrSignSha256).toLowerCase(),
       ...(typeof r.expiresAt === "string" ? { expiresAt: r.expiresAt } : {}),
+      ...(Array.isArray(r.supersedes)
+        ? { supersedes: r.supersedes.map((x) => ({ tokenSerial: String(rec(x).tokenSerial ?? "") })) }
+        : {}),
     };
   }
 
@@ -230,6 +244,7 @@ export class TokenApi {
       onBehalfOf: String(t.onBehalfOf ?? ""),
       scopeLockedOnRenewal: t.scopeLockedOnRenewal === true,
       appTransaction: String(t.appTransaction ?? ""),
+      personalAutoSupersede: t.personalAutoSupersede === true,
       raw: d.tokenCertificate,
     };
   }

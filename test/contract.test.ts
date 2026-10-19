@@ -129,6 +129,7 @@ test("TokenCertificate: discovery-ийн tokenCertificate блок TokenCertInfo
   assert.equal(typeof t.enabled, "boolean", "tokenCertificate.enabled");
   assert.equal(t.scopeLockedOnRenewal, true, "tokenCertificate.scopeLockedOnRenewal");
   assert.equal(t.appTransaction, "optional", "tokenCertificate.appTransaction (CA !390)");
+  assert.equal(t.personalAutoSupersede, true, "tokenCertificate.personalAutoSupersede (CA !392)");
 });
 
 // CA !377 (прод 35f92276)-оос discovery-д заавал — алга бол унана.

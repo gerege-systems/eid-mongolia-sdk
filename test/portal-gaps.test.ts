@@ -316,7 +316,7 @@ test("token.certificateInfo: discovery-ийн tokenCertificate блок (scopeLo
   const block = {
     certificateLevel: "ADVANCED", enabled: true, issue: "https://rp.eidmongolia.mn/token/certificate",
     keyAlgorithm: "EC P-256 (ecdsa-with-SHA256)", onBehalfOf: "optional", permission: "TOKEN_ISSUE",
-    result: "https://rp.eidmongolia.mn/token/certificate/{sessionID}", scopeLockedOnRenewal: true, appTransaction: "optional",
+    result: "https://rp.eidmongolia.mn/token/certificate/{sessionID}", scopeLockedOnRenewal: true, appTransaction: "optional", personalAutoSupersede: true,
   };
   const { eid, calls } = client({ status: 200, body: { version: "v3", tokenCertificate: block } });
   const i = await eid.token.certificateInfo();
@@ -326,17 +326,22 @@ test("token.certificateInfo: discovery-ийн tokenCertificate блок (scopeLo
   assert.equal(i.permission, "TOKEN_ISSUE");
   assert.equal(i.onBehalfOf, "optional");
   assert.equal(i.appTransaction, "optional");
+  assert.equal(i.personalAutoSupersede, true);
   const old = await client({ status: 200, body: { version: "v3" } }).eid.token.certificateInfo();
   assert.equal(old.enabled, false);
   assert.equal(old.scopeLockedOnRenewal, false);
   assert.equal(old.appTransaction, "");
+  assert.equal(old.personalAutoSupersede, false);
 });
 
 test("token.issueCertificate — appTransaction (CA !390): илгээх, 16 KiB хил, 400 APP_ATTESTATION_INVALID", async () => {
   const ok = { body: { sessionID: "ts1", csrAuthSha256: hx(TOK_A.csr), csrSignSha256: hx(TOK_S.csr) } };
   const { eid, calls } = client(ok);
   const base = { signerEtsi: "PNOMN-1", csrAuth: TOK_A.csr, csrSign: TOK_S.csr, tokenSerial: "x" };
-  await eid.token.issueCertificate({ ...base, appTransaction: "eyJhbGciOiJFUzI1NiJ9.e30.sig" });
+  const s0 = await eid.token.issueCertificate({ ...base, appTransaction: "eyJhbGciOiJFUzI1NiJ9.e30.sig" });
+  assert.equal(s0.supersedes, undefined);
+  const sup = client({ body: { ...ok.body, supersedes: [{ tokenSerial: "EP2003-0001" }] } });
+  assert.deepEqual((await sup.eid.token.issueCertificate(base)).supersedes, [{ tokenSerial: "EP2003-0001" }]);
   assert.equal(JSON.parse(calls[0]!.body!).appTransaction, "eyJhbGciOiJFUzI1NiJ9.e30.sig");
   await eid.token.issueCertificate({ ...base, appTransaction: "" });
   assert.equal("appTransaction" in JSON.parse(calls[1]!.body!), false);
