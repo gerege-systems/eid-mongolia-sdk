@@ -688,6 +688,9 @@ if (isWordFile(file)) {
   баталгаажсан үед л) patch хийж эдгээрийг `verbose: true`-гүй бол гаргахгүй; `manifest.json`-д `"patched": true`. Hash
   таарахгүй бол patch-гүй хуулж анхааруулна — хувиргалт ажиллана, лог л гарна. SDK шинэчилсний дараа asset-ийг дахин
   хуул (`rev` солигдож worker-ийн immutable кэш шинэчлэгдэнэ; soffice.wasm/.data дахин татагдахгүй).
+- Удаан CPU (0.21.0): upstream `soffice.js`-ийн `pthreadPoolSize=4` нь удаан компьютер дээр баримт ачаалахад
+  гацдаг (deadlock) тул `eid-mongolia-convert-assets` үүнийг 8 болгоно (`manifest.json`-д `"pthreadPoolSize": 8`;
+  зөвхөн JS). `soffice.js`-ийн sha256 мэдэгдэж буй 2.7.2-тэй таарахгүй бол хуулалт унана — asset-ийг дахин хуул.
 - MPL-2.0: `<хувилбар>/NOTICE.txt` (эх код, лицензийн холбоос) asset-уудтай хамт үйлчилгээнд байна — хэрэглэгчийн
   нүүрэнд (тусламж/лиценз хэсэгт) LibreOffice-ийг дурд.
 
