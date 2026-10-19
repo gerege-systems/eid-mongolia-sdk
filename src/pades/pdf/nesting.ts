@@ -19,7 +19,7 @@ export class StructureError extends Error {
 }
 
 // Go regexp `\s` = [\t\n\f\r ] (JS `\s`-ээс ялгаатай).
-const ENCRYPT_REF = /\/Encrypt[\t\n\f\r ]+\d+[\t\n\f\r ]+\d+[\t\n\f\r ]+R/;
+const ENCRYPT_REF = /\/Encrypt(?:[\t\n\f\r ]+\d+[\t\n\f\r ]+\d+[\t\n\f\r ]+R|[\t\n\f\r ]*<<)/;
 
 const isSpace = (c: number): boolean => c === 0 || c === 0x09 || c === 0x0a || c === 0x0c || c === 0x0d || c === 0x20;
 // ()<>[]{}/%

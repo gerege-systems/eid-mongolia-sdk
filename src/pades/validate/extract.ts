@@ -29,8 +29,8 @@ export class ExtractError extends Error {
   }
 }
 
-/** trailer / xref stream-ийн /Encrypt лавлагаа (Go encryptRef). */
-const ENCRYPT_REF = /\/Encrypt\s+\d+\s+\d+\s+R/;
+/** trailer / xref stream-ийн /Encrypt лавлагаа эсвэл шууд толь (Go encryptRef, CA !382). */
+const ENCRYPT_REF = /\/Encrypt(?:\s+\d+\s+\d+\s+R|\s*<<)/;
 
 export interface RawTimestamp {
   time: GoTime;

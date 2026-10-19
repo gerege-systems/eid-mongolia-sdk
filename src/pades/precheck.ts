@@ -19,7 +19,8 @@ export class PrecheckError extends Error {
   }
 }
 
-const ENCRYPT_KEY = /\/Encrypt\s+\d+\s+\d+\s+R/;
+// /Encrypt n g R лавлагаа эсвэл шууд толь (`/Encrypt <<`, `/Encrypt<<`) — `/EncryptMetadata` биш (CA !382).
+const ENCRYPT_KEY = /\/Encrypt(?:\s+\d+\s+\d+\s+R|\s*<<)/;
 
 function openReader(doc: Uint8Array): Reader | undefined {
   try {
