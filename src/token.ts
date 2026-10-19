@@ -9,7 +9,7 @@
 
 import { X509Certificate, createHash, createPublicKey, timingSafeEqual } from "node:crypto";
 import { RP_ROUTES, routePath } from "./contract.js";
-import { ApiError, ValidationError } from "./errors.js";
+import { ApiError, AppTransactionTooLargeError, ValidationError } from "./errors.js";
 import type { Http } from "./http.js";
 import type { TokenOrganization } from "./person.js";
 import { parseSubject, tlv } from "./subject.js";
@@ -28,7 +28,22 @@ export interface TokenCertInput {
   tokenLabel?: string;
   /** Байгууллагын токен (NTRMN-…); хоосон/алга = хувийн токен. */
   onBehalfOf?: string;
+  /**
+   * Заавал биш: macOS App Store build-ийн StoreKit 2 AppTransaction JWS (compact, ≤ {@link MAX_APP_TRANSACTION_BYTES}).
+   * Хоосон/алга бол илгээхгүй (Windows — баталгаагүй олголт). Ирсэн бол CA offline шалгана; хүчингүй бол 400
+   * {@link APP_ATTESTATION_INVALID}, утас руу push явахгүй (CA docs/TOKEN_CERT.md §App Store баталгаа).
+   */
+  appTransaction?: string;
 }
+
+/** `appTransaction`-ий дээд хэмжээ (UTF-8 байт; CA-ийн хязгаар, 16 KiB). */
+export const MAX_APP_TRANSACTION_BYTES = 16 * 1024;
+
+/**
+ * 400 `APP_ATTESTATION_INVALID` (`ApiError.code`) — `appTransaction` ирсэн боловч хүчингүй (гинж Apple Root CA - G3
+ * биш, гарын үсэг, bundleId, орчин Xcode, signedDate > 30 хоног …); аль алхам унасныг CA хэлэхгүй. Утас руу push явахгүй.
+ */
+export const APP_ATTESTATION_INVALID = "APP_ATTESTATION_INVALID";
 
 export interface TokenCertStart {
   sessionId: string;
@@ -137,6 +152,8 @@ export interface TokenCertInfo {
    * `TOKEN_SCOPE_CHANGE`. Хуучин CA-д талбар алга → false.
    */
   scopeLockedOnRenewal: boolean;
+  /** `"optional"` — `appTransaction`-ийг CA хүлээн авна. Хуучин CA-д "" (талбар илгээвэл 400). */
+  appTransaction: string;
   raw: unknown;
 }
 
@@ -161,10 +178,16 @@ export class TokenApi {
    * байгууллагын токен зөвхөн тэр байгууллагаар (`onBehalfOf` ижил), хувийн токен зөвхөн хувиараа. Өөр scope бол
    * 409 `TOKEN_SCOPE_CHANGE` (override үгүй); scope солих = иргэн eID апп-аас токеноо цуцлаад шинээр олгуулна.
    * Бусад 409: `TOKEN_LIMIT_REACHED` ({@link tokenLimitOf}), `TOKEN_IN_USE` ({@link TokenConflictCode}).
+   * 400 {@link APP_ATTESTATION_INVALID} — `appTransaction` хүчингүй; {@link MAX_APP_TRANSACTION_BYTES}-аас их бол
+   * {@link AppTransactionTooLargeError} (илгээхгүй).
    */
   async issueCertificate(input: TokenCertInput): Promise<TokenCertStart> {
     if (!input.signerEtsi?.trim() || !input.csrAuth?.length || !input.csrSign?.length || !input.tokenSerial?.trim()) {
       throw new Error("token: signerEtsi, csrAuth, csrSign, tokenSerial шаардлагатай");
+    }
+    const appTransaction = input.appTransaction?.trim() ?? "";
+    if (Buffer.byteLength(input.appTransaction ?? "", "utf8") > MAX_APP_TRANSACTION_BYTES) {
+      throw new AppTransactionTooLargeError("token: appTransaction 16 KiB-аас их");
     }
     // CA DisallowUnknownFields — яг эдгээр талбар.
     const body: Record<string, unknown> = {
@@ -178,6 +201,7 @@ export class TokenApi {
       flow: "notification",
     };
     if (input.tokenLabel) body.tokenLabel = input.tokenLabel;
+    if (appTransaction) body.appTransaction = appTransaction;
     const r = rec(await this.http.post(routePath(RP_ROUTES.tokenCertificate), body));
     if (!hexSha256Equal(r.csrAuthSha256, input.csrAuth) || !hexSha256Equal(r.csrSignSha256, input.csrSign)) {
       throw new ValidationError("token: CA-ийн csrAuthSha256/csrSignSha256 илгээсэн CSR-тэй таарсангүй");
@@ -205,6 +229,7 @@ export class TokenApi {
       keyAlgorithm: String(t.keyAlgorithm ?? ""),
       onBehalfOf: String(t.onBehalfOf ?? ""),
       scopeLockedOnRenewal: t.scopeLockedOnRenewal === true,
+      appTransaction: String(t.appTransaction ?? ""),
       raw: d.tokenCertificate,
     };
   }
