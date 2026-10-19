@@ -34,6 +34,9 @@ interface Fake {
   calls: { method: string; url: string; body?: unknown }[];
   /** notification start-ын хариу: undefined = бодит session; "json400" — eID-ийн татгалзал; "proxy400" — JSON бус 4xx; "500"; "401". */
   refuse?: "json400" | "proxy400" | "500" | "401";
+  /** discovery sessionTtl.auth (сек; undefined = талбар алга); expMs — start хариуны expiresAt (одоо + expMs). */
+  ttlAuth?: number;
+  expMs?: number;
 }
 
 // validateAuth-ийн stub-ийн гэрчилгээ (AIA-гүй self-signed): revocation шалгагч issuer-ийг trust pool-оос (0.19.0-аас
@@ -56,15 +59,18 @@ function setup(opts: Partial<Parameters<typeof createEidLogin>[0]> = {}) {
     const body = init?.body ? JSON.parse(String(init.body)) : undefined;
     fake.calls.push({ method: init?.method ?? "GET", url: u.pathname + u.search, body });
     const ok = (b: unknown) => new Response(JSON.stringify(b), { status: 200, headers: { "Content-Type": "application/json" } });
+    const exp = (b: Record<string, unknown>) =>
+      fake.expMs ? { ...b, expiresAt: new Date(Date.now() + fake.expMs).toISOString().replace(/\.\d+Z$/, "Z") } : b;
+    if (u.pathname === "/.well-known/eid") return ok(fake.ttlAuth ? { version: "v3", sessionTtl: { auth: fake.ttlAuth, sign: 600 } } : { version: "v3" });
     if (u.pathname === "/authentication/device-link/anonymous") {
-      return ok({ sessionID: SID, sessionToken: "tok_ABC-123", sessionSecret: SECRET, deviceLinkBase: "https://ca.eidmongolia.mn/dl", vc: "12345" });
+      return ok(exp({ sessionID: SID, sessionToken: "tok_ABC-123", sessionSecret: SECRET, deviceLinkBase: "https://ca.eidmongolia.mn/dl", vc: "12345" }));
     }
     if (u.pathname.startsWith("/authentication/notification/etsi/")) {
       if (fake.refuse === "json400") return new Response('{"error":"хэрэглэгч олдсонгүй"}', { status: 400, headers: { "Content-Type": "application/json" } });
       if (fake.refuse === "proxy400") return new Response("<html>400 The SSL certificate error</html>", { status: 400, headers: { "Content-Type": "text/html" } });
       if (fake.refuse === "401") return new Response('{"error":"unauthorized"}', { status: 401, headers: { "Content-Type": "application/json" } });
       if (fake.refuse === "500") return new Response('{"error":"дотоод алдаа"}', { status: 500, headers: { "Content-Type": "application/json" } });
-      return ok({ sessionID: SID, vc: { type: "alphaNumeric4", value: "54321" } });
+      return ok(exp({ sessionID: SID, vc: { type: "alphaNumeric4", value: "54321" } }));
     }
     if (u.pathname === `/session/${SID}`) return ok(fake.session);
     return new Response("{}", { status: 404 });
@@ -664,4 +670,46 @@ test("push: CA TIMEOUT → EXPIRED (decoy-той ижил төгсгөл, FAILED
   const r = await login.handleRequest(req("GET", "/auth/eid/status", { headers: { cookie: cookieOf(s.headers) } }));
   assert.deepEqual(JSON.parse(r.body), { state: "EXPIRED" });
   assert.deepEqual(events.map((e) => e.kind), ["push_sent", "expired"]);
+});
+
+const maxAge = (h: Record<string, string | string[]>) =>
+  /Max-Age=(\d+)/.exec([h["Set-Cookie"] ?? []].flat().find((c) => c.startsWith("eid_login=")) ?? "")?.[1];
+
+test("push TTL: бодит ба decoy хоёулаа min(ttlMs, discovery sessionTtl.auth) — CA-ийн expiresAt-аас биш", async () => {
+  const { login, fake } = setup();
+  fake.ttlAuth = 60;
+  fake.expMs = 59_500;
+  const real = await login.handleRequest(push("УБ12345678"));
+  fake.refuse = "json400";
+  const decoy = await login.handleRequest(push("УБ87654321"));
+  assert.equal(JSON.parse(real.body).expiresIn, 60);
+  assert.equal(JSON.parse(decoy.body).expiresIn, 60);
+  assert.equal(maxAge(real.headers), "60");
+  assert.equal(maxAge(decoy.headers), "60");
+  assert.equal(fake.calls.filter((c) => c.url === "/.well-known/eid").length, 1, "discovery кэштэй");
+
+  const short = setup({ ttlMs: 30_000 });
+  short.fake.ttlAuth = 300;
+  assert.equal(JSON.parse((await short.login.handleRequest(push("УБ12345678"))).body).expiresIn, 30);
+});
+
+test("push TTL: хуучин CA (discovery-д sessionTtl алга) — бодит push-ийн expiresAt-аас ажигласныг decoy авна", async () => {
+  const { login, fake } = setup({ ttlMs: 600_000 });
+  fake.expMs = 300_000;
+  await login.handleRequest(push("УБ12345678"));
+  fake.refuse = "json400";
+  const n = JSON.parse((await login.handleRequest(push("УБ87654321"))).body).expiresIn;
+  assert.ok(n >= 299 && n <= 301, String(n));
+});
+
+test("QR TTL: CA-ийн expiresAt TTL-ээс эрт бол түүгээр (expiresIn, cookie); expiresAt алга бол ttlMs", async () => {
+  const { login, fake } = setup();
+  fake.expMs = 45_000;
+  const r = await login.handleRequest(req("POST", "/auth/eid/start", { body: { mode: "qr" } }));
+  const n = JSON.parse(r.body).expiresIn;
+  assert.ok(n >= 43 && n <= 45, String(n));
+  assert.equal(maxAge(r.headers), String(n));
+  const old = setup();
+  const o = await old.login.handleRequest(req("POST", "/auth/eid/start", { body: { mode: "qr" } }));
+  assert.equal(JSON.parse(o.body).expiresIn, 120);
 });

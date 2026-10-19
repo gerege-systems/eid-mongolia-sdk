@@ -2,7 +2,7 @@
 
 export { EidClient, DEFAULT_BASE_URL, DEFAULT_PDF_TIMEOUT_MS, resolveBaseUrl, type ClientConfig } from "./client.js";
 export { Http, type HttpConfig } from "./http.js";
-export { AuthApi, type AuthOptions, type AuthDefaults } from "./auth.js";
+export { AuthApi, type AuthOptions, type AuthDefaults, type SessionTtl } from "./auth.js";
 export {
   SignApi,
   type SignOptions,

@@ -267,7 +267,11 @@ export interface EidLoginOptions {
   /** Утсанд харагдах текст (≤60). Анхдагч «<rpName>-д нэвтрэх». */
   displayText?: string;
   certificateLevel?: CertificateLevel;
-  /** Нэвтрэлтийн хугацаа (мс). Анхдагч 120 000. */
+  /**
+   * Нэвтрэлтийн хугацаа (мс). Анхдагч 120 000. CA-ийн session-оос урт байхгүй: QR/web2app-д min(ttlMs, CA-ийн
+   * `expiresAt` − одоо); push-д (бодит ба decoy ижил) min(ttlMs, discovery `sessionTtl.auth`) — decoy-д CA хариу
+   * байхгүй тул хугацааны зөрүү бүртгэлтэй эсэхийн oracle болохгүй.
+   */
   ttlMs?: number;
   /** Status-ийн нэг дуудлагад eID-ийг хүлээх (мс). Анхдагч 1000. */
   pollMs?: number;
@@ -537,6 +541,41 @@ export function createEidLogin(opts: EidLoginOptions): EidLogin {
   const revocation = opts.revocation === false ? undefined : (opts.revocation ?? ocspRevocationChecker());
   const revocationMode = opts.revocationMode ?? "soft-fail";
   const auditKey = opts.auditKey ?? randomBytes(32);
+  // CA-ийн нэвтрэлтийн session-ий хугацаа (discovery sessionTtl.auth; хуучин CA-д бодит push-ээс ажигласан), кэштэй.
+  let caTtl = 0;
+  let caTtlNext = 0;
+  let caTtlInflight: Promise<number> | undefined;
+  /** Бодит ба decoy push хоёулаа дууддаг — ижил хоцрол. Татаж чадахгүй бол өмнөх утга (эсвэл 0); 10 мин кэш, алдаа 1 мин. */
+  function authTtl(ctx: EidLoginContext): Promise<number> {
+    if (Date.now() < caTtlNext) return Promise.resolve(caTtl);
+    caTtlInflight ??= (async () => {
+      caTtlNext = Date.now() + 60_000;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        const t = await Promise.race([
+          client.auth.sessionTtl(),
+          new Promise<never>((_, rej) => {
+            timer = setTimeout(() => rej(new Error("discovery timeout")), 2000);
+          }),
+        ]);
+        caTtlNext = Date.now() + 600_000;
+        if (t.authMs > 0) caTtl = t.authMs;
+      } catch (e) {
+        onError(new Error(`eid-login: discovery sessionTtl: ${e instanceof Error ? e.message : e}`), ctx);
+      } finally {
+        clearTimeout(timer);
+        caTtlInflight = undefined;
+      }
+      return caTtl;
+    })();
+    return caTtlInflight;
+  }
+  /** Хуучин CA (discovery-д sessionTtl алга): бодит push-ийн expiresAt − илгээсэн мөчөөс (±1 с). */
+  function observeAuthTtl(sent: number, expiresAt: number | undefined) {
+    if (expiresAt === undefined || caTtl > 0) return;
+    const d = Math.round((expiresAt - sent) / 1000) * 1000;
+    if (d > 0) caTtl = d;
+  }
   const pushKey = (idCode: string) => createHmac("sha256", auditKey).update(`eid-push-audit:${idCode}`).digest("hex").slice(0, 32);
 
   async function emit(kind: EidLoginEventKind, sessionId: string | null, meta: Record<string, unknown>, ctx: EidLoginContext) {
@@ -621,17 +660,21 @@ export function createEidLogin(opts: EidLoginOptions): EidLogin {
     });
   }
 
-  async function begin(req: EidLoginRequest, mode: EidLoginMode, idCode: string, lang: string) {
+  /** ttlMs — push-д discovery-оор таслагдсан; QR/web2app-д CA-ийн expiresAt-аар дахин таслагдана. */
+  async function begin(req: EidLoginRequest, mode: EidLoginMode, idCode: string, lang: string, ttlMs: number) {
+    const sent = Date.now();
     const level = opts.certificateLevel ? { certificateLevel: opts.certificateLevel } : {};
     let tx: Omit<EidLoginTx, "bindingHash" | "expiresAt">;
     let appLink: string | undefined;
     if (mode === "push") {
       const s = await client.auth.notificationByEtsi(idCode, interactions, level);
       tx = { sessionId: s.sessionId, mode, vc: s.vc, acsp: s.acsp! };
+      observeAuthTtl(sent, s.expiresAt);
     } else {
       const callbackUrl = mode === "web2app" ? withReturnHint(opts.callbackUrl!, header(req.headers, "user-agent")) : undefined;
       const s = await client.auth.deviceLinkAnonymous(interactions, { ...level, callbackUrl });
       if (!s.deviceLinkBase || !s.sessionToken || !s.sessionSecret || !s.acsp) throw new Error("eID хариунд device link талбар дутуу");
+      if (s.expiresAt !== undefined) ttlMs = Math.min(ttlMs, Math.floor((s.expiresAt - Date.now()) / 1000) * 1000);
       tx = {
         sessionId: s.sessionId,
         mode,
@@ -654,25 +697,27 @@ export function createEidLogin(opts: EidLoginOptions): EidLogin {
         });
       }
     }
-    return { ...(await save(tx)), appLink };
+    if (ttlMs < 1000) throw new Error("eID session-ий хугацаа дууссан (expiresAt)");
+    return { ...(await save(tx, ttlMs)), appLink };
   }
 
-  /** Cookie binding үүсгэж tx-ийг TTL-тэй хадгална. */
-  async function save(tx: Omit<EidLoginTx, "bindingHash" | "expiresAt">) {
+  /** Cookie binding үүсгэж tx-ийг ttlMs-тэй хадгална. */
+  async function save(tx: Omit<EidLoginTx, "bindingHash" | "expiresAt">, ttlMs: number) {
     const binding = randomBytes(32).toString("base64url");
-    const full: EidLoginTx = { ...tx, bindingHash: sha256hex(binding), expiresAt: Date.now() + ttl };
-    await store.set(full.sessionId, full, ttl);
-    const setCookie = `${cookieName}=${full.sessionId}.${binding}; ${cookieAttrs(Math.ceil(ttl / 1000))}`;
-    return { tx: full, setCookie, appLink: undefined as string | undefined };
+    const full: EidLoginTx = { ...tx, bindingHash: sha256hex(binding), expiresAt: Date.now() + ttlMs };
+    await store.set(full.sessionId, full, ttlMs);
+    const expiresIn = Math.ceil(ttlMs / 1000);
+    const setCookie = `${cookieName}=${full.sessionId}.${binding}; ${cookieAttrs(expiresIn)}`;
+    return { tx: full, setCookie, expiresIn, appLink: undefined as string | undefined };
   }
 
   /**
    * eID-д байхгүй, хэзээ ч дуусахгүй push session: санамсаргүй UUID v4, eID-тэй ижил 5 оронтой vc (CA: %05d), бодит
-   * push-ийн TTL. Status нь pollMs-ийн хугацаанд барьж PENDING, TTL-ийн дараа EXPIRED — утсаа аваагүй иргэнтэй ижил.
+   * push-ийн ttlMs (min(ttlMs, discovery sessionTtl.auth)). Status нь pollMs-ийн хугацаанд барьж PENDING, TTL-ийн дараа EXPIRED — утсаа аваагүй иргэнтэй ижил.
    */
-  function startDecoy() {
+  function startDecoy(ttlMs: number) {
     const acsp = undefined as unknown as AcspContext; // decoy-д ACSP байхгүй (хэзээ ч баталгаажуулахгүй)
-    return save({ sessionId: randomUUID(), mode: "push", vc: String(randomInt(100000)).padStart(5, "0"), acsp, decoy: true });
+    return save({ sessionId: randomUUID(), mode: "push", vc: String(randomInt(100000)).padStart(5, "0"), acsp, decoy: true }, ttlMs);
   }
 
   async function start(req: EidLoginRequest): Promise<EidLoginResponse> {
@@ -714,11 +759,17 @@ export function createEidLogin(opts: EidLoginOptions): EidLogin {
     if (mode === "push" && !(await rateLimit(`push:${idCode}`))) return limited();
 
     const began = Date.now();
+    let ttlMs = ttl;
+    if (mode === "push") {
+      // Бодит ба decoy push ижил хугацаа авна — CA-ийн хариунаас биш (decoy-д байхгүй), discovery-оос.
+      const ca = await authTtl(ctx);
+      if (ca > 0) ttlMs = Math.min(ttlMs, ca);
+    }
     let r: Awaited<ReturnType<typeof begin>> | undefined;
     let err: unknown;
     let decoy = false;
     try {
-      r = await begin(req, mode, idCode, lang);
+      r = await begin(req, mode, idCode, lang, ttlMs);
     } catch (e) {
       err = e;
     }
@@ -730,7 +781,7 @@ export function createEidLogin(opts: EidLoginOptions): EidLogin {
       onError(new Error(`eid-login: eID push-ийг татгалзав (${ae.status}${ae.code ? ` ${ae.code}` : ""}); decoy session-оор хариулав`), ctx);
       err = undefined;
       try {
-        r = await startDecoy();
+        r = await startDecoy(ttlMs);
         decoy = true;
       } catch (e) {
         err = e;
@@ -753,7 +804,7 @@ export function createEidLogin(opts: EidLoginOptions): EidLogin {
     }
     return json(
       200,
-      { mode, vc: r.tx.vc, ...(mode === "qr" ? { qr: qrLink(r.tx) } : {}), expiresIn: Math.ceil(ttl / 1000) },
+      { mode, vc: r.tx.vc, ...(mode === "qr" ? { qr: qrLink(r.tx) } : {}), expiresIn: r.expiresIn },
       { "Set-Cookie": r.setCookie },
     );
   }
