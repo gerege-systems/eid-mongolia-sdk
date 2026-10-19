@@ -1,4 +1,84 @@
 # Changelog
+## 0.21.0 — 2026-10-19
+
+### Fixed — `/convert`: удаан CPU-тай компьютер дээр Word→PDF хөрвүүлэлт гацаж болзошгүй байсан (0.21.0)
+
+- **Юу (хэрэглэгчид нөлөөлөх засвар):** `eid-mongolia-convert-assets` нь `@matbee/libreoffice-converter@2.7.2`-ийн
+  `soffice.js`-д хатуу заасан `var pthreadPoolSize=4;`-ийг `8` болгоно (upstream файлын sha256-ийг тулгана; таарахгүй бол
+  хуулалт exit 1-ээр унана — patch-гүй asset гацаж болзошгүй). `manifest.json`-д `"pthreadPoolSize": 8`; `rev` солигдож
+  worker/JS-ийн immutable кэш шинэчлэгдэнэ. Зөвхөн JS — `soffice.wasm`/`.data` хөндөгдөхгүй, дахин татагдахгүй.
+- **Яагаад:** 4 thread-ийн pool-д удаан CPU дээр (CI runner — ~4.5× удаан) documentLoad 9/9 удаа гацдаг: LibreOffice-ийн
+  pthread-ийн MEMFS syscall LO worker руу sync proxy хийдэг, worker нь documentLoad-д pthread хүлээж хаагдсан (бүх thread
+  futex_wait). Туршилт: pool 4 гацна, 5/6/8 ажиллана. CI-ийн `convert-e2e` санамсаргүй 10 минутын timeout-ийн шалтгаан. Upstream: https://github.com/matbeedotcom/libreoffice-document-converter/issues/19
+- **Хаана:** `bin/convert-assets.mjs` (`POOL_PATCH`), `test/convert.test.ts`, README §3e.
+- **Шалгасан:** `test/convert.test.ts` (patch хэрэглэгдсэн — хуулсан `soffice.js`-д `=8`, upstream-аас зөвхөн тэр солилт;
+  manifest хэмжээ/`pthreadPoolSize`; hash таарахгүй → exit 1), `convert-e2e` Chromium + WebKit (локал).
+- **Шинэчлэх:** RP-үүд SDK шинэчилсний дараа `eid-mongolia-convert-assets <хавтас>`-ийг дахин ажиллуулна.
+### Fixed — `/Encrypt << … >>` шууд толь → `PDF_ENCRYPTED` (0.21.0)
+
+- **Юу:** trailer-ийн `/Encrypt`-ийг зөвхөн `n g R` лавлагаагаар биш, шууд толиор (`/Encrypt <<`, `/Encrypt<<`) ч
+  шифрлэгдсэн гэж танина — уншигч баримтыг нээж чадахгүй үеийн байтын шалгалтад (`prepare` precheck #4, `validatePdf`,
+  гүн давхарлалтын шалгалтын ObjStm алгасалт). `/EncryptMetadata` encrypted биш хэвээр.
+- **Яагаад:** CA !382-тэй ижил засвар (өмнө нь шууд тольтой эвдэрсэн баримт `PDF_INVALID` болдог байв).
+- **Хаана:** `src/pades/precheck.ts`, `src/pades/validate/extract.ts`, `src/pades/pdf/nesting.ts`; `test/pades-encrypt.test.ts`.
+- **Шалгасан:** `test/pades-encrypt.test.ts` (AES-256 / RC4 шууд толь, уншигч нээгдэх/нээгдэхгүй; `/EncryptMetadata`), `npm test`.
+- **Үлдсэн:** Go SDK-д ижил засвар (өөр PR) орсны дараа golden-д тохиолдол нэмэх бол Go-той тулгана.
+### Security — `validatePdf` / `complete`: цуцлалтын нотолгооны тохирол, шинэлэг байдал, revoked = хатуу алдаа, гүн давхарласан PDF (0.21.0)
+
+- **Юу (зан төлөвийн өөрчлөлт — аюулгүй байдлын засвар, Go SDK v0.7.2 / #28-ийн порт):**
+  - `validatePdf` (DSS ба онлайн): OCSP нь ЭНЭ гэрчилгээнийх байх ёстой — CertID = гинжийн олгогчийн нэр/түлхүүрийн hash +
+    serial (өмнө нь зөвхөн serial, аль ч eID олгогчийн гарын үсэгтэй хариу тооцогддог байв). CRL нь гэрчилгээний олгогчийнх
+    (нэр = олгогчийн subject, AKI = SKI, гарын үсэг). «good» нотолгоо шалгах цагт (цагийн тэмдгийн цаг, эс бөгөөс `time`/одоо)
+    шинэлэг: thisUpdate ≤ одоо+5 мин, nextUpdate ≥ шалгах цаг−5 мин, thisUpdate ≥ шалгах цаг−24 ц эсвэл thisUpdate…nextUpdate
+    нь шалгах цагийг хамарна (`freshAt`). Олгогчийн гарын үсэгтэй «revoked» (OCSP/CRL, онлайн/DSS) нь «good»-ийг үргэлж
+    давна (өмнө нь DSS-д good OCSP + revoked CRL → `valid`; онлайн good нь DSS-ийн revoked-ийг дардаг байв).
+    **Өмнө `valid` байсан зарим баримт одоо `indeterminate` (`revocation_unavailable`) эсвэл `invalid` (`revoked`).**
+  - `complete`: OCSP «revoked» эсвэл гэрчилгээг агуулсан CRL → тэр дор нь `LTV_UNAVAILABLE`, `cause` =
+    `CertificateRevokedError` (шинэ export, `/pades`), `retryable` false, дахин оролдохгүй (өмнө нь revoked OCSP-г
+    алгасаад цэвэр CRL-ээр DSS угсарч амжилттай дуусдаг байв). OCSP/CRL-д мөн CertID/олгогч/шинэлэг байдлын дүрэм.
+  - `prepare` / `validatePdf`: задлахын өмнө массив/толийн давхарлалт > 256 → `PDF_INVALID` (`complete` — `STATE_INVALID`);
+    Go `CheckStructure`-ийн порт (`obj`/`trailer`-ийн дараах, FlateDecode ObjStm-ийн объект бүр; уншилт/inflate төсөв).
+  - LTV/цуцлалтын алдааны мессежээс гэрчилгээний CN (иргэний нэр — PII) хасагдсан.
+- **Яагаад:** 10-15 SDK аудитын олдвор 1–5 (fail-open цуцлалт, гүн рекурс) — `ca.eidmongolia.mn/verify` (хөтчийн
+  `validatePdf`) ба порталын client-side PAdES (`complete`) энэ кодыг ашигладаг.
+- **Хаана:** `src/pades/revocation.ts` (шинэ: `freshAt`, `ocspCertIDMatches`, `parseCRL`/`crlFor`/`crlListed`,
+  `CertificateRevokedError`), `src/pades/pdf/nesting.ts` (шинэ: `checkStructure`), `src/pades/validate/evaluate.ts`
+  (`StatusSource.certStatus(cert, issuer, at)`, `DSSStatus`, `OnlineStatus`, `ltvCoverage`), `src/pades/ltv.ts`
+  (`fetchOCSP`, `crlCovers`, `collectLTV`), `src/pades/validate/extract.ts`, `src/pades.ts`, `src/validate.ts`,
+  `src/pades/pdf/inflate.ts` (`InflateLimitError`); golden бэхэлгээ Go `083434a` (`scripts/sync-pades-golden.mjs`; validate v4
+  +13 тохиолдол, `pki/05.pem`); `test/pades-revocation.test.ts`; README §3d/§3g.
+- **Шалгасан:** `npm test` (243; validatePdf golden 42 тохиолдол Go-тэй deep-equal, v4-ийн 13 бүгд), `npm run lint`,
+  `golden:check`, `test-compat`; засваргүй кодонд v4-ийн 8 тохиолдол унадгийг баталсан (Go-той ижил 8). Хөтөчид (Playwright
+  Chromium + WebKit) validate golden-ийн offline 39 тохиолдол (v4 бүгд) ижил. `size:validate` 245.8 → 252.0 KB (gzip
+  134.3 → 136.7 KB), `size:pades` 225.1 → 234.6 KB (gzip 126.2 → 129.6 KB).
+- **Үлдсэн:** CA-ийн `validate` хуулбарт ижил дүрэм (Go #28-ийн «үлдсэн»); CA `vendor-sdk-validate`-ийг шинэ хувилбараар.
+### Security — PRECHECKS #2b: ObjStm мөчлөг, `/Size`, `%%EOF`-гүй баримтын квадрат хайлт (0.21.0)
+
+- **Юу:** задлахын өмнөх бүтцийн шалгалт (`prepare` / `validatePdf` — `PDF_INVALID`, `complete` — `STATE_INVALID`) нь Go SDK
+  (chore/sdk-low-cleanup, `objstm.go`)-тэй ижил дүрмээр татгалзана: ObjStm доторх объектын агуулагч stream нь өөрөө
+  ObjStm-д (өөрийгөө / харилцан агуулах); ObjStm-ийн толгойн лавлагаа (`/Length` г.м.) ObjStm доторх объект руу;
+  `/Extends` мөчлөг / > 64; trailer эсвэл xref stream-ийн `/Size` > 2 097 152 (өмнө нь TS 2^24 хүртэл хүлээн авч
+  хүснэгт хуваарилдаг байв). Уншигчийн `%%EOF` хайлт (digitorus-ийн 200 байтын өсөх цонх) O(n²) байсныг ижил үр дүнтэй
+  шугаман болгосон — `%%EOF`-гүй 110 KB баримт 3 с, 10 MiB нь хөтчийг цагаар гацаадаг байв (одоо ~0.3 с).
+- **Яагаад:** Go `FuzzValidatePDF`-ийн олсон DoS ангилал; TS-д ObjStm мөчлөг JS stack-ийн `RangeError`-оор санамсаргүй
+  `PDF_INVALID` болдог байсныг тодорхой дүрэм болгож Go-той тааруулав. `%%EOF`-ийн квадрат хайлтыг TS mutation fuzz олсон.
+- **Хаана:** `src/pades/pdf/nesting.ts` (`checkObjStmGraph`, `/Size`), `src/pades/pdf/reader.ts` (`findStartXref`);
+  `test/pades-objstm.test.ts` (Go `TestCheckStructureObjStmGraph`-ийн оролтууд + fuzz crash seed
+  `test/fixtures/pades/fuzz/objstm-cycle-c8b2f6dc9d5d37bf.pdf`), `test/validate-fuzz.test.ts` (детерминист mutation fuzz,
+  `EID_FUZZ_ITER`).
+- **Шалгасан:** `npm test` (258), fuzz 1500 давталт цэвэр; хуучин/шинэ `%%EOF` хайлтын differential (200 000 санамсаргүй
+  оролт, зөрүү 0); validate golden 42/42 Go-той ижил (хөтөчид offline 39/39).
+### Fixed — `maskPath` linked, `baseUrl` https, `documentNumber` тайлбар (0.21.0)
+
+- **Юу:** (1) `NetworkError.op` / алдааны зам `/signature/notification/linked/{documentNumber}`-ийг `…` болгоно (өмнө нь
+  төхөөрөмжийн дугаар логт гардаг байв). (2) `EidClient` `baseUrl` нь `https://` байх ёстой; `http://` зөвхөн `localhost`,
+  `127.0.0.1`, `[::1]` (тест/mock) — бусад нь `Error` (RP secret ба иргэний мэдээлэл шифргүй явахаас сэргийлнэ).
+  (3) `EidLoginIdentity.documentNumber` — «иргэний баримтын дугаар `PNOMN-…-MOBILE-Q`» биш, RP-API-ийн төхөөрөмжийн
+  (тунгалаг) таних тэмдэг (Go `eidlogin.Identity.DocumentNumber`-тэй ижил тайлбар).
+- **Яагаад:** 10-15 SDK аудитын Low олдворууд (TS хэсэг).
+- **Хаана:** `src/errors.ts`, `src/client.ts`, `src/login.ts`; `test/portal-gaps.test.ts`, `test/sdk.test.ts`.
+- **Шалгасан:** `npm test`, `npm run lint`.
+
 ## 0.20.1 — 2026-10-17
 
 ### Fixed — `validatePdf`: `PDF_ENCRYPTED`, `UNSUPPORTED_ENVIRONMENT` (0.20.1)
