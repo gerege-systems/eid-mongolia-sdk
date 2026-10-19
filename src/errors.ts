@@ -268,6 +268,12 @@ export class SessionFailedError extends EidError {
 export class ValidationError extends EidError {}
 
 /**
+ * `token.issueCertificate`-ийн `appTransaction` `MAX_APP_TRANSACTION_BYTES` (16 KiB)-аас их — SDK CA руу
+ * илгээхгүй. Програмын/клиентийн алдаа.
+ */
+export class AppTransactionTooLargeError extends EidError {}
+
+/**
  * Device-link (App2App/Web2App) холбоос угсрах боломжгүй — хариунд `deviceLinkBase` байхгүй,
  * эсвэл sessionId/vc/суурь URL хэлбэр буруу. Session-ийг дахин эхлүүлнэ; холбоосыг таахгүй.
  */

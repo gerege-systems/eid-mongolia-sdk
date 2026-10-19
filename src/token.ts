@@ -9,7 +9,7 @@
 
 import { X509Certificate, createHash, createPublicKey, timingSafeEqual } from "node:crypto";
 import { RP_ROUTES, routePath } from "./contract.js";
-import { ApiError, ValidationError } from "./errors.js";
+import { ApiError, AppTransactionTooLargeError, ValidationError } from "./errors.js";
 import type { Http } from "./http.js";
 import type { TokenOrganization } from "./person.js";
 import { parseSubject, tlv } from "./subject.js";
@@ -28,7 +28,22 @@ export interface TokenCertInput {
   tokenLabel?: string;
   /** Байгууллагын токен (NTRMN-…); хоосон/алга = хувийн токен. */
   onBehalfOf?: string;
+  /**
+   * Заавал биш: macOS App Store build-ийн StoreKit 2 AppTransaction JWS (compact, ≤ {@link MAX_APP_TRANSACTION_BYTES}).
+   * Хоосон/алга бол илгээхгүй (Windows — баталгаагүй олголт). Ирсэн бол CA offline шалгана; хүчингүй бол 400
+   * {@link APP_ATTESTATION_INVALID}, утас руу push явахгүй (CA docs/TOKEN_CERT.md §App Store баталгаа).
+   */
+  appTransaction?: string;
 }
+
+/** `appTransaction`-ий дээд хэмжээ (UTF-8 байт; CA-ийн хязгаар, 16 KiB). */
+export const MAX_APP_TRANSACTION_BYTES = 16 * 1024;
+
+/**
+ * 400 `APP_ATTESTATION_INVALID` (`ApiError.code`) — `appTransaction` ирсэн боловч хүчингүй (гинж Apple Root CA - G3
+ * биш, гарын үсэг, bundleId, орчин Xcode, signedDate > 30 хоног …); аль алхам унасныг CA хэлэхгүй. Утас руу push явахгүй.
+ */
+export const APP_ATTESTATION_INVALID = "APP_ATTESTATION_INVALID";
 
 export interface TokenCertStart {
   sessionId: string;
@@ -38,6 +53,12 @@ export interface TokenCertStart {
   csrAuthSha256: string;
   csrSignSha256: string;
   expiresAt?: string;
+  /**
+   * Хувийн олголтод, иргэний хувийн токены хязгаар хүрсэн үед: олголт амжилттай болоход AUTH + SIGN нь superseded (4)-оор
+   * автоматаар цуцлагдах өөр serial-тай хувийн токенууд (CA 2026-10-19). Бусад үед алга. Эхлэлийн мөчийнх — PIN2-оос өмнө
+   * иргэнд анхааруул («Таны өмнөх USB токен (…)-ийн гэрчилгээ хүчингүй болно»).
+   */
+  supersedes?: { tokenSerial: string }[];
 }
 
 export interface TokenCertItem {
@@ -119,6 +140,15 @@ export type TokenConflictCode = "TOKEN_LIMIT_REACHED" | "TOKEN_IN_USE" | "TOKEN_
 /** {@link TokenConflictCode}-ийн бүх утга (runtime шалгалтад). */
 export const TOKEN_CONFLICT_CODES: readonly TokenConflictCode[] = ["TOKEN_LIMIT_REACHED", "TOKEN_IN_USE", "TOKEN_SCOPE_CHANGE", "ACCOUNT_DELETE_PENDING"];
 
+/** {@link TokenApi.previewCertificate}-ийн хариу. `supersedes` — бодит олголт амжилттай болоход солигдох хувийн токенууд. */
+export interface TokenCertPreview {
+  supersedes?: { tokenSerial: string }[];
+}
+
+function supersedesOf(v: unknown): { supersedes?: { tokenSerial: string }[] } {
+  return Array.isArray(v) ? { supersedes: v.map((x) => ({ tokenSerial: String(rec(x).tokenSerial ?? "") })) } : {};
+}
+
 /** Discovery (`/.well-known/eid`)-ийн `tokenCertificate` блок. */
 export interface TokenCertInfo {
   enabled: boolean;
@@ -137,6 +167,15 @@ export interface TokenCertInfo {
    * `TOKEN_SCOPE_CHANGE`. Хуучин CA-д талбар алга → false.
    */
   scopeLockedOnRenewal: boolean;
+  /** `"optional"` — `appTransaction`-ийг CA хүлээн авна. Хуучин CA-д "" (талбар илгээвэл 400). */
+  appTransaction: string;
+  /**
+   * true — хувийн хязгаар хүрсэн үед өөр serial-тай шинэ хувийн токен 409 биш: `supersedes` ирж, олголт амжилттай болоход
+   * өмнөх хувийн токен солигдоно; 409 `TOKEN_LIMIT_REACHED` kind=PERSONAL зөвхөн limit=0 үед. Хуучин CA-д false.
+   */
+  personalAutoSupersede: boolean;
+  /** true — {@link TokenApi.previewCertificate} (`dryRun`) дэмжигдэнэ. Хуучин CA-д false. */
+  dryRun: boolean;
   raw: unknown;
 }
 
@@ -161,12 +200,46 @@ export class TokenApi {
    * байгууллагын токен зөвхөн тэр байгууллагаар (`onBehalfOf` ижил), хувийн токен зөвхөн хувиараа. Өөр scope бол
    * 409 `TOKEN_SCOPE_CHANGE` (override үгүй); scope солих = иргэн eID апп-аас токеноо цуцлаад шинээр олгуулна.
    * Бусад 409: `TOKEN_LIMIT_REACHED` ({@link tokenLimitOf}), `TOKEN_IN_USE` ({@link TokenConflictCode}).
+   * 400 {@link APP_ATTESTATION_INVALID} — `appTransaction` хүчингүй; {@link MAX_APP_TRANSACTION_BYTES}-аас их бол
+   * {@link AppTransactionTooLargeError} (илгээхгүй).
    */
   async issueCertificate(input: TokenCertInput): Promise<TokenCertStart> {
+    const r = rec(await this.http.post(routePath(RP_ROUTES.tokenCertificate), this.certBody(input)));
+    if (!hexSha256Equal(r.csrAuthSha256, input.csrAuth) || !hexSha256Equal(r.csrSignSha256, input.csrSign)) {
+      throw new ValidationError("token: CA-ийн csrAuthSha256/csrSignSha256 илгээсэн CSR-тэй таарсангүй");
+    }
+    const vc = rec(r.vc).value ?? (typeof r.vc === "string" ? r.vc : undefined);
+    return {
+      sessionId: String(r.sessionID ?? ""),
+      vc: vc != null ? String(vc) : null,
+      csrAuthSha256: String(r.csrAuthSha256).toLowerCase(),
+      csrSignSha256: String(r.csrSignSha256).toLowerCase(),
+      ...(typeof r.expiresAt === "string" ? { expiresAt: r.expiresAt } : {}),
+      ...supersedesOf(r.supersedes),
+    };
+  }
+
+  /**
+   * POST /token/certificate `{"dryRun": true}` (CA 2026-10-19, discovery `tokenCertificate.dryRun`): {@link issueCertificate}-ийн
+   * бүх шалгалт ижил алдааны кодтой, гэхдээ session / утас руу push үүсэхгүй. Урсгал: CSR → previewCertificate →
+   * `supersedes` байвал иргэнд анхааруулж зөвшөөрүүлэх → issueCertificate (ижил оролт). Хурдны хязгаар (RP, иргэн) 20/мин
+   * (push-ийн 3/цагийг зарцуулахгүй). Хариунд `dryRun: true` алга бол ValidationError. Хуучин CA-д 400 (танихгүй талбар).
+   */
+  async previewCertificate(input: TokenCertInput): Promise<TokenCertPreview> {
+    const r = rec(await this.http.post(routePath(RP_ROUTES.tokenCertificate), { ...this.certBody(input), dryRun: true }));
+    if (r.dryRun !== true) throw new ValidationError("token: dryRun хариу биш (CA dryRun-ийг дэмжихгүй)");
+    return { ...supersedesOf(r.supersedes) };
+  }
+
+  /** Оролтыг шалгаж POST /token/certificate-ийн биеийг угсарна. CA DisallowUnknownFields — яг эдгээр талбар. */
+  private certBody(input: TokenCertInput): Record<string, unknown> {
     if (!input.signerEtsi?.trim() || !input.csrAuth?.length || !input.csrSign?.length || !input.tokenSerial?.trim()) {
       throw new Error("token: signerEtsi, csrAuth, csrSign, tokenSerial шаардлагатай");
     }
-    // CA DisallowUnknownFields — яг эдгээр талбар.
+    const appTransaction = input.appTransaction?.trim() ?? "";
+    if (Buffer.byteLength(input.appTransaction ?? "", "utf8") > MAX_APP_TRANSACTION_BYTES) {
+      throw new AppTransactionTooLargeError("token: appTransaction 16 KiB-аас их");
+    }
     const body: Record<string, unknown> = {
       relyingPartyUUID: this.creds.rpUUID,
       relyingPartyName: this.creds.rpName,
@@ -178,18 +251,8 @@ export class TokenApi {
       flow: "notification",
     };
     if (input.tokenLabel) body.tokenLabel = input.tokenLabel;
-    const r = rec(await this.http.post(routePath(RP_ROUTES.tokenCertificate), body));
-    if (!hexSha256Equal(r.csrAuthSha256, input.csrAuth) || !hexSha256Equal(r.csrSignSha256, input.csrSign)) {
-      throw new ValidationError("token: CA-ийн csrAuthSha256/csrSignSha256 илгээсэн CSR-тэй таарсангүй");
-    }
-    const vc = rec(r.vc).value ?? (typeof r.vc === "string" ? r.vc : undefined);
-    return {
-      sessionId: String(r.sessionID ?? ""),
-      vc: vc != null ? String(vc) : null,
-      csrAuthSha256: String(r.csrAuthSha256).toLowerCase(),
-      csrSignSha256: String(r.csrSignSha256).toLowerCase(),
-      ...(typeof r.expiresAt === "string" ? { expiresAt: r.expiresAt } : {}),
-    };
+    if (appTransaction) body.appTransaction = appTransaction;
+    return body;
   }
 
   /** Discovery-ийн `tokenCertificate` блок. Блок байхгүй (хуучин CA) бол `enabled: false`. */
@@ -205,6 +268,9 @@ export class TokenApi {
       keyAlgorithm: String(t.keyAlgorithm ?? ""),
       onBehalfOf: String(t.onBehalfOf ?? ""),
       scopeLockedOnRenewal: t.scopeLockedOnRenewal === true,
+      appTransaction: String(t.appTransaction ?? ""),
+      personalAutoSupersede: t.personalAutoSupersede === true,
+      dryRun: t.dryRun === true,
       raw: d.tokenCertificate,
     };
   }
