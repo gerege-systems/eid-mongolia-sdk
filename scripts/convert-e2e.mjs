@@ -127,7 +127,7 @@ window.ready = true;
     // Цуцлалт хөрвүүлэлтийн үеэр → AbortError; дараагийнх нь кэшээс (wasm/data дахин татахгүй).
     const a = await p.evaluate(() => window.run("/fixtures/convert/sample.docx", "a.docx", "convert"));
     check(!a.ok && a.name === "AbortError", `цуцлалт: ${a.name}`);
-    if (process.env.BROWSER === "webkit" && process.platform === "linux") {
+    if (process.env.EID_SKIP_WEBKIT_RECONVERT === "1" && process.env.BROWSER === "webkit" && process.platform === "linux") {
       // Linux-ийн WebKit (WPE, CI) terminate хийсэн worker-ийн дараа шинэ worker-ийн LibreOffice init дуусдаггүй
       // (2026-10-15; macOS WebKit/Safari, Chromium-д болно) — алгасна.
       console.log("skip цуцалсны дараах дахин ажиллуулалт (Linux WebKit)");
