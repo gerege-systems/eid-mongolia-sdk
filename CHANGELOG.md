@@ -1,4 +1,20 @@
 # Changelog
+## 0.22.0 — 2026-10-19
+
+### Tests — `convert-e2e`: Linux WebKit-д цуцалсны дараах дахин хувиргалтыг алгасахаа болив
+
+- **Юу:** `scripts/convert-e2e.mjs`-ийн Linux WebKit-ийн алгасалт (2026-10-15-наас — terminate хийсэн worker-ийн дараа шинэ
+  worker-ийн LibreOffice init дуусдаггүй гэж) хасагдсан; цуцлалт → дахин хувиргалт (кэшээс) + verbose лог бүх хөтөчид шалгагдана.
+- **Яагаад:** шалтгаан нь 0.21.0-ийн `pthreadPoolSize` 4 → 8 засвартай ижил deadlock байсан.
+- **Шалгасан:** PR #43-ийн CI `convert-e2e (webkit)` — «цуцалсны дараа: download үе шатгүй (кэш), 2507 ms», wasm/data дахин татаагүй.
+### Added — `PersonCertificate.tokenSerial?`
+
+- **Юу:** `eid.person.certificates()`-ийн `keyMedium: "TOKEN"` мөрөнд гэрчилгээ олгогдсон USB токены серийн дугаар
+  (CA `GET /v3/certificates/etsi/{personEtsi}`, 2026-10-19). MOBILE/HSM мөрөнд болон хуучин CA-д `undefined`.
+- **Яагаад:** нэг токены AUTH + SIGN-ийг байгууллага + олгосон цагаар таамаглахгүй, токеноор нь бүлэглэх.
+- **Хаана:** `src/person.ts`, README §3b, `test/share.test.ts`.
+- **Шалгасан:** `npm run lint`, `npm test`.
+
 ## 0.21.0 — 2026-10-19
 
 ### Fixed — `/convert`: удаан CPU-тай компьютер дээр Word→PDF хөрвүүлэлт гацаж болзошгүй байсан (0.21.0)
