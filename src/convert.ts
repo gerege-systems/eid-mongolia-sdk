@@ -98,7 +98,7 @@ export interface WordToPdfResult {
 export interface ConverterStatus {
   /** Бүх asset кэшэд бий — татах шаардлагагүй. */
   cached: boolean;
-  /** Татах хэмжээ (байт): manifest-ийн gzip хэмжээ (сервер шахдаг бол), эс бөгөөс задарсан. Кэштэй бол 0. */
+  /** Татах хэмжээ (байт): manifest-ийн brotli (эсвэл gzip) хэмжээ — сервер урьдчилж шахсан `.br`/`.gz`-г өгдөг бол; эс бөгөөс задарсан. Кэштэй бол 0. */
   downloadBytes: number;
 }
 
@@ -115,11 +115,12 @@ interface Manifest {
   format: 1;
   converter: string;
   version: string;
-  /** asset-уудын дэд хавтас (`<version>/`) — урт кэштэй. */
+  /** asset-уудын дэд хавтас (`<version>-<soffice.js hash>/`; хуучин build — `<version>/`) — урт кэштэй. */
   dir: string;
   /** Worker-ийн скриптүүдийн агуулгын hash (≥ 0.18.2) — immutable кэштэй URL-д `?v=`. */
   rev?: string;
-  files: Record<AssetName, { bytes: number; gzip?: number }>;
+  /** bytes — задарсан (татсаныг үүнтэй тулгана); gzip / br — `<файл>.gz` / `<файл>.br`-ийн хэмжээ. */
+  files: Record<AssetName, { bytes: number; gzip?: number; br?: number }>;
 }
 
 function parseManifest(v: unknown): Manifest {
@@ -161,8 +162,9 @@ async function loadManifest(root: string, signal?: AbortSignal): Promise<Manifes
   return parseManifest(json);
 }
 
+/** Хавтас бүр өөрийн кэштэй: soffice.js (data-ийн хүснэгт) ба soffice.data хамт солигдоно. "2.7.2/" → хуучин нэр хэвээр. */
 function cacheName(m: Manifest): string {
-  return CACHE_PREFIX + m.version;
+  return CACHE_PREFIX + m.dir.slice(0, -1);
 }
 
 /** Cache Storage (байхгүй / хаалттай — private цонх — бол null). */
@@ -194,7 +196,7 @@ export async function converterStatus(opts: { assetsBase: string; signal?: Abort
   let missing = 0;
   for (const a of BIG) {
     const f = m.files[a];
-    if (!(await has(cache, root + m.dir + a))) missing += f.gzip ?? f.bytes;
+    if (!(await has(cache, root + m.dir + a))) missing += f.br ?? f.gzip ?? f.bytes;
   }
   return { cached: missing === 0, downloadBytes: missing };
 }
@@ -574,7 +576,7 @@ function sizeWarnings(bytes: number): ConvertWarning[] {
 /**
  * Word (.docx / .doc) баримтыг ХӨТӨЧ ДОТОР PDF болгоно. Файл хаашаа ч илгээгдэхгүй.
  *
- * Эхний удаа ~250 MB (gzip ~77 MB) asset-ийг `assetsBase`-ээс татаж Cache Storage-д хадгална (`converterStatus`-аар
+ * Эхний удаа ~191 MB (brotli ~41 MB, gzip ~61 MB) asset-ийг `assetsBase`-ээс татаж Cache Storage-д хадгална (`converterStatus`-аар
  * урьдчилж мэд); дараагийн дуудлагууд нэг worker-ийг дахин ашиглана. Үр дүнг иргэнд ХАРУУЛЖ, зөвшөөрүүлсний дараа л
  * `/pades` `prepare`-д өг — хувиргалтад загвар (фонт, мөр, хуудас) өөрчлөгдөж болно (`warnings`).
  *

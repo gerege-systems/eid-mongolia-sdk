@@ -2,7 +2,7 @@
 // хуудас/фонт/хэмжээний анхааруулга. Жинхэнэ LibreOffice-ийг scripts/convert-e2e.mjs (Chromium) шалгана.
 import { test, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, copyFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync, copyFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
@@ -319,10 +319,24 @@ const BIN = new URL("../bin/convert-assets.mjs", import.meta.url).pathname;
 const UPSTREAM = new URL("../node_modules/@matbee/libreoffice-converter/", import.meta.url).pathname;
 const sha = (b: Uint8Array) => createHash("sha256").update(b).digest("hex");
 
+// brotli 11 soffice.wasm-д минутууд — тестэд чанар хамаагүй (.br-ийн агуулгыг convert-e2e шалгана).
+const binEnv = { ...process.env, EID_CONVERT_BROTLI_QUALITY: "1" };
+
 function runBin(cwd: string, out: string) {
-  const r = spawnSync(process.execPath, [BIN, out], { cwd, encoding: "utf8" });
+  const r = spawnSync(process.execPath, [BIN, out], { cwd, encoding: "utf8", env: binEnv });
   const m = JSON.parse(readFileSync(join(out, "manifest.json"), "utf8"));
-  return { ...r, m, worker: readFileSync(join(out, "2.7.2/browser.worker.global.js")), soffice: readFileSync(join(out, "2.7.2/soffice.js")) };
+  return { ...r, m, dir: join(out, m.dir), worker: readFileSync(join(out, m.dir, "browser.worker.global.js")), soffice: readFileSync(join(out, m.dir, "soffice.js")) };
+}
+
+/** soffice.js-ийн file_packager хүснэгт (Emscripten): мөрүүд, remote_package_size, хүснэгтийг хассан үлдэгдэл. */
+function packageTable(js: string) {
+  assert.equal(js.split("loadPackage({files:[").length, 2);
+  assert.equal(js.split("remote_package_size:").length, 2);
+  const m = /loadPackage\(\{files:\[(.*?)\],remote_package_size:(\d+)\}/s.exec(js);
+  assert.ok(m);
+  const entries = [...m[1].matchAll(/\{filename:"([^"]*)",start:(\d+(?:e\d+)?),end:(\d+(?:e\d+)?)\}/g)].map((e) => ({ name: e[1], start: Number(e[2]), end: Number(e[3]) }));
+  assert.equal(entries.length, m[1].split("{filename:").length - 1);
+  return { entries, size: Number(m[2]), rest: js.replace(m[0], "") };
 }
 
 test("convert-assets: мэдэгдэж буй upstream → patch («+ALL» үгүй, print/printErr verbose-оор), manifest хэмжээ/rev таарна", () => {
@@ -341,14 +355,46 @@ test("convert-assets: мэдэгдэж буй upstream → patch («+ALL» үг�
     assert.equal(r.m.files["browser.worker.global.js"].bytes, r.worker.length);
     assert.notEqual(r.worker.length, readFileSync(join(UPSTREAM, "dist/browser.worker.global.js")).length);
     assert.match(r.stdout, /лог чимээгүй/);
-    // pthreadPoolSize 4 → 8 (удаан CPU-ийн documentLoad deadlock); зөвхөн энэ солилт.
+    // pthreadPoolSize 4 → 8 (удаан CPU-ийн documentLoad deadlock) ба soffice.data-ийн хүснэгт — өөр солилтгүй.
     const so = r.soffice.toString("utf8");
     const up = readFileSync(join(UPSTREAM, "wasm/soffice.js"), "utf8");
     assert.equal(so.split("var pthreadPoolSize=8;").length, 2);
     assert.ok(!so.includes("var pthreadPoolSize=4;"));
-    assert.equal(so, up.replace("var pthreadPoolSize=4;", "var pthreadPoolSize=8;"));
+    const t = packageTable(so);
+    const u = packageTable(up);
+    assert.equal(t.rest, u.rest.replace("var pthreadPoolSize=4;", "var pthreadPoolSize=8;"));
     assert.equal(r.m.pthreadPoolSize, 8);
     assert.equal(r.m.files["soffice.js"].bytes, r.soffice.length);
+    // Хавтас = хувилбар + soffice.js hash (хүснэгт солигдвол immutable URL ч солигдоно).
+    assert.equal(r.m.dir, `2.7.2-${sha(r.soffice).slice(0, 12)}/`);
+
+    // soffice.data: offset тасралтгүй, нийлбэр = remote_package_size = файл = manifest; хассан зүйл үлдээгүй.
+    let pos = 0;
+    for (const e of t.entries) {
+      assert.equal(e.start, pos, e.name);
+      pos = e.end;
+    }
+    const dataSize = statSync(join(r.dir, "soffice.data")).size;
+    assert.equal(pos, t.size);
+    assert.equal(t.size, dataSize);
+    assert.equal(r.m.files["soffice.data"].bytes, dataSize);
+    assert.equal(dataSize, 43_164_000);
+    const names = t.entries.map((e) => e.name);
+    for (const re of [/LinLibertine|LinBiolinum|Amiri|Scheherazade|NotoSansArabic|NotoSerifHebrew|NotoSansGeorgian/, /images_colibre\.zip$/, /\/share\/gallery\//,
+      /\/soffice\.cfg\/modules\/(scalc|simpress|sdraw|smath)\//, /\/intro\.png$/, /^\/android\//]) {
+      assert.deepEqual(names.filter((n) => re.test(n)), [], String(re));
+    }
+    assert.equal(names.filter((n) => n.endsWith("/opens___.ttf")).length, 1);
+    // Заавал үлдэх: бүх registry/*.xcd (math.xcd — OMML томьёо), NotoSans/NotoSerif Латин-Кирилл (Ө Ү).
+    const must = u.entries.map((e) => e.name).filter((n) => /\/registry\/[^/]+\.xcd$|\/Noto(Sans|Serif)-[^/]+$/.test(n));
+    assert.ok(must.some((n) => n.endsWith("/registry/math.xcd")));
+    assert.deepEqual(must.filter((n) => !names.includes(n)), []);
+    // .br / .gz файл бүрийн хажууд, manifest-д хэмжээтэй.
+    for (const [name, f] of Object.entries(r.m.files as Record<string, { bytes: number; gzip: number; br: number }>)) {
+      assert.equal(statSync(join(r.dir, name + ".br")).size, f.br, name);
+      assert.equal(statSync(join(r.dir, name + ".gz")).size, f.gzip, name);
+    }
+    assert.deepEqual(readdirSync(out).sort(), [r.m.dir.slice(0, -1), "manifest.json"]);
   } finally {
     rmSync(out, { recursive: true, force: true });
   }
@@ -362,7 +408,9 @@ test("convert-assets: upstream hash таарахгүй → patch-гүй хуул
     mkdirSync(join(pkg, "wasm"), { recursive: true });
     writeFileSync(join(proj, "package.json"), "{}");
     writeFileSync(join(pkg, "package.json"), JSON.stringify({ name: "@matbee/libreoffice-converter", version: "2.7.2", license: "MPL-2.0" }));
-    for (const f of ["soffice.wasm", "soffice.data", "soffice.worker.js"]) writeFileSync(join(pkg, "wasm", f), "x");
+    writeFileSync(join(pkg, "wasm/soffice.worker.js"), "x");
+    // soffice.data-г хасахад жинхэнэ 2.7.2 хэрэгтэй (sha256) — хуулахгүй, холбоос.
+    for (const f of ["soffice.wasm", "soffice.data"]) symlinkSync(join(UPSTREAM, "wasm", f), join(pkg, "wasm", f));
     copyFileSync(join(UPSTREAM, "wasm/soffice.js"), join(pkg, "wasm/soffice.js"));
     const changed = Buffer.from('a.ENV.SAL_LOG="+ALL";print:console.log,printErr:console.error}//өөр build');
     writeFileSync(join(pkg, "dist/browser.worker.global.js"), changed);
@@ -395,9 +443,28 @@ test("convert-assets: soffice.js hash таарахгүй → pthreadPoolSize pat
     for (const f of ["soffice.wasm", "soffice.data", "soffice.worker.js"]) writeFileSync(join(pkg, "wasm", f), "x");
     writeFileSync(join(pkg, "wasm/soffice.js"), "var pthreadPoolSize=4;//өөр build");
     copyFileSync(join(UPSTREAM, "dist/browser.worker.global.js"), join(pkg, "dist/browser.worker.global.js"));
-    const r = spawnSync(process.execPath, [BIN, join(proj, "out")], { cwd: proj, encoding: "utf8" });
+    const r = spawnSync(process.execPath, [BIN, join(proj, "out")], { cwd: proj, encoding: "utf8", env: binEnv });
     assert.equal(r.status, 1);
     assert.match(r.stderr, /pthreadPoolSize/);
+  } finally {
+    rmSync(proj, { recursive: true, force: true });
+  }
+});
+
+test("convert-assets: soffice.data hash таарахгүй → offset тодорхойгүй тул build унана (exit 1)", () => {
+  const proj = mkdtempSync(join(tmpdir(), "eid-assets-proj-"));
+  try {
+    const pkg = join(proj, "node_modules/@matbee/libreoffice-converter");
+    mkdirSync(join(pkg, "dist"), { recursive: true });
+    mkdirSync(join(pkg, "wasm"), { recursive: true });
+    writeFileSync(join(proj, "package.json"), "{}");
+    writeFileSync(join(pkg, "package.json"), JSON.stringify({ name: "@matbee/libreoffice-converter", version: "2.7.2", license: "MPL-2.0" }));
+    for (const f of ["soffice.wasm", "soffice.data", "soffice.worker.js"]) writeFileSync(join(pkg, "wasm", f), "x");
+    copyFileSync(join(UPSTREAM, "wasm/soffice.js"), join(pkg, "wasm/soffice.js"));
+    copyFileSync(join(UPSTREAM, "dist/browser.worker.global.js"), join(pkg, "dist/browser.worker.global.js"));
+    const r = spawnSync(process.execPath, [BIN, join(proj, "out")], { cwd: proj, encoding: "utf8", env: binEnv });
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /soffice\.data sha256 .*зогсов/);
   } finally {
     rmSync(proj, { recursive: true, force: true });
   }

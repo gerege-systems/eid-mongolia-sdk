@@ -87,3 +87,5 @@ jobs:
       - run: node scripts/convert-e2e.mjs
         env:
           BROWSER: ${{ matrix.browser }}
+          # brotli 11 soffice.wasm-д ~4+ мин; .br-ийн зөв эсэхэд чанар нөлөөлөхгүй.
+          EID_CONVERT_BROTLI_QUALITY: 9
