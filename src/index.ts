@@ -58,6 +58,7 @@ export {
   MAX_APP_TRANSACTION_BYTES,
   type TokenConflictCode,
   type TokenCertInfo,
+  type TokenCertPreview,
   type TokenCertInput,
   type TokenCertStart,
   type TokenCertItem,

@@ -140,6 +140,15 @@ export type TokenConflictCode = "TOKEN_LIMIT_REACHED" | "TOKEN_IN_USE" | "TOKEN_
 /** {@link TokenConflictCode}-ийн бүх утга (runtime шалгалтад). */
 export const TOKEN_CONFLICT_CODES: readonly TokenConflictCode[] = ["TOKEN_LIMIT_REACHED", "TOKEN_IN_USE", "TOKEN_SCOPE_CHANGE", "ACCOUNT_DELETE_PENDING"];
 
+/** {@link TokenApi.previewCertificate}-ийн хариу. `supersedes` — бодит олголт амжилттай болоход солигдох хувийн токенууд. */
+export interface TokenCertPreview {
+  supersedes?: { tokenSerial: string }[];
+}
+
+function supersedesOf(v: unknown): { supersedes?: { tokenSerial: string }[] } {
+  return Array.isArray(v) ? { supersedes: v.map((x) => ({ tokenSerial: String(rec(x).tokenSerial ?? "") })) } : {};
+}
+
 /** Discovery (`/.well-known/eid`)-ийн `tokenCertificate` блок. */
 export interface TokenCertInfo {
   enabled: boolean;
@@ -165,6 +174,8 @@ export interface TokenCertInfo {
    * өмнөх хувийн токен солигдоно; 409 `TOKEN_LIMIT_REACHED` kind=PERSONAL зөвхөн limit=0 үед. Хуучин CA-д false.
    */
   personalAutoSupersede: boolean;
+  /** true — {@link TokenApi.previewCertificate} (`dryRun`) дэмжигдэнэ. Хуучин CA-д false. */
+  dryRun: boolean;
   raw: unknown;
 }
 
@@ -193,6 +204,35 @@ export class TokenApi {
    * {@link AppTransactionTooLargeError} (илгээхгүй).
    */
   async issueCertificate(input: TokenCertInput): Promise<TokenCertStart> {
+    const r = rec(await this.http.post(routePath(RP_ROUTES.tokenCertificate), this.certBody(input)));
+    if (!hexSha256Equal(r.csrAuthSha256, input.csrAuth) || !hexSha256Equal(r.csrSignSha256, input.csrSign)) {
+      throw new ValidationError("token: CA-ийн csrAuthSha256/csrSignSha256 илгээсэн CSR-тэй таарсангүй");
+    }
+    const vc = rec(r.vc).value ?? (typeof r.vc === "string" ? r.vc : undefined);
+    return {
+      sessionId: String(r.sessionID ?? ""),
+      vc: vc != null ? String(vc) : null,
+      csrAuthSha256: String(r.csrAuthSha256).toLowerCase(),
+      csrSignSha256: String(r.csrSignSha256).toLowerCase(),
+      ...(typeof r.expiresAt === "string" ? { expiresAt: r.expiresAt } : {}),
+      ...supersedesOf(r.supersedes),
+    };
+  }
+
+  /**
+   * POST /token/certificate `{"dryRun": true}` (CA 2026-10-19, discovery `tokenCertificate.dryRun`): {@link issueCertificate}-ийн
+   * бүх шалгалт ижил алдааны кодтой, гэхдээ session / утас руу push үүсэхгүй. Урсгал: CSR → previewCertificate →
+   * `supersedes` байвал иргэнд анхааруулж зөвшөөрүүлэх → issueCertificate (ижил оролт). Хурдны хязгаар (RP, иргэн) 20/мин
+   * (push-ийн 3/цагийг зарцуулахгүй). Хариунд `dryRun: true` алга бол ValidationError. Хуучин CA-д 400 (танихгүй талбар).
+   */
+  async previewCertificate(input: TokenCertInput): Promise<TokenCertPreview> {
+    const r = rec(await this.http.post(routePath(RP_ROUTES.tokenCertificate), { ...this.certBody(input), dryRun: true }));
+    if (r.dryRun !== true) throw new ValidationError("token: dryRun хариу биш (CA dryRun-ийг дэмжихгүй)");
+    return { ...supersedesOf(r.supersedes) };
+  }
+
+  /** Оролтыг шалгаж POST /token/certificate-ийн биеийг угсарна. CA DisallowUnknownFields — яг эдгээр талбар. */
+  private certBody(input: TokenCertInput): Record<string, unknown> {
     if (!input.signerEtsi?.trim() || !input.csrAuth?.length || !input.csrSign?.length || !input.tokenSerial?.trim()) {
       throw new Error("token: signerEtsi, csrAuth, csrSign, tokenSerial шаардлагатай");
     }
@@ -200,7 +240,6 @@ export class TokenApi {
     if (Buffer.byteLength(input.appTransaction ?? "", "utf8") > MAX_APP_TRANSACTION_BYTES) {
       throw new AppTransactionTooLargeError("token: appTransaction 16 KiB-аас их");
     }
-    // CA DisallowUnknownFields — яг эдгээр талбар.
     const body: Record<string, unknown> = {
       relyingPartyUUID: this.creds.rpUUID,
       relyingPartyName: this.creds.rpName,
@@ -213,21 +252,7 @@ export class TokenApi {
     };
     if (input.tokenLabel) body.tokenLabel = input.tokenLabel;
     if (appTransaction) body.appTransaction = appTransaction;
-    const r = rec(await this.http.post(routePath(RP_ROUTES.tokenCertificate), body));
-    if (!hexSha256Equal(r.csrAuthSha256, input.csrAuth) || !hexSha256Equal(r.csrSignSha256, input.csrSign)) {
-      throw new ValidationError("token: CA-ийн csrAuthSha256/csrSignSha256 илгээсэн CSR-тэй таарсангүй");
-    }
-    const vc = rec(r.vc).value ?? (typeof r.vc === "string" ? r.vc : undefined);
-    return {
-      sessionId: String(r.sessionID ?? ""),
-      vc: vc != null ? String(vc) : null,
-      csrAuthSha256: String(r.csrAuthSha256).toLowerCase(),
-      csrSignSha256: String(r.csrSignSha256).toLowerCase(),
-      ...(typeof r.expiresAt === "string" ? { expiresAt: r.expiresAt } : {}),
-      ...(Array.isArray(r.supersedes)
-        ? { supersedes: r.supersedes.map((x) => ({ tokenSerial: String(rec(x).tokenSerial ?? "") })) }
-        : {}),
-    };
+    return body;
   }
 
   /** Discovery-ийн `tokenCertificate` блок. Блок байхгүй (хуучин CA) бол `enabled: false`. */
@@ -245,6 +270,7 @@ export class TokenApi {
       scopeLockedOnRenewal: t.scopeLockedOnRenewal === true,
       appTransaction: String(t.appTransaction ?? ""),
       personalAutoSupersede: t.personalAutoSupersede === true,
+      dryRun: t.dryRun === true,
       raw: d.tokenCertificate,
     };
   }

@@ -316,7 +316,7 @@ test("token.certificateInfo: discovery-ийн tokenCertificate блок (scopeLo
   const block = {
     certificateLevel: "ADVANCED", enabled: true, issue: "https://rp.eidmongolia.mn/token/certificate",
     keyAlgorithm: "EC P-256 (ecdsa-with-SHA256)", onBehalfOf: "optional", permission: "TOKEN_ISSUE",
-    result: "https://rp.eidmongolia.mn/token/certificate/{sessionID}", scopeLockedOnRenewal: true, appTransaction: "optional", personalAutoSupersede: true,
+    result: "https://rp.eidmongolia.mn/token/certificate/{sessionID}", scopeLockedOnRenewal: true, appTransaction: "optional", personalAutoSupersede: true, dryRun: true,
   };
   const { eid, calls } = client({ status: 200, body: { version: "v3", tokenCertificate: block } });
   const i = await eid.token.certificateInfo();
@@ -327,11 +327,30 @@ test("token.certificateInfo: discovery-ийн tokenCertificate блок (scopeLo
   assert.equal(i.onBehalfOf, "optional");
   assert.equal(i.appTransaction, "optional");
   assert.equal(i.personalAutoSupersede, true);
+  assert.equal(i.dryRun, true);
   const old = await client({ status: 200, body: { version: "v3" } }).eid.token.certificateInfo();
   assert.equal(old.enabled, false);
   assert.equal(old.scopeLockedOnRenewal, false);
   assert.equal(old.appTransaction, "");
   assert.equal(old.personalAutoSupersede, false);
+  assert.equal(old.dryRun, false);
+});
+
+test("token.previewCertificate (dryRun): ижил бие + dryRun:true, supersedes, алдаа дамжина, dryRun-гүй хариу → ValidationError", async () => {
+  const base = { signerEtsi: "PNOMN-1", csrAuth: TOK_A.csr, csrSign: TOK_S.csr, tokenSerial: "EP2003-0042A2", appTransaction: "a.b.c" };
+  const { eid, calls } = client({ body: { dryRun: true, supersedes: [{ tokenSerial: "EP2003-0001" }] } });
+  assert.deepEqual(await eid.token.previewCertificate(base), { supersedes: [{ tokenSerial: "EP2003-0001" }] });
+  const sent = JSON.parse(calls[0]!.body!);
+  assert.equal(calls[0]!.url, "https://rp.eidmongolia.mn/token/certificate");
+  assert.equal(sent.dryRun, true);
+  assert.equal(sent.tokenSerial, "EP2003-0042A2");
+  assert.equal(sent.appTransaction, "a.b.c");
+  assert.deepEqual(await client({ body: { dryRun: true } }).eid.token.previewCertificate(base), {});
+  const lim = client({ status: 409, body: { error: "хязгаар", code: "TOKEN_LIMIT_REACHED", kind: "ORGANIZATION", limit: 1, organization: "NTRMN-1" } });
+  const e = await lim.eid.token.previewCertificate(base).catch((x) => x);
+  assert.deepEqual(tokenLimitOf(e), { kind: "ORGANIZATION", limit: 1, organization: "NTRMN-1" });
+  await assert.rejects(() => client({ body: { sessionID: "x" } }).eid.token.previewCertificate(base), ValidationError);
+  await assert.rejects(() => eid.token.previewCertificate({ ...base, signerEtsi: "" }));
 });
 
 test("token.issueCertificate — appTransaction (CA !390): илгээх, 16 KiB хил, 400 APP_ATTESTATION_INVALID", async () => {
