@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Go reference (gerege-systems/eid-mongolia-sdk-go, бэхэлсэн commit)-оос /pades-ийн conformance fixture ба фонт asset-ийг
 // хуулна:
-//   pades/testdata/golden/{manifest.json,README.md,input/,http/,pki/*.pem (хувийн түлхүүргүй)} → test/fixtures/pades/golden/
+//   pades/testdata/golden/{manifest.json,README.md,input/,http/,placement/,pki/*.pem (хувийн түлхүүргүй)} → test/fixtures/pades/golden/
 //   pades/assets/fonts/{*.ttf.zlib,*.metrics.json} → src/pades/assets/fonts.ts (байт base64 + метрик — bundle-д шигтгэнэ),
 //   pades/assets/fonts/OFL.txt                     → src/pades/assets/OFL.txt
 //
@@ -16,8 +16,8 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const GO_SDK_REPO = "https://github.com/gerege-systems/eid-mongolia-sdk-go";
-// main #28 (validate golden v4: цуцлалтын нотолгоо, гүн давхарлалт).
-export const GO_SDK_COMMIT = "083434afb320c76c476b91c23445b2a57670bac2";
+// main #33 (golden v5: харагдах дүрслэлийн байршил — PLACEMENT_SPEC.md, placement/ vectors).
+export const GO_SDK_COMMIT = "b5c1fdc9966ad5cde69ca787e591d04a112f6012";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const check = process.argv.includes("--check");
@@ -45,6 +45,11 @@ function expected(src) {
   for (const f of ["manifest.json", "README.md"]) out.set(`${dst}/${f}`, readFileSync(join(g, f)));
   for (const sub of ["input", "http"]) {
     for (const f of readdirSync(join(g, sub)).sort()) out.set(`${dst}/${sub}/${f}`, readFileSync(join(g, sub, f)));
+  }
+  // Байршлын scanner-ийн conformance (PLACEMENT_SPEC.md §8): vectors.json + placement/input/*.pdf.
+  out.set(`${dst}/placement/vectors.json`, readFileSync(join(g, "placement/vectors.json")));
+  for (const f of readdirSync(join(g, "placement/input")).sort()) {
+    out.set(`${dst}/placement/input/${f}`, readFileSync(join(g, "placement/input", f)));
   }
   for (const f of readdirSync(join(g, "pki")).sort()) {
     if (f.endsWith(".pem") && !f.endsWith(".key.pem")) out.set(`${dst}/pki/${f}`, readFileSync(join(g, "pki", f)));

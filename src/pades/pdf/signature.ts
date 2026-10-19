@@ -7,6 +7,7 @@ import { Incremental } from "./incremental.js";
 import { PdfError, Value } from "./reader.js";
 import { escapeName, hexString, serialize } from "./serialize.js";
 import { AppearanceError, appearanceObjects, nthPage, pageGeometry, visibleRect, visibleWidget, type Visible } from "../page/appearance.js";
+import { occupancy, placeVisible, type Box, type PlaceStatus } from "../page/occupancy.js";
 
 /** CMS-ийн дээд хэмжээ (хэмжсэн 14 KiB) × 2 — /Contents-ийн binary багтаамж. */
 export const MEASURED_MAX_CMS = 14 << 10;
@@ -25,6 +26,8 @@ export interface PreparedSig {
   byteRange: ByteRange;
   digest: Uint8Array;
   fieldName: string;
+  /** The visible stamp's final lower-left corner (visible page space, h100) and how it was chosen; absent when invisible. */
+  placement?: { x: number; y: number; status: PlaceStatus };
 }
 
 /** "(D:YYYYMMDDHHmmSS+08'00')" — цаг үргэлж +08:00 (Go reference signingZone). */
@@ -75,6 +78,7 @@ export async function prepareSignature(base: Uint8Array, signingTime: Date, sign
   const sigStart = inc.writeObject(sigID, sig);
 
   let page: Value | undefined;
+  let placement: PreparedSig["placement"];
   if (!vis) {
     // Үл харагдах (digitorus createVisualSignature, invisible): эхний хуудас.
     let fld = "<<\n  /Type /Annot\n  /Subtype /Widget\n  /Rect [0 0 0 0]\n";
@@ -87,7 +91,25 @@ export async function prepareSignature(base: Uint8Array, signingTime: Date, sign
     page = nthPage(root.key("Pages"), vis.page);
     if (!page) throw new AppearanceError(`хуудас ${vis.page} алга`);
     const { box, rot } = pageGeometry(page);
-    const rect = visibleRect(box, rot, vis.x, vis.y, vis.w, vis.h);
+    let rect = visibleRect(box, rot, vis.x, vis.y, vis.w, vis.h);
+    placement = { x: vis.x, y: vis.y, status: "requested" };
+    if (vis.avoid) {
+      // PLACEMENT_SPEC.md: move off existing page content; the requested rect stays when nothing is free.
+      let occ: Box[] | undefined;
+      try {
+        occ = occupancy(page, box as Box);
+      } catch {
+        placement.status = "unscanned";
+      }
+      if (occ) {
+        const at = placeVisible(box, rot, vis.x, vis.y, vis.w, vis.h, occ);
+        if (!at) placement.status = "overlap";
+        else if (at[0] !== vis.x || at[1] !== vis.y) {
+          placement = { x: at[0], y: at[1], status: "moved" };
+          rect = visibleRect(box, rot, at[0], at[1], vis.w, vis.h);
+        }
+      }
+    }
     const bodies = appearanceObjects({ w: vis.w, h: vis.h, rotate: rot, name: vis.name, role: vis.role, lang: vis.lang, date: vis.date, url: vis.url }, apIDs);
     inc.writeObject(fieldID, visibleWidget(fieldName, rect, page.ptr.id, page.ptr.gen, sigID, apIDs[0]!));
     bodies.forEach((b, i) => inc.writeObject(apIDs[i]!, b));
@@ -122,7 +144,7 @@ export async function prepareSignature(base: Uint8Array, signingTime: Date, sign
   const field = `[${br[0]} ${br[1]} ${br[2]} ${br[3]}]`;
   if (field.length > BYTE_RANGE_WIDTH) throw new PdfError("pades: ByteRange талбарт багтсангүй");
   doc.set(latin1(field), sigStart + brAt);
-  return { pdf: doc, byteRange: br, digest: await rangeDigest(doc, br), fieldName };
+  return { pdf: doc, byteRange: br, digest: await rangeDigest(doc, br), fieldName, placement };
 }
 
 /** SHA-256(doc[0:a] ‖ doc[b:b+c]). */

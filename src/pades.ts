@@ -129,6 +129,8 @@ export interface PadesPrepareOptions {
  * Харагдах гарын үсгийн байршил (Go `pades.Appearance`, APPEARANCE_SPEC.md §1). Координат нь pt, тухайн хуудасны CropBox
  * (байхгүй бол MediaBox)-ийн /Rotate-ийн ДАРААХ (дэлгэцэнд харагдах) зүүн доод булангаас; x баруун тийш, y дээш. Утга бүр
  * 0.01 pt хүртэл тойрогдоно. Өндөр ≥ 45 pt (QR), эс бөгөөс REQUEST_INVALID.
+ * `x, y` нь хүссэн байрлал: тэнд хуудасны агуулга байвал дүрслэл чөлөөт зай руу шилжинэ (PLACEMENT_SPEC.md) — эцсийн
+ * байрлал {@link PadesPrepared.placement}-д.
  */
 export interface PadesAppearance {
   /** Оролтын баримтын хуудас, 1-ээс; 0/байхгүй = оролтын сүүлийн хуудас (энэ prepare-ийн нэмэх verify хуудас тооцогдохгүй). */
@@ -149,7 +151,32 @@ export interface PadesPrepared {
   docId: string;
   /** Тунгалаг, сериалчилж хадгалж болно (бэлтгэсэн PDF дотор нь — PDF-тэй ижил нууцлалтай). Go SDK-тай нийцтэй. */
   state: Uint8Array;
+  /** Харагдах дүрслэл хаана зурагдсан (Go `Prepared.Placement`, PLACEMENT_SPEC.md); `appearance`-гүй бол байхгүй. */
+  placement?: PadesPlacement;
 }
+
+/**
+ * The visible stamp's final rect (Go `pades.Placement`, PLACEMENT_SPEC.md) — `appearance` coordinates, pt. The stamp
+ * avoids existing page content: `appearance.x/y` is the preferred spot.
+ * - `requested` — drawn at `appearance.x/y` (that spot was free);
+ * - `moved` — that spot overlapped page content; the stamp moved to the first free spot (mirrored column, then up in
+ *   12 pt steps);
+ * - `overlap` — no free spot; drawn at the requested spot over content;
+ * - `unscanned` — the page could not be scanned within the limits; drawn at the requested spot.
+ *
+ * The signature is valid in every case; surface `overlap` / `unscanned` to the user (e.g. a notice).
+ */
+export interface PadesPlacement {
+  /** 1-based page of the input document the stamp is on. */
+  page: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  status: PadesPlacementStatus;
+}
+
+export type PadesPlacementStatus = "requested" | "moved" | "overlap" | "unscanned";
 
 export interface PadesCompleteOptions {
   /** RFC 3161 TSA. Анхдагч `https://tsa.timeserver.mn/`. */
@@ -402,7 +429,12 @@ export async function prepare(pdf: Uint8Array | ArrayBuffer, opts: PadesPrepareO
     preparedSha256: toHex(await sha256(prep.pdf)),
     pdf: prep.pdf,
   });
-  return { dtbs: await sha256(attrs), digest: prep.digest, docId, state };
+  const out: PadesPrepared = { dtbs: await sha256(attrs), digest: prep.digest, docId, state };
+  if (vis && prep.placement) {
+    const pl = prep.placement;
+    out.placement = { page: vis.page, x: pl.x / 100, y: pl.y / 100, width: vis.w / 100, height: vis.h / 100, status: pl.status };
+  }
+  return out;
 }
 
 /** Appearance-ийн PDF-ээс үл хамаарах шалгалт (Go checkAppearance, APPEARANCE_SPEC.md §1). */
@@ -445,6 +477,7 @@ function visibleSpec(doc: Uint8Array, o: PadesPrepareOptions, name: string, now:
     lang: a.lang || o.lang || "mn",
     date: `${String(z.getUTCFullYear()).padStart(4, "0")}-${p2(z.getUTCMonth() + 1)}-${p2(z.getUTCDate())} ${p2(z.getUTCHours())}:${p2(z.getUTCMinutes())} (+08)`,
     url: `${VERIFY_URL_PREFIX}${docId}/${revIndex}`,
+    avoid: true,
   };
 }
 

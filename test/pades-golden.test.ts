@@ -89,6 +89,8 @@ test("pades golden — Go reference-тэй байт-ижил (prepare + complete
     assert.equal(sha(st.subarray(13 + hl)), e.preparedSha256, `${c.name}: preparedSha256`);
     assert.equal(head.preparedSha256, e.preparedSha256);
     assert.deepEqual(head.byteRange, e.byteRange, `${c.name}: byteRange`);
+    // PLACEMENT_SPEC.md (golden v5): харагдах тохиолдол бүрд эцсийн байршил + төлөв; үл харагдахад байхгүй.
+    assert.deepEqual(p.placement, c.expect.placement, `${c.name}: placement`);
     assert.equal(Buffer.from(head.signedAttrs, "base64").toString("hex"), e.signedAttrs, `${c.name}: signedAttrs`);
     const log: string[] = [];
     const r = await pades.complete(p.state, Buffer.from(String(e.signature), "hex"), {
@@ -104,14 +106,20 @@ test("pades golden — Go reference-тэй байт-ижил (prepare + complete
     assert.equal(r.sigRevSha256, e.sigRevSha256, `${c.name}: sigRevSha256`);
     assert.equal(r.outSha256, e.outSha256, `${c.name}: outSha256`);
     assert.equal(sha(r.pdf), e.outSha256);
+    assert.ok(Buffer.from(r.pdf).equals(read(`output/${c.name}.pdf`)), `${c.name}: output/${c.name}.pdf-тэй байт-ижил`);
     assert.equal(r.revIndex, e.revIndex, `${c.name}: revIndex`);
     assert.equal(r.hasPage, e.hasPage === true, `${c.name}: hasPage`);
     assert.equal(r.pageSha256, e.pageSha256 ?? "", `${c.name}: pageSha256`);
     assert.deepEqual(r.priorCmsSha256, e.priorCmsSha256 ?? [], `${c.name}: priorCmsSha256`);
     // Өмнөх гарын үсгийн revision = тэр гарын үсгийн sigRevSha256 (CA горим A-ийн sig_rev_sha256-тай ижил тодорхойлолт:
     // doc[0 : ByteRange[2]+ByteRange[3]]) — горим A-ийн өмнөх мөрийг бүртгэлд заахад.
-    const ref = String(c.input).startsWith("case:") ? M.cases.find((x) => x.name === String(c.input).slice(5)) : undefined;
-    assert.deepEqual(r.priorRevisionSha256, ref ? [ref.expect.sigRevSha256] : [], `${c.name}: priorRevisionSha256`);
+    // Олон өмнөх гарын үсэгтэй бол (golden v5 quartz-pdf13-visible-third) өвөг тохиолдлуудынх хуучнаас нь эхлэн.
+    const prior: unknown[] = [];
+    for (let ref = c; ref.input.startsWith("case:"); ) {
+      ref = M.cases.find((x) => x.name === ref.input.slice(5))!;
+      prior.unshift(ref.expect.sigRevSha256);
+    }
+    assert.deepEqual(r.priorRevisionSha256, prior, `${c.name}: priorRevisionSha256`);
     assert.equal(r.inSha256, e.inputSha256);
     assert.equal(r.docId, e.docId);
     outputs.set(c.name, r.pdf);
@@ -119,7 +127,10 @@ test("pades golden — Go reference-тэй байт-ижил (prepare + complete
   }
   assert.equal(n, M.cases.length);
   assert.ok(n >= 16, "golden case цөөн");
-  assert.ok(M.cases.filter((c) => c.prepare.appearance).length >= 5, "харагдах golden case цөөн");
+  assert.ok(M.cases.filter((c) => c.prepare.appearance).length >= 11, "харагдах golden case цөөн");
+  for (const s of ["requested", "moved", "overlap"]) {
+    assert.ok(M.cases.some((c) => (c.expect.placement as { status?: string } | undefined)?.status === s), `golden-д placement ${s} алга`);
+  }
 });
 
 // ── LTV retry (complete, ltvRetries): OCSP/CRL түр унавал ижил state + гарын үсгээр SDK өөрөө давтана ─────────────────

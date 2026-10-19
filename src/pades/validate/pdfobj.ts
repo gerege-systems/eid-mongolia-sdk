@@ -6,7 +6,7 @@
 // Go-ийн утгын төрөл ↔ TS: nil → null, bool → boolean, int64 → bigint, float64 → PReal, pdfName → PName, pdfStr → PStr
 // (latin1 мөр), pdfRef → PRef, pdfArr → PVal[], pdfDict → Map (null утгагүй), pdfStream → PStream.
 
-import { InflateError, inflateRaw, type InflateInfo } from "../pdf/inflate.js";
+import { InflateError, adler32, inflateRaw, type InflateInfo } from "../pdf/inflate.js";
 
 const MAX_PDF_DEPTH = 64;
 const MAX_PDF_NODES = 1_000_000;
@@ -179,21 +179,6 @@ function zlibStrict(src: Uint8Array, limit: number): Uint8Array {
   const want = ((src[at]! << 24) | (src[at + 1]! << 16) | (src[at + 2]! << 8) | src[at + 3]!) >>> 0;
   if (adler32(out) !== want) throw errPDFSyntax();
   return out;
-}
-
-function adler32(b: Uint8Array): number {
-  let a = 1;
-  let s = 0;
-  for (let i = 0; i < b.length; ) {
-    const n = Math.min(5552, b.length - i);
-    for (let j = 0; j < n; j++, i++) {
-      a += b[i]!;
-      s += a;
-    }
-    a %= 65521;
-    s %= 65521;
-  }
-  return ((s << 16) | a) >>> 0;
 }
 
 /** PNG мөрийн predictor-ийг буцаана (нэг байт = нэг пиксел). */
