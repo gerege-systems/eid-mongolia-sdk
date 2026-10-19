@@ -5,11 +5,16 @@
 
 import { fromLatin1 } from "../bytes.js";
 import { InflateLimitError, zlibInflate } from "./inflate.js";
+import { PRef, PStream, Reader, type ObjPtr, type PObj } from "./reader.js";
 
 /** PDF объектын массив/толийн давхарлалтын дээд гүн (Go validate.MaxNesting). */
 export const MAX_NESTING = 256;
 const NEST_SCAN_FACTOR = 16; // нийт уншилтын төсөв = 16×len(doc) + 1 MiB
 const MAX_OBJSTM_BYTES = 32 << 20; // бүх ObjStm-ийн задалсан нийт хэмжээ (zip bomb)
+/** trailer / xref stream-ийн /Size дээд хязгаар (Go maxXrefSize; хууль ёсны 10 MiB баримтад хэдэн арван мянга). */
+export const MAX_XREF_SIZE = 1 << 21;
+/** /Extends гинжийн дээд урт (Go maxObjStmChain). */
+const MAX_OBJSTM_CHAIN = 64;
 
 export class StructureError extends Error {
   constructor() {
@@ -148,6 +153,9 @@ interface ObjStmInfo {
 }
 
 class Scan {
+  /** Дээд түвшний /Size > MAX_XREF_SIZE. */
+  bigSize = false;
+
   constructor(
     public budget: number,
     public inflateLeft: number,
@@ -224,17 +232,49 @@ class Scan {
               l.val = saveVal;
             }
           }
-          if (!done) noteScalar(stack, info, tok, l.val);
+          if (!done) this.noteScalar(stack, info, tok, l.val);
           break;
         case Tok.Name:
         case Tok.Str:
-          noteScalar(stack, info, tok, l.val);
+          this.noteScalar(stack, info, tok, l.val);
           break;
       }
       // Нэг утга дууслаа.
       if (stack.length === 0) return;
       const f = stack[stack.length - 1]!;
       if (f.dict) f.expectKey = true;
+    }
+  }
+
+  /** Дээд түвшний толийн (ба /Filter массивын) энгийн утгыг тэмдэглэнэ. */
+  noteScalar(stack: Frame[], info: ObjStmInfo, tok: Tok, val: string): void {
+    if (stack.length === 1 && stack[0]!.dict) {
+      switch (stack[0]!.key) {
+        case "Type":
+          if (tok === Tok.Name) info.typ = val;
+          break;
+        case "Filter":
+          if (tok === Tok.Name) {
+            info.filter = val;
+            info.filters = 1;
+          }
+          break;
+        case "DecodeParms":
+          if (!(tok === Tok.Word && val === "null")) info.parms = true;
+          break;
+        case "N":
+          info.nCount = parseInt64(val);
+          break;
+        case "Size":
+          if (tok === Tok.Word && isInt(val) && BigInt(val) > BigInt(MAX_XREF_SIZE)) this.bigSize = true;
+          break;
+        case "First":
+          info.first = parseInt64(val);
+          break;
+      }
+    } else if (stack.length === 2 && stack[0]!.dict && stack[0]!.key === "Filter" && !stack[1]!.dict && tok === Tok.Name) {
+      info.filter = val;
+      info.filters++;
     }
   }
 
@@ -280,35 +320,6 @@ class Scan {
   }
 }
 
-/** Дээд түвшний толийн (ба /Filter массивын) энгийн утгыг тэмдэглэнэ. */
-function noteScalar(stack: Frame[], info: ObjStmInfo, tok: Tok, val: string): void {
-  if (stack.length === 1 && stack[0]!.dict) {
-    switch (stack[0]!.key) {
-      case "Type":
-        if (tok === Tok.Name) info.typ = val;
-        break;
-      case "Filter":
-        if (tok === Tok.Name) {
-          info.filter = val;
-          info.filters = 1;
-        }
-        break;
-      case "DecodeParms":
-        if (!(tok === Tok.Word && val === "null")) info.parms = true;
-        break;
-      case "N":
-        info.nCount = parseInt64(val);
-        break;
-      case "First":
-        info.first = parseInt64(val);
-        break;
-    }
-  } else if (stack.length === 2 && stack[0]!.dict && stack[0]!.key === "Filter" && !stack[1]!.dict && tok === Tok.Name) {
-    info.filter = val;
-    info.filters++;
-  }
-}
-
 /**
  * Go validate.CheckStructure: reader объектыг задалж эхэлдэг байж болох бүх цэгээс (`obj` ба `trailer` түлхүүр үгийн
  * дараа, /Type /ObjStm stream-ийн толгойн offset бүрээс) эхний объект дуусах хүртэл давхарлалтын гүнийг тоолно.
@@ -329,4 +340,61 @@ export function checkStructure(doc: Uint8Array): void {
       s.object(doc, at, true);
     }
   }
+  if (s.bigSize) throw new StructureError();
+  checkObjStmGraph(doc);
+}
+
+/**
+ * Go checkObjStmGraph (PRECHECKS #2b): уншигч ObjStm доторх объектыг уншихдаа агуулагч stream-ийг (мөн толгойн
+ * /Length /Filter /DecodeParms /N /First /Extends лавлагааг) рекурсээр resolve хийдэг — мөчлөг нь хязгааргүй рекурс.
+ * ISO 32000-1 §7.5.7-оор хууль ёсны баримтад гардаггүй тул fail-closed: агуулагч нь өөрөө ObjStm доторх объект;
+ * агуулагч (ба /Extends-ээр холбогдсон) stream-ийн толгойн лавлагаа ObjStm доторх объект руу; /Extends мөчлөг / > 64.
+ * Уншигч нээгдэхгүй эсвэл задрахгүй бол энд шийдэхгүй (дуудагч өөрөө PDF_INVALID болгоно).
+ */
+function checkObjStmGraph(doc: Uint8Array): void {
+  let r: Reader;
+  try {
+    r = new Reader(doc);
+  } catch {
+    return;
+  }
+  const xr = r.xref;
+  const registered = (p: ObjPtr): boolean => p.id < xr.length && xr[p.id]!.ptr.id === p.id && xr[p.id]!.ptr.gen === p.gen;
+  const inStream = (p: ObjPtr): boolean => registered(p) && xr[p.id]!.inStream;
+  const containers = new Map<string, ObjPtr>();
+  for (const e of xr) {
+    if (!e.inStream) continue;
+    if (inStream(e.stream)) throw new StructureError();
+    containers.set(`${e.stream.id} ${e.stream.gen}`, e.stream);
+  }
+  for (const c of containers.values()) {
+    const seen = new Set<string>();
+    for (let p = c; registered(p); ) {
+      const k = `${p.id} ${p.gen}`;
+      if (seen.has(k) || seen.size > MAX_OBJSTM_CHAIN) throw new StructureError();
+      seen.add(k);
+      let v: PObj | undefined;
+      try {
+        const e = xr[p.id]!.ptr;
+        v = r.resolve(e, new PRef(e.id, e.gen)).data;
+      } catch {
+        return; // уншигч энд унадаг баримт — дуудагч PDF_INVALID
+      }
+      if (!(v instanceof PStream)) break;
+      let bad = false;
+      walkRefs(v.hdr, 0, (x) => (bad ||= inStream(x)));
+      if (bad) throw new StructureError();
+      const ext = v.hdr.get("Extends");
+      if (!(ext instanceof PRef)) break;
+      p = { id: ext.id, gen: ext.gen };
+    }
+  }
+}
+
+/** Go walkRefs — задалсан утга (dict / array) доторх бүх лавлагаа. */
+function walkRefs(v: PObj | undefined, depth: number, fn: (p: ObjPtr) => void): void {
+  if (depth > MAX_NESTING) return;
+  if (v instanceof PRef) fn({ id: v.id, gen: v.gen });
+  else if (v instanceof Map) for (const x of v.values()) walkRefs(x, depth + 1, fn);
+  else if (Array.isArray(v)) for (const x of v) walkRefs(x, depth + 1, fn);
 }

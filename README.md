@@ -789,7 +789,7 @@ try {
 - Options: `roots`, `intermediates`, `issuers` (DER, тест), `time`, `offline`, `fetch`, `signal`.
 - `key_medium` — гэрчилгээнээс л: qcStatements-тэй иргэний SIGN → `phone`, бусад `unknown` (CA өөрийн бүртгэлээс `token`
   ч тогтооно). `session_id`, `doc_id`, `on_behalf_of_*` нь CA-ийн бүртгэлээс — локал тайланд байхгүй.
-- Хөтчийн bundle (минифай): ~252 KB, gzip ~137 KB (`npm run size:validate`, хязгаар 300 KB).
+- Хөтчийн bundle (минифай): ~253 KB, gzip ~137 KB (`npm run size:validate`, хязгаар 300 KB).
 
 ## 4. QR ба ижил төхөөрөмж — device link v3
 
