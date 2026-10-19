@@ -187,3 +187,19 @@ test("person.certificates: issuedAt, revokedAt, revocationReason", async () => {
   assert.equal(c.certificates[1]!.revokedAt, undefined);
   assert.equal(c.certificates[1]!.revocationReason, "superseded");
 });
+
+test("person.certificates: TOKEN мөрөнд tokenSerial, MOBILE-д алга", async () => {
+  const { eid } = client({
+    body: {
+      personEtsi: "PNOMN-1",
+      counts: { valid: 2, revoked: 0, suspended: 0, expired: 0, total: 2 },
+      certificates: [
+        { type: "AUTH", keyMedium: "TOKEN", status: "VALID", tokenSerial: "EP2003-0042A1", organization: { etsi: "NTRMN-1", name: "Тест ХХК" } },
+        { type: "SIGN", keyMedium: "MOBILE", status: "VALID" },
+      ],
+    },
+  });
+  const c = await eid.person.certificates("PNOMN-1");
+  assert.equal(c.certificates[0]!.tokenSerial, "EP2003-0042A1");
+  assert.equal(c.certificates[1]!.tokenSerial, undefined);
+});

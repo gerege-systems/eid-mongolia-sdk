@@ -42,6 +42,12 @@ export interface PersonCertificate {
   certValue?: string;
   /** TOKEN мөрөнд токенд холбогдсон байгууллага; хувийн токенд алга. */
   organization?: TokenOrganization;
+  /**
+   * TOKEN мөрөнд: гэрчилгээ олгогдсон USB токены серийн дугаар (`/mobile/tokens`-ийн `tokenSerial`-тай ижил). Нэг
+   * токены AUTH + SIGN-ийг үүгээр бүлэглэ; сунгалтаар солигдсон (SUSPENDED) мөр ч өөрийн токены дугаартай. MOBILE/HSM
+   * мөрөнд болон хуучин CA-д алга.
+   */
+  tokenSerial?: string;
 }
 
 export interface CertCounts {
