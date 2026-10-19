@@ -127,20 +127,14 @@ window.ready = true;
     // Цуцлалт хөрвүүлэлтийн үеэр → AbortError; дараагийнх нь кэшээс (wasm/data дахин татахгүй).
     const a = await p.evaluate(() => window.run("/fixtures/convert/sample.docx", "a.docx", "convert"));
     check(!a.ok && a.name === "AbortError", `цуцлалт: ${a.name}`);
-    if (process.env.BROWSER === "webkit" && process.platform === "linux") {
-      // Linux-ийн WebKit (WPE, CI) terminate хийсэн worker-ийн дараа шинэ worker-ийн LibreOffice init дуусдаггүй
-      // (2026-10-15; macOS WebKit/Safari, Chromium-д болно) — алгасна.
-      console.log("skip цуцалсны дараах дахин ажиллуулалт (Linux WebKit)");
-    } else {
-      big = [];
-      const again = await p.evaluate(() => window.run("/fixtures/convert/sample.docx", "a.docx"));
-      check(again.ok && !again.log.some((l) => l.startsWith("download")), `цуцалсны дараа: download үе шатгүй (кэш), ${again.ms} ms`);
-      check(big.length === 0, `цуцалсны дараа soffice.wasm/.data сүлжээнээс дахин аваагүй${big.length ? ": " + big.join(" ") : ""}`);
-      // verbose: true — worker дахин асаж лог гарна (оношилгоо). Шинэ worker тул Linux WebKit-д мөн алгасна.
-      loLog.length = 0;
-      const vb = await p.evaluate(() => window.run("/fixtures/convert/sample.docx", "v.docx", undefined, true));
-      check(vb.ok && loLog.length > 0, `verbose: true — хувиргагчийн лог ${loLog.length} мөр`);
-    }
+    big = [];
+    const again = await p.evaluate(() => window.run("/fixtures/convert/sample.docx", "a.docx"));
+    check(again.ok && !again.log.some((l) => l.startsWith("download")), `цуцалсны дараа: download үе шатгүй (кэш), ${again.ms} ms`);
+    check(big.length === 0, `цуцалсны дараа soffice.wasm/.data сүлжээнээс дахин аваагүй${big.length ? ": " + big.join(" ") : ""}`);
+    // verbose: true — worker дахин асаж лог гарна (оношилгоо).
+    loLog.length = 0;
+    const vb = await p.evaluate(() => window.run("/fixtures/convert/sample.docx", "v.docx", undefined, true));
+    check(vb.ok && loLog.length > 0, `verbose: true — хувиргагчийн лог ${loLog.length} мөр`);
     const st = await p.evaluate(() => window.c.converterStatus({ assetsBase: "/eid-convert/" }));
     check(st.cached && st.downloadBytes === 0, `converterStatus ${JSON.stringify(st)}`);
 
