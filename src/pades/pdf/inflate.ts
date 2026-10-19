@@ -45,15 +45,17 @@ function fixed(): [Huff, Huff] {
 
 export class InflateError extends Error {}
 class Truncated extends InflateError {}
+/** Гаралт `limit`-ээс хэтэрсэн (zip bomb хамгаалалт ялгахад — pdf/nesting.ts). */
+export class InflateLimitError extends InflateError {}
 
-/** zlib (RFC 1950) задлах. `limit` — гаралтын дээд байт. */
-export function zlibInflate(src: Uint8Array, limit = 64 << 20): Uint8Array {
+/** zlib (RFC 1950) задлах. `limit` — гаралтын дээд байт; `initial` — гаралтын буферийн эхний хэмжээ (анхдагч src×4). */
+export function zlibInflate(src: Uint8Array, limit = 64 << 20, initial?: number): Uint8Array {
   if (src.length < 2) throw new InflateError("zlib: header алга");
   const cmf = src[0]!;
   const flg = src[1]!;
   if ((cmf & 0x0f) !== 8 || cmf >> 4 > 7 || ((cmf << 8) | flg) % 31 !== 0) throw new InflateError("zlib: header буруу");
   if (flg & 0x20) throw new InflateError("zlib: preset dictionary");
-  return inflateRaw(src.subarray(2), limit);
+  return inflateRaw(src.subarray(2), limit, undefined, initial);
 }
 
 /** inflateRaw-ийн нэмэлт гаралт (хатуу zlib — validate/pdfobj.ts): end — deflate-ийн дараах эхний байт, truncated —
@@ -64,16 +66,16 @@ export interface InflateInfo {
 }
 
 /** Raw deflate (RFC 1951). Төгсгөлийн block хүртэл (дараах байт — adler — үл тоомсорлоно). */
-export function inflateRaw(src: Uint8Array, limit = 64 << 20, info?: InflateInfo): Uint8Array {
+export function inflateRaw(src: Uint8Array, limit = 64 << 20, info?: InflateInfo, initial?: number): Uint8Array {
   let pos = 0;
   let bitBuf = 0;
   let bitCnt = 0;
-  let out = new Uint8Array(Math.min(limit, Math.max(1024, src.length * 4)));
+  let out = new Uint8Array(Math.min(limit, Math.max(1024, initial ?? src.length * 4)));
   let len = 0;
 
   const need = (n: number): void => {
     if (len + n <= out.length) return;
-    if (len + n > limit) throw new InflateError("inflate: хэмжээний хязгаар");
+    if (len + n > limit) throw new InflateLimitError("inflate: хэмжээний хязгаар");
     let cap = out.length * 2;
     while (cap < len + n) cap *= 2;
     const nb = new Uint8Array(Math.min(cap, limit));

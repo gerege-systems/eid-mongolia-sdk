@@ -100,10 +100,10 @@ export async function validatePdf(pdf: Uint8Array | ArrayBuffer, opts: ValidateP
   }
   const now = fromDate(opts.time ?? new Date());
   const dss = ex.sigs.find((s) => s.dss)?.dss;
-  let status: StatusSource = new DSSStatus(dss, issuers);
+  let status: StatusSource = new DSSStatus(dss, now);
   if (!opts.offline) {
     const fetchFn = opts.fetch ?? (globalThis.fetch as unknown as FetchFn);
-    status = await OnlineStatus.create(new Fetcher(fetchFn, isBrowser(), opts.signal), ex.sigs, issuers, status, now);
+    status = new OnlineStatus(new Fetcher(fetchFn, isBrowser(), opts.signal), status, now);
   }
   const ev = new Evaluator({ roots, intermediates: [...embedded(INTERMEDIATES), ...extraInter], issuers, status, now });
   const rep: PdfReport = { indication: "valid", signatures: [] };

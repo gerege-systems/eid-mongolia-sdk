@@ -6,7 +6,9 @@ import { equal, toHex } from "./bytes.js";
 import { parseSignedData, verifySignedData } from "./cms.js";
 import { sha1, sha256 } from "./crypto.js";
 import type { Fetcher } from "./fetch.js";
+import { CertificateRevokedError, crlFor, crlListed, freshAt, ocspCertIDMatches, parseCRL } from "./revocation.js";
 import { OID, checkSignature, checkSignatureFrom, isTSASigningCert, parseCertificate, verifyChain, verifySignature, type Certificate } from "./x509.js";
+import { ZERO_TIME, fromDate, fromPrecise, isZero, type GoTime } from "./validate/gofmt.js";
 
 const MAX_TSA_SKEW_MS = 10 * 60_000;
 
@@ -90,6 +92,8 @@ export interface OCSPResp {
   serial: bigint;
   thisUpdate: PreciseTime;
   nextUpdate?: Date;
+  /** nextUpdate (наносекундын нарийвчлалтай) — шинэлэг байдлын (freshAt) шалгалтад. */
+  nextUpdatePrecise?: PreciseTime;
   /** revoked үед. */
   revokedAt?: PreciseTime;
   certificate?: Certificate;
@@ -157,9 +161,9 @@ export async function parseOCSP(der: Uint8Array, serial: bigint | undefined, iss
   if (!status) throw new Error("OCSP certStatus");
   const revokedAt = status === "revoked" ? parsePreciseTime(expect(children(st)[0], TAG.GeneralizedTime, "revocationTime")) : undefined;
   const thisUpdate = parsePreciseTime(expect(single[2], TAG.GeneralizedTime, "thisUpdate"));
-  let nextUpdate: Date | undefined;
+  let nextUpdatePrecise: PreciseTime | undefined;
   for (const x of single.slice(3)) {
-    if (x.tag === 0xa0) nextUpdate = parsePreciseTime(children(x)[0]!).date;
+    if (x.tag === 0xa0) nextUpdatePrecise = parsePreciseTime(children(x)[0]!);
     if (x.tag === 0xa1) {
       for (const ext of children(children(x)[0]!)) {
         const e = children(ext);
@@ -167,7 +171,7 @@ export async function parseOCSP(der: Uint8Array, serial: bigint | undefined, iss
       }
     }
   }
-  return { status, serial: intValue(expect(cid[3], TAG.INTEGER, "serial").value), thisUpdate, nextUpdate, revokedAt, certificate };
+  return { status, serial: intValue(expect(cid[3], TAG.INTEGER, "serial").value), thisUpdate, nextUpdate: nextUpdatePrecise?.date, nextUpdatePrecise, revokedAt, certificate };
 }
 
 /** a, b нь ижил гэрчилгээ (байт-ижил) эсвэл ижил subject + түлхүүр (дахин олгосон ижил CA). */
@@ -210,48 +214,37 @@ function responderOK(resp: OCSPResp, issuer: Certificate): boolean {
 
 class NotFresh extends Error {}
 
+/** OCSP SingleResponse-ийн thisUpdate/nextUpdate-ийг freshAt-д (тэг nextUpdate — байхгүй). */
+export function ocspFreshAt(resp: OCSPResp, at: GoTime, now: GoTime): boolean {
+  return freshAt(fromPrecise(resp.thisUpdate), resp.nextUpdatePrecise ? fromPrecise(resp.nextUpdatePrecise) : ZERO_TIME, at, now);
+}
+
+/**
+ * Go fetchOCSP: SHA-1 CertID (RFC 5019) = энэ гэрчилгээ + олгогч, олгогч (эсвэл delegated) зурсан, good, одоо шинэлэг
+ * (freshAt), fresh өгвөл thisUpdate > fresh. revoked → CertificateRevokedError. Алдааны мессежид гэрчилгээний нэр (PII) үгүй.
+ */
 async function fetchOCSP(f: Fetcher, url: string, c: Certificate, issuer: Certificate, now: Date, fresh: PreciseTime | undefined): Promise<[Uint8Array, OCSPResp]> {
   const der = await f.do("POST", url, "application/ocsp-request", await ocspRequest(c, issuer));
   const resp = await parseOCSPForCert(der, c, issuer);
   if (!responderOK(resp, issuer)) throw new Error("OCSP responder-ийн EKU OCSPSigning биш");
-  if (resp.status !== "good" || (resp.nextUpdate && resp.nextUpdate.getTime() < now.getTime())) throw new Error(`OCSP ${c.subjectCN}: ${resp.status}`);
+  if (!(await ocspCertIDMatches(der, c, issuer))) throw new Error("OCSP CertID энэ гэрчилгээ/олгогчийнх биш");
+  if (resp.status === "revoked") throw new CertificateRevokedError();
+  const n = fromDate(now);
+  if (resp.status !== "good" || !ocspFreshAt(resp, n, n)) throw new Error(`OCSP status ${resp.status}`);
   if (fresh && !after(resp.thisUpdate, fresh)) throw new NotFresh("OCSP thisUpdate нь timestamp-аас хожуу биш");
   return [der, resp];
 }
 
-/** Go crlCovers: c-ийн олгогчийн CRL (гарын үсэг шалгасан), nextUpdate өнгөрөөгүй, c-г агуулаагүй. */
+/**
+ * Go crlCovers: der нь c-ийн олгогчийн (нэр/AKI, гарын үсэг шалгасан) CRL, nextUpdate-тэй, одоо шинэлэг (freshAt), c-г
+ * агуулаагүй. c жагсаалтад байвал CertificateRevokedError.
+ */
 async function crlCovers(der: Uint8Array, c: Certificate, issuer: Certificate, now: Date): Promise<boolean> {
-  try {
-    const top = children(expect(parseOne(der), TAG.SEQUENCE, "CertificateList"));
-    const tbs = expect(top[0], TAG.SEQUENCE, "TBSCertList");
-    const sigAlg = expect(top[1], TAG.SEQUENCE, "sigAlg");
-    const sig = expect(top[2], TAG.BIT_STRING, "sig").value.subarray(1);
-    const f = children(tbs);
-    let i = 0;
-    if (f[0]?.tag === TAG.INTEGER) i++;
-    i++; // signature alg
-    const iss = expect(f[i++], TAG.SEQUENCE, "issuer");
-    if (!equal(iss.raw, c.rawIssuer)) return false;
-    // Go RevocationList.CheckSignatureFrom: v3 parent-д basicConstraints, keyUsage байвал cRLSign.
-    if (issuer.version === 3 && !issuer.basicConstraintsValid) return false;
-    if (issuer.keyUsage !== 0 && !(issuer.keyUsage & (1 << 6))) return false;
-    if (!(await verifySignature(issuer, sigAlg, tbs.raw, sig))) return false;
-    i++; // thisUpdate
-    const nu = f[i];
-    if (!nu || (nu.tag !== TAG.UTCTime && nu.tag !== TAG.GeneralizedTime)) return false;
-    if (parsePreciseTime(nu).date.getTime() < now.getTime()) return false;
-    i++;
-    const serial = intValue(c.serial);
-    const revoked = f[i];
-    if (revoked?.tag === TAG.SEQUENCE) {
-      for (const e of children(revoked)) {
-        if (intValue(expect(children(e)[0], TAG.INTEGER, "serial").value) === serial) return false;
-      }
-    }
-    return true;
-  } catch {
-    return false;
-  }
+  const crl = parseCRL(der);
+  if (!crl || !(await crlFor(crl, c, issuer))) return false;
+  if (crlListed(crl, c)) throw new CertificateRevokedError();
+  const n = fromDate(now);
+  return !isZero(crl.nextUpdate) && freshAt(crl.thisUpdate, crl.nextUpdate, n, n);
 }
 
 export interface DSSMaterial {
@@ -281,7 +274,7 @@ async function collectLTV(f: Fetcher, now: Date, fresh: PreciseTime, roots: Cert
       seen.add(k);
       addTo(d.certs, c.raw);
       const issuer = await issuerOf(c);
-      if (!issuer) throw new LTVError(`${c.subjectCN}-ийн олгогч олдсонгүй`);
+      if (!issuer) throw new LTVError(`гинжийн гэрчилгээний олгогч олдсонгүй`);
       let ok = false;
       let freshErr: NotFresh | undefined;
       const fr = i === 0 ? fresh : undefined;
@@ -293,6 +286,7 @@ async function collectLTV(f: Fetcher, now: Date, fresh: PreciseTime, roots: Cert
           ok = true;
           break;
         } catch (e) {
+          if (e instanceof CertificateRevokedError) throw e;
           if (e instanceof NotFresh) freshErr = e;
         }
       }
@@ -310,7 +304,7 @@ async function collectLTV(f: Fetcher, now: Date, fresh: PreciseTime, roots: Cert
       }
       if (!ok) {
         if (freshErr) throw freshErr;
-        throw new LTVError(`${c.subjectCN}-д хүчинтэй OCSP/CRL алга`);
+        throw new LTVError(`гинжийн гэрчилгээнд хүчинтэй OCSP/CRL алга`);
       }
       if (i === 0 && freshErr && c.ocspServers.length > 0 && !(await hasFreshOCSP(d.ocsps, c, issuer, fresh))) throw freshErr;
     }
@@ -321,7 +315,7 @@ async function collectLTV(f: Fetcher, now: Date, fresh: PreciseTime, roots: Cert
 async function hasFreshOCSP(list: Uint8Array[], c: Certificate, issuer: Certificate, fresh: PreciseTime): Promise<boolean> {
   for (const der of list) {
     try {
-      if (after((await parseOCSPForCert(der, c, issuer)).thisUpdate, fresh)) return true;
+      if (after((await parseOCSPForCert(der, c, issuer)).thisUpdate, fresh) && (await ocspCertIDMatches(der, c, issuer))) return true;
     } catch {
       /* өөр гэрчилгээний хариу */
     }

@@ -3,8 +3,9 @@
 // бүтээнэ — тайлан CA-ийн /v3/validate/pdf-тэй ижил JSON.
 
 import { TAG, children, expect, intValue, oidString, parseOne, parsePreciseTime, readNode } from "../asn1.js";
-import { equal } from "../bytes.js";
-import { parseOCSP, parseOCSPFrom, sameCertKey, ocspRequest, type OCSPResp } from "../ltv.js";
+import { equal, toHex } from "../bytes.js";
+import { ocspFreshAt, parseOCSP, parseOCSPFrom, sameCertKey, ocspRequest, type OCSPResp } from "../ltv.js";
+import { SHA1_SIG, crlFor, crlListed, freshAt, ocspCertIDMatches, parseCRL, type ParsedCRL } from "../revocation.js";
 import type { Fetcher } from "../fetch.js";
 import { OID, isTSASigningCert, parseCertificate, verifySignature, type Certificate } from "../x509.js";
 import type { RawDSS, RawSignature, RawTimestamp } from "./extract.js";
@@ -97,8 +98,12 @@ export interface CertStatus {
   revokedAt?: GoTime;
 }
 
+/**
+ * cert — шалгах гэрчилгээ, issuer — гинжийн (гарын үсгээр баталгаажсан) олгогч: нотолгоо (OCSP CertID, CRL issuer/гарын
+ * үсэг) энэ хосынх байх ёстой. at — шалгах цаг (цагийн тэмдгийн цаг эсвэл одоо): «good» нотолгоо at-д шинэлэг (freshAt).
+ */
 export interface StatusSource {
-  certStatus(serial: bigint): Promise<CertStatus>;
+  certStatus(cert: Certificate, issuer: Certificate, at: GoTime): Promise<CertStatus>;
 }
 
 export interface EvalConfig {
@@ -110,8 +115,6 @@ export interface EvalConfig {
 }
 
 // ── гинж (Go crypto/x509 Verify) ──
-
-const SHA1_SIG = new Set(["1.2.840.113549.1.1.5", "1.2.840.10045.4.1", "1.2.840.10040.4.3", "1.2.840.113549.1.1.4"]);
 
 /** Go Certificate.CheckSignatureFrom (SHA-1/MD5 татгалзана). */
 export async function checkSigFrom(c: Certificate, parent: Certificate): Promise<boolean> {
@@ -267,7 +270,7 @@ export class Evaluator {
     return this.cfg.issuers.some((is) => equal(c.rawSubject, is.rawSubject) && equal(c.spki, is.spki));
   }
 
-  async certInfo(c: Certificate, chain: Certificate[] | undefined): Promise<CertInfo> {
+  async certInfo(c: Certificate, chain: Certificate[] | undefined, at: GoTime): Promise<CertInfo> {
     const info: CertInfo = {
       common_name: commonName(c.rawSubject),
       subject: nameString(c.rawSubject),
@@ -284,7 +287,7 @@ export class Evaluator {
     if (!this.cfg.status) return info;
     let st: CertStatus;
     try {
-      st = await this.cfg.status.certStatus(intValue(c.serial));
+      st = await this.cfg.status.certStatus(c, chain[1]!, at);
     } catch {
       return info;
     }
@@ -377,7 +380,7 @@ export class Evaluator {
     s.chain_trusted = trusted;
     s.chain = chain ? chain.map((c) => commonName(c.rawSubject)) : [commonName(leaf.rawSubject)];
     this.lastRevokedAt = undefined;
-    const info = await this.certInfo(leaf, chain);
+    const info = await this.certInfo(leaf, chain, at);
     s.certificate = info;
     if (!trusted) s.problems.push(PROBLEMS.untrusted);
     if (!["sign", "seal", "document_signer"].includes(info.usage)) s.problems.push(PROBLEMS.keyUsage);
@@ -396,7 +399,7 @@ export class Evaluator {
     }
     if (cades && r.signingTimeAttr && info.issued_by_eid) s.problems.push(PROBLEMS.malformed);
     if (!r.coversWhole && !r.laterSignaturesOnly) s.problems.push(PROBLEMS.modifiedAfter);
-    if (trusted) s.ltv = await ltvCoverage(r.dss, at, [chain!, tsChain ?? []]);
+    if (trusted) s.ltv = await ltvCoverage(r.dss, at, this.cfg.now, [chain!, tsChain ?? []]);
     if (cades) {
       s.signature_level = signingTime && s.ltv?.complete ? "PAdES-BASELINE-LT" : signingTime ? "PAdES-BASELINE-T" : "PAdES-BASELINE-B";
     }
@@ -491,10 +494,14 @@ function usageOf(c: Certificate): CertInfo["usage"] {
 
 // ── LTV (ltv.go) ──
 
-const LTV_FRESHNESS_MS = 24 * 3600_000;
 const OID_OCSP_NOCHECK = "1.3.6.1.5.5.7.48.1.5";
 
-async function ltvCoverage(dss: RawDSS | undefined, at: GoTime, chains: Certificate[][]): Promise<LTVInfo> {
+/**
+ * Go ltvCoverage — гинжийн (leaf → root) ба TSA гинжийн root-оос бусад гэрчилгээ бүрд DSS-д олгогчийн (эсвэл delegated
+ * nocheck responder-ийн) зурсан, CertID таарсан, `good`, at-д шинэлэг (freshAt) OCSP эсвэл олгогчийн, шинэлэг, тэр
+ * гэрчилгээг агуулаагүй CRL. now — шалгагчийн одоо (ирээдүйн thisUpdate-ийг татгалзана).
+ */
+async function ltvCoverage(dss: RawDSS | undefined, at: GoTime, now: GoTime, chains: Certificate[][]): Promise<LTVInfo> {
   const out: LTVInfo = { complete: false, missing: [] };
   const crls: ParsedCRL[] = [];
   for (const der of dss?.crls ?? []) {
@@ -508,14 +515,14 @@ async function ltvCoverage(dss: RawDSS | undefined, at: GoTime, chains: Certific
       const issuer = chain[i + 1]!;
       if (seen.some((x) => equal(x, cert.raw))) continue;
       seen.push(cert.raw);
-      if (!(await covered(cert, issuer, at, dss?.ocsps ?? [], crls))) out.missing.push(commonName(cert.rawSubject));
+      if (!(await covered(cert, issuer, at, now, dss?.ocsps ?? [], crls))) out.missing.push(commonName(cert.rawSubject));
     }
   }
   out.complete = out.missing.length === 0 && seen.length > 0;
   return out;
 }
 
-async function covered(cert: Certificate, issuer: Certificate, at: GoTime, ocsps: Uint8Array[], crls: ParsedCRL[]): Promise<boolean> {
+async function covered(cert: Certificate, issuer: Certificate, at: GoTime, now: GoTime, ocsps: Uint8Array[], crls: ParsedCRL[]): Promise<boolean> {
   for (const der of ocsps) {
     let resp: OCSPResp;
     try {
@@ -523,72 +530,16 @@ async function covered(cert: Certificate, issuer: Certificate, at: GoTime, ocsps
     } catch {
       continue;
     }
-    if (resp.status !== "good") continue;
+    if (resp.status !== "good" || !(await ocspCertIDMatches(der, cert, issuer))) continue;
     if (resp.certificate && !equal(resp.certificate.raw, issuer.raw) && !resp.certificate.extensions.some((e) => e.oid === OID_OCSP_NOCHECK)) continue;
-    const tu = fromPrecise(resp.thisUpdate);
-    if (!before(tu, addMs(at, -LTV_FRESHNESS_MS))) return true;
-    if (resp.nextUpdate && !before(fromDate(resp.nextUpdate), at) && !after(tu, at)) return true;
+    if (ocspFreshAt(resp, at, now)) return true;
   }
   for (const crl of crls) {
-    if (!equal(crl.rawIssuer, cert.rawIssuer) || !(await crlSignedBy(crl, issuer))) continue;
-    if (crl.nextUpdate && before(crl.nextUpdate, at)) continue;
-    const serial = intValue(cert.serial);
-    if (crl.revoked.some((e) => e.serial === serial)) continue;
+    if (!(await crlFor(crl, cert, issuer)) || !freshAt(crl.thisUpdate, crl.nextUpdate, at, now)) continue;
+    if (crlListed(crl, cert)) continue;
     return true;
   }
   return false;
-}
-
-// ── CRL ──
-
-export interface ParsedCRL {
-  rawIssuer: Uint8Array;
-  tbs: Uint8Array;
-  sigAlg: ReturnType<typeof readNode>;
-  sig: Uint8Array;
-  nextUpdate?: GoTime;
-  revoked: { serial: bigint; time: GoTime }[];
-}
-
-/** x509.ParseRevocationList-ийн хэрэгтэй хэсэг. */
-export function parseCRL(der: Uint8Array): ParsedCRL | undefined {
-  try {
-    const top = children(expect(parseOne(der), TAG.SEQUENCE, "CertificateList"));
-    const tbs = expect(top[0], TAG.SEQUENCE, "TBSCertList");
-    const sigAlg = expect(top[1], TAG.SEQUENCE, "sigAlg");
-    const sigBits = expect(top[2], TAG.BIT_STRING, "sig");
-    const f = children(tbs);
-    let i = 0;
-    if (f[i]?.tag === TAG.INTEGER) i++;
-    expect(f[i++], TAG.SEQUENCE, "signature");
-    const issuer = expect(f[i++], TAG.SEQUENCE, "issuer");
-    const tu = f[i++];
-    if (!tu || (tu.tag !== TAG.UTCTime && tu.tag !== TAG.GeneralizedTime)) return undefined;
-    let nextUpdate: GoTime | undefined;
-    if (f[i] && (f[i]!.tag === TAG.UTCTime || f[i]!.tag === TAG.GeneralizedTime)) nextUpdate = fromPrecise(parsePreciseTime(f[i++]!));
-    const revoked: ParsedCRL["revoked"] = [];
-    if (f[i]?.tag === TAG.SEQUENCE) {
-      for (const e of children(f[i++]!)) {
-        const p = children(expect(e, TAG.SEQUENCE, "entry"));
-        revoked.push({ serial: intValue(expect(p[0], TAG.INTEGER, "serial").value), time: fromPrecise(parsePreciseTime(p[1]!)) });
-      }
-    }
-    return { rawIssuer: issuer.raw, tbs: tbs.raw, sigAlg, sig: sigBits.value.subarray(1), nextUpdate, revoked };
-  } catch {
-    return undefined;
-  }
-}
-
-/** Go RevocationList.CheckSignatureFrom (SHA-1 татгалзана). */
-export async function crlSignedBy(crl: ParsedCRL, issuer: Certificate): Promise<boolean> {
-  if ((issuer.version === 3 && !issuer.basicConstraintsValid) || (issuer.basicConstraintsValid && !issuer.isCA)) return false;
-  if (issuer.keyUsage !== 0 && !(issuer.keyUsage & (1 << 6))) return false;
-  if (SHA1_SIG.has(oidString(children(crl.sigAlg)[0]!.value))) return false;
-  try {
-    return await verifySignature(issuer, crl.sigAlg, crl.tbs, crl.sig);
-  } catch {
-    return false;
-  }
 }
 
 // ── цуцлалтын эх сурвалж ──
@@ -598,138 +549,123 @@ function responderOK(resp: OCSPResp, issuer: Certificate): boolean {
   return resp.certificate.extKeyUsage.includes(OID.kpOCSPSigning);
 }
 
-/** Go dssStatus: баримтын DSS-ийн OCSP/CRL-ээс (олгогчийн гарын үсгээр шалгасан). */
+/** Go ocspFor — der нь cert-ийн (CertID = issuer + serial) хариу, олгогч эсвэл түүний OCSPSigning responder зурсан. */
+async function ocspFor(der: Uint8Array, cert: Certificate, issuer: Certificate): Promise<OCSPResp | undefined> {
+  let resp: OCSPResp;
+  try {
+    resp = await parseOCSPFrom(der, intValue(cert.serial), issuer);
+  } catch {
+    return undefined;
+  }
+  if (resp.serial !== intValue(cert.serial) || !(await ocspCertIDMatches(der, cert, issuer)) || !responderOK(resp, issuer)) return undefined;
+  return resp;
+}
+
+/**
+ * Go dssStatus: баримтын DSS-ийн OCSP/CRL-ээс. Нотолгоо нь ЭНЭ гэрчилгээ + түүний гинжийн олгогчийнх байх ёстой (OCSP
+ * CertID, CRL нэр/AKI/гарын үсэг). Цуцалсан нотолгоо аль нэг нь байвал revoked (шинэлэг эсэхээс үл хамааран, хамгийн
+ * эрт цаг — «good»-ийг давна); үгүй бол at-д шинэлэг good нотолгоо байвал good; эс бөгөөс issued=false (unknown).
+ */
 export class DSSStatus implements StatusSource {
   constructor(
     private readonly dss: RawDSS | undefined,
-    private readonly issuers: Certificate[],
+    private readonly now: GoTime,
   ) {}
 
-  async certStatus(serial: bigint): Promise<CertStatus> {
+  async certStatus(cert: Certificate, issuer: Certificate, at: GoTime): Promise<CertStatus> {
+    let revoked: GoTime | undefined;
+    const markRevoked = (t: GoTime): void => {
+      if (!revoked || before(t, revoked)) revoked = t;
+    };
+    let good = false;
     for (const der of this.dss?.ocsps ?? []) {
-      for (const iss of this.issuers) {
-        let resp: OCSPResp;
-        try {
-          resp = await parseOCSPFrom(der, undefined, iss);
-        } catch {
-          continue;
-        }
-        if (resp.serial !== serial || !responderOK(resp, iss)) continue;
-        if (resp.status === "good") return { issued: true, revoked: false };
-        if (resp.status === "revoked") return { issued: true, revoked: true, revokedAt: fromPrecise(resp.revokedAt!) };
-      }
+      const resp = await ocspFor(der, cert, issuer);
+      if (!resp) continue;
+      if (resp.status === "revoked") markRevoked(fromPrecise(resp.revokedAt!));
+      else if (resp.status === "good") good ||= ocspFreshAt(resp, at, this.now);
     }
     for (const der of this.dss?.crls ?? []) {
       const crl = parseCRL(der);
-      if (!crl) continue;
-      for (const iss of this.issuers) {
-        if (!equal(crl.rawIssuer, iss.rawSubject) || !(await crlSignedBy(crl, iss))) continue;
-        const e = crl.revoked.find((x) => x.serial === serial);
-        return e ? { issued: true, revoked: true, revokedAt: e.time } : { issued: true, revoked: false };
-      }
+      if (!crl || !(await crlFor(crl, cert, issuer))) continue;
+      const t = crlListed(crl, cert);
+      if (t) markRevoked(t);
+      else good ||= freshAt(crl.thisUpdate, crl.nextUpdate, at, this.now);
     }
+    if (revoked) return { issued: true, revoked: true, revokedAt: revoked };
+    if (good) return { issued: true, revoked: false };
     return { issued: false, revoked: false };
   }
 }
 
 const ONLINE_OCSP_MAX = 16 << 10;
-const CLOCK_SKEW_MS = 5 * 60_000;
 
-/** Go onlineStatus: AIA OCSP, эс бөгөөс CDP CRL; хариугүй бол fallback (DSS). */
+/**
+ * Go onlineStatus: AIA OCSP, эс бөгөөс CDP CRL (одоогийн төлөв, now-д шинэлэг); хариугүй бол fallback (DSS). Онлайн
+ * «good» байсан ч fallback-д олгогчийн гарын үсэгтэй цуцалсан нотолгоо байвал revoked (цуцлалт буцахгүй).
+ */
 export class OnlineStatus implements StatusSource {
-  private readonly leaves = new Map<string, { leaf: Certificate; issuer?: Certificate; ambiguous: boolean }>();
   private readonly cache = new Map<string, CertStatus>();
 
-  private constructor(
+  constructor(
     private readonly f: Fetcher,
     private readonly fallback: StatusSource | undefined,
     private readonly now: GoTime,
   ) {}
 
-  static async create(f: Fetcher, raws: RawSignature[], issuers: Certificate[], fallback: StatusSource | undefined, now: GoTime): Promise<OnlineStatus> {
-    const s = new OnlineStatus(f, fallback, now);
-    for (const r of raws) {
-      let leaf: Certificate;
-      try {
-        leaf = parseCertificate(r.leaf ?? new Uint8Array());
-      } catch {
-        continue;
-      }
-      const key = intValue(leaf.serial).toString(16);
-      const prev = s.leaves.get(key);
-      if (prev) {
-        if (!equal(prev.leaf.raw, leaf.raw)) prev.ambiguous = true;
-        continue;
-      }
-      let issuer: Certificate | undefined;
-      for (const is of issuers) {
-        if (equal(leaf.rawIssuer, is.rawSubject) && (await checkSigFrom(leaf, is))) {
-          issuer = is;
-          break;
-        }
-      }
-      if (issuer) s.leaves.set(key, { leaf, issuer, ambiguous: false });
-    }
-    return s;
-  }
-
-  async certStatus(serial: bigint): Promise<CertStatus> {
-    const key = serial.toString(16);
+  async certStatus(cert: Certificate, issuer: Certificate, at: GoTime): Promise<CertStatus> {
+    const key = toHex(cert.raw) + ":" + toHex(issuer.raw);
     const hit = this.cache.get(key);
     if (hit) return hit;
-    const li = this.leaves.get(key);
-    if (!li || li.ambiguous || !li.issuer) return { issued: false, revoked: false };
-    let st = (await this.ocsp(li.leaf, li.issuer)) ?? (await this.crl(li.leaf, li.issuer));
-    if (!st) {
-      if (!this.fallback) return { issued: false, revoked: false };
-      st = await this.fallback.certStatus(serial);
+    let st = (await this.ocsp(cert, issuer)) ?? (await this.crl(cert, issuer));
+    if (this.fallback && (!st || !st.revoked)) {
+      const fst = await this.fallback.certStatus(cert, issuer, at);
+      if (!st || fst.revoked) st = fst;
     }
+    st ??= { issued: false, revoked: false };
     this.cache.set(key, st);
     return st;
   }
 
-  private async ocsp(leaf: Certificate, issuer: Certificate): Promise<CertStatus | undefined> {
+  private async ocsp(cert: Certificate, issuer: Certificate): Promise<CertStatus | undefined> {
     let req: Uint8Array;
     try {
-      req = await ocspRequest(leaf, issuer);
+      req = await ocspRequest(cert, issuer);
     } catch {
       return undefined;
     }
     const now = this.now;
-    for (const u of leaf.ocspServers) {
-      let resp: OCSPResp;
+    for (const u of cert.ocspServers) {
+      let der: Uint8Array;
       try {
-        const der = await this.f.do("POST", u, "application/ocsp-request", req);
-        if (der.length > ONLINE_OCSP_MAX) continue;
-        resp = await parseOCSPFrom(der, intValue(leaf.serial), issuer);
+        der = await this.f.do("POST", u, "application/ocsp-request", req);
       } catch {
         continue;
       }
-      if (resp.serial !== intValue(leaf.serial)) continue;
+      if (der.length > ONLINE_OCSP_MAX) continue;
+      const resp = await ocspFor(der, cert, issuer);
+      if (!resp) continue;
       const rc = resp.certificate;
-      if (rc && !sameCertKey(rc, issuer) && (!responderOK(resp, issuer) || !validAt(rc, now))) continue;
-      if (after(fromPrecise(resp.thisUpdate), addMs(now, CLOCK_SKEW_MS))) continue;
-      if (resp.nextUpdate && before(fromDate(resp.nextUpdate), now)) continue;
-      if (resp.status === "good") return { issued: true, revoked: false };
+      if (rc && !sameCertKey(rc, issuer) && !validAt(rc, now)) continue;
       if (resp.status === "revoked") return { issued: true, revoked: true, revokedAt: fromPrecise(resp.revokedAt!) };
+      if (!ocspFreshAt(resp, now, now)) continue;
+      if (resp.status === "good") return { issued: true, revoked: false };
       return { issued: false, revoked: false };
     }
     return undefined;
   }
 
-  private async crl(leaf: Certificate, issuer: Certificate): Promise<CertStatus | undefined> {
-    for (const u of leaf.crlDPs) {
+  private async crl(cert: Certificate, issuer: Certificate): Promise<CertStatus | undefined> {
+    for (const u of cert.crlDPs) {
       let crl: ParsedCRL | undefined;
       try {
         crl = parseCRL(await this.f.do("GET", u, ""));
       } catch {
         continue;
       }
-      if (!crl || !equal(crl.rawIssuer, issuer.rawSubject) || !(await crlSignedBy(crl, issuer))) continue;
-      if (crl.nextUpdate && before(crl.nextUpdate, this.now)) continue;
-      const serial = intValue(leaf.serial);
-      const e = crl.revoked.find((x) => x.serial === serial);
-      return e ? { issued: true, revoked: true, revokedAt: e.time } : { issued: true, revoked: false };
+      if (!crl || !(await crlFor(crl, cert, issuer))) continue;
+      const t = crlListed(crl, cert);
+      if (t) return { issued: true, revoked: true, revokedAt: t };
+      if (freshAt(crl.thisUpdate, crl.nextUpdate, this.now, this.now)) return { issued: true, revoked: false };
     }
     return undefined;
   }

@@ -5,6 +5,7 @@
 import { TAG, children, expect, intValue, oidString, parseOne, parsePreciseTime, readNode, type Node } from "../asn1.js";
 import { concat, equal, fromLatin1, toHex } from "../bytes.js";
 import { digest, sha256 } from "../crypto.js";
+import { StructureError, checkStructure } from "../pdf/nesting.js";
 import { PRef, Reader, type Value } from "../pdf/reader.js";
 import { OID, parseCertificate, verifySignature, type Certificate } from "../x509.js";
 import { fromPrecise, hexSerial, pdfText, ZERO_TIME, type GoTime } from "./gofmt.js";
@@ -19,6 +20,7 @@ const MESSAGES = {
   encrypted: "шифрлэгдсэн PDF-ийг шалгах боломжгүй — нууцлалыг арилгаад дахин оролдоно уу",
   no_signature: "баримтад цахим гарын үсэг алга",
   too_many: "баримтад хэт олон гарын үсэг байна",
+  structure: "PDF-ийн бүтэц хэт гүн давхарласан эсвэл хэт төвөгтэй",
 } as const;
 
 export class ExtractError extends Error {
@@ -88,6 +90,13 @@ const AP_VERIFY_PREFIX = "https://ca.eidmongolia.mn/verify/";
 
 /** Extract — PDF-ийн бүх /Type /Sig гарын үсгийг задална (profile own — CA-ийн prod горим). */
 export async function extract(doc: Uint8Array, profile: Profile = "own"): Promise<Extracted> {
+  // Reader-ийн рекурс хязгааргүй — гүн давхарласан баримтыг задлахаас өмнө (Go CheckStructure).
+  try {
+    checkStructure(doc);
+  } catch (e) {
+    if (e instanceof StructureError) throw new ExtractError("structure");
+    throw e;
+  }
   let rdr: Reader;
   try {
     rdr = new Reader(doc);
