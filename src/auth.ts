@@ -53,6 +53,12 @@ function rec(v: unknown): Record<string, unknown> {
   return v && typeof v === "object" ? (v as Record<string, unknown>) : {};
 }
 
+/** Discovery-ийн `sessionTtl` (мс). 0 = хуучин CA. */
+export interface SessionTtl {
+  authMs: number;
+  signMs: number;
+}
+
 export class AuthApi {
   constructor(
     private readonly http: Http,
@@ -125,6 +131,16 @@ export class AuthApi {
       sessionType: "auth",
       ...(expiresAt !== undefined ? { expiresAt } : {}),
     };
+  }
+
+  /**
+   * Discovery (`/.well-known/eid`)-ийн `sessionTtl` — CA-ийн нэвтрэлт / гарын үсгийн session-ий хугацаа (мс; CA-ийн
+   * «Системийн тохиргоо»-оос амьд). Хуучин CA-д (талбар алга) 0.
+   */
+  async sessionTtl(): Promise<SessionTtl> {
+    const t = rec(rec(await this.http.get("/.well-known/eid")).sessionTtl);
+    const ms = (v: unknown) => (typeof v === "number" && Number.isFinite(v) && v > 0 ? Math.floor(v) * 1000 : 0);
+    return { authMs: ms(t.auth), signMs: ms(t.sign) };
   }
 
   /** Push — РД/иргэний дугаар/ETSI-ээр (сервер төрлийг таьна). Иргэний утас руу мэдэгдэл очно. */

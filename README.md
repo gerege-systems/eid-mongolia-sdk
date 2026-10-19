@@ -253,6 +253,12 @@ RP талд нэмэлт шалгалт хэрэггүй. Эх сурвалж: e
   порталын зан: тасалдлыг decoy-оор нуувал иргэн дуусахгүй spinner харна; эдгээр нь дугаараас хамаардаггүй тул oracle
   биш). Унтраах: `decoy: false`, `pushFloorMs: 0` — **⚠️** тэгвэл `/start` нь «энэ регистр eID-д бүртгэлтэй эсэх»-ийг
   нэвтрээгүй хэнд ч хэлнэ; зөвхөн дотоод/тестийн орчинд.
+- **Хугацаа (`ttlMs`, анхдагч 120 000) CA-ийн session-оос урт байхгүй.** QR / Web2App: `expiresIn`, cookie `Max-Age`,
+  store = min(`ttlMs`, CA-ийн start хариуны `expiresAt` − одоо). Push (бодит ба decoy **ижил**): min(`ttlMs`, discovery
+  `sessionTtl.auth`) — decoy-д CA хариу байхгүй тул CA-ийн `expiresAt`-аас бус discovery-оос (`client.auth.sessionTtl()`,
+  10 мин кэш, алдаа бол `onError` + 1 мин-ийн дараа дахин) — хугацааны зөрүү oracle болохгүй. Хуучин CA (discovery-д
+  `sessionTtl` алга): бодит push-ийн `expiresAt`-аас ажигласан утгыг дараагийн decoy авна (±1 с); анхны бодит push-ээс
+  өмнө `ttlMs`.
 - **Гэрчилгээний цуцлалт (OCSP, анхдагчаар асаалттай).** `validateAuth`-ийн дараа, `onSuccess`-ийн өмнө иргэний гэрчилгээг
   түүний AIA-д бичигдсэн OCSP responder-оос асууна (`revocation`, анхдагч `ocspRevocationChecker()`; хариу олгогч эсвэл
   түүний OCSPSigning responder-ийн гарын үсэгтэй, энэ serial-ийн, thisUpdate ≤ 48 цаг, good-ийг 5 мин кэшлэнэ). `revoked`,
@@ -381,7 +387,8 @@ RAW_DIGEST_SIGNATURE-д `flowType` гарын үсэгт ордоггүй (зө�
 **`expiresAt`** (ms epoch) — session дуусах мөч: CA-ийн session start хариуны `expiresAt` (RFC 3339; auth / sign /
 certificate-choice бүгдэд, 2026-10-14-өөс). Хуучин CA (талбаргүй) үед sign / certificate-choice-д SDK тооцоолно — CA-ийн
 анхдагч 600с (`DEFAULT_SIGN_SESSION_TTL_MS`; CA админ 60–1800с болгож болно → `signSessionTtlMs`), auth-д undefined.
-Эцсийн үнэн нь `GET /session` (`TIMEOUT`).
+Эцсийн үнэн нь `GET /session` (`TIMEOUT`). CA-ийн тохиргооны амьд утга: `client.auth.sessionTtl()` — discovery
+`sessionTtl` (`{ authMs, signMs }`; хуучин CA-д 0).
 
 **Session эхлэх алдаа** (`ApiError`-ийн дэд анги, `.code`-той): `NoSigningCertificateError` — 409
 `NO_SIGNING_CERTIFICATE` (sign / certificate-choice start: иргэнд идэвхтэй төхөөрөмж / хүчинтэй
