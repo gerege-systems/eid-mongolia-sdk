@@ -41,7 +41,10 @@ export interface EidLoginIdentity {
   surname: string | null;
   name: string | null;
   country: string | null;
-  /** Иргэний баримтын дугаар (`PNOMN-…-MOBILE-Q` г.м.) — `client.sign.*ByDocument`-аар ижил төхөөрөмж рүү гарын үсэг. */
+  /**
+   * Нэвтэрсэн төхөөрөмжийн UUID (RP-API `documentNumber`; иргэний бичиг баримтын дугаар ч, `PNOMN-…` ETSI ч биш) —
+   * `client.sign.*ByDocument`-аар ижил төхөөрөмж рүү гарын үсэг. Тунгалаг мөр: хэлбэрийг задлахгүй.
+   */
   documentNumber: string;
   certificateLevel: string;
   /** Иргэний нэвтрэлтийн гэрчилгээ (DER, base64) — validateAuth-аар гинж шалгагдсан. */

@@ -748,29 +748,20 @@ export class Reader {
  */
 function findStartXref(b: Uint8Array): number {
   const end = b.length;
-  let searchSize = 200;
-  let eofEnd = -1; // %%EOF-ийн төгсгөлийн байрлал (файлд)
-  for (;;) {
-    const from = Math.max(0, end - searchSize);
-    // ReadAt(buf, end-searchSize): end-searchSize < 0 бол Go алдаа өгч searchSizeRead=0 — тэр үед олдохгүй.
-    if (end - searchSize >= 0) {
-      let hi = end;
-      while (hi > from && (b[hi - 1] === 10 || b[hi - 1] === 13)) hi--;
-      while (hi > from && (b[hi - 1] === 10 || b[hi - 1] === 13 || b[hi - 1] === 9 || b[hi - 1] === 32)) hi--;
-      for (;;) {
-        if (hi - from === 5) break;
-        if (hi - from >= 5 && fromLatin1(b, hi - 5, hi) === "%%EOF") {
-          eofEnd = hi;
-          break;
-        }
-        if (hi - from < 5) break;
-        hi--;
-      }
-      if (eofEnd >= 0) break;
+  // Go-ийн давталт (цонх 200, 400, …; цонх бүрд төгсгөлийн \r\n\t зайг хасаад доош "%%EOF" хайна) нь O(n²/200) —
+  // %%EOF-гүй 10 MiB баримтад хөтчийг цагаар гацаана. Ижил үр дүнг нэг удаагийн хайлтаар: хассан төгсгөлөөс доош сүүлийн
+  // "%%EOF" (idx), түүнийг олох цонх = 200m > end − idx (цонхны яг эхэнд таарвал Go дараагийн цонхонд олдог), 200m ≤ end.
+  let hi = end;
+  while (hi > 0 && (b[hi - 1] === 10 || b[hi - 1] === 13 || b[hi - 1] === 9 || b[hi - 1] === 32)) hi--;
+  let idx = -1;
+  for (let i = hi - 5; i >= 0; i--) {
+    if (b[i] === 0x25 && b[i + 1] === 0x25 && b[i + 2] === 0x45 && b[i + 3] === 0x4f && b[i + 4] === 0x46) {
+      idx = i;
+      break;
     }
-    searchSize += 200;
-    if (searchSize > end) throw new PdfError("not a PDF file: missing %%EOF");
   }
+  if (idx < 0 || 200 * (Math.floor((end - idx) / 200) + 1) > end) throw new PdfError("not a PDF file: missing %%EOF");
+  const eofEnd = idx + 5;
   const winStart = eofEnd - 200;
   // Go: buf 200 байт, ReadAt(winStart) — сөрөг бол уншихгүй (бүх тэг) → startxref олдохгүй.
   if (winStart < 0) throw new PdfError("malformed PDF file: missing final startxref");

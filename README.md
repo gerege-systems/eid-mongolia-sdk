@@ -619,7 +619,10 @@ writeFileSync("signed.pdf", done.pdf);
 TSA timestamp-аар өөрөө **2 удаа** дахин оролдоно (нийт 3; хүлээлт ~1 с, ~3 с + 0–25% jitter) — PIN дахин асуухгүй.
 `ltvRetries` (анхдагч 2, `0` — унтраах); бүгд унавал `LTV_UNAVAILABLE`. `signal` (`AbortSignal`) нь TSA/OCSP/CRL таталт ба
 хүлээлтийг тасална — `signal.reason` (анхдагч `DOMException` `AbortError`) шиднэ. Дээрх гадна давталт нь
-`TSA_UNAVAILABLE` болон удаан тасалдалд л хэрэгтэй.
+`TSA_UNAVAILABLE` болон удаан тасалдалд л хэрэгтэй. OCSP/CRL (олгогчийн гарын үсэгтэй) нь гинжийн гэрчилгээг
+**цуцалсан** гэвэл (0.21.0) тэр дор нь `LTV_UNAVAILABLE`, `cause` нь `CertificateRevokedError`, `retryable` false — дахин
+оролдохгүй (өмнө нь revoked OCSP-г алгасаад CRL-ээр DSS угсардаг байв). OCSP/CRL-д мөн CertID/олгогч/шинэлэг байдлын
+дүрэм (§ validate).
 
 `PadesError.code` (тогтвортой, бүх платформд ижил): `PDF_INVALID`, `PDF_ENCRYPTED`, `PDF_LOCKED` (DocMDP P=1),
 `PDF_TOO_LARGE`, `PDF_TOO_MANY_SIGNATURES`, `PDF_PRIOR_SIGNATURE_INVALID`, `PDF_FOREIGN_SIGNATURE`, `SIGNER_INVALID`,
@@ -685,6 +688,9 @@ if (isWordFile(file)) {
   баталгаажсан үед л) patch хийж эдгээрийг `verbose: true`-гүй бол гаргахгүй; `manifest.json`-д `"patched": true`. Hash
   таарахгүй бол patch-гүй хуулж анхааруулна — хувиргалт ажиллана, лог л гарна. SDK шинэчилсний дараа asset-ийг дахин
   хуул (`rev` солигдож worker-ийн immutable кэш шинэчлэгдэнэ; soffice.wasm/.data дахин татагдахгүй).
+- Удаан CPU (0.21.0): upstream `soffice.js`-ийн `pthreadPoolSize=4` нь удаан компьютер дээр баримт ачаалахад
+  гацдаг (deadlock) тул `eid-mongolia-convert-assets` үүнийг 8 болгоно (`manifest.json`-д `"pthreadPoolSize": 8`;
+  зөвхөн JS). `soffice.js`-ийн sha256 мэдэгдэж буй 2.7.2-тэй таарахгүй бол хуулалт унана — asset-ийг дахин хуул.
 - MPL-2.0: `<хувилбар>/NOTICE.txt` (эх код, лицензийн холбоос) asset-уудтай хамт үйлчилгээнд байна — хэрэглэгчийн
   нүүрэнд (тусламж/лиценз хэсэгт) LibreOffice-ийг дурд.
 
@@ -775,10 +781,18 @@ try {
 - Цуцлалт (eID-ийн 04/05-аас гарсан гэрчилгээнд): онлайн — AIA OCSP, эс бөгөөс CDP CRL (`fetch` + AbortSignal; хөтөчид
   `http://ocsp.|crl.eidmongolia.mn` → https, CORS `*`); хариугүй эсвэл `offline: true` бол баримтын DSS. Аль нь ч үгүй →
   `revocation_unavailable`. Сүлжээгээр зөвхөн гэрчилгээний serial (OCSP хүсэлт) явна.
+- Цуцлалтын нотолгооны дүрэм (0.21.0, Go v0.7.2-тэй ижил, golden validate v4): OCSP нь ЭНЭ гэрчилгээнийх (CertID =
+  гинжийн олгогчийн нэр/түлхүүрийн hash + serial), CRL нь олгогчийнх (нэр, AKI, гарын үсэг). «good» нь шалгах цагт
+  шинэлэг байх ёстой: thisUpdate ирээдүйд биш (5 мин хүлцэл), nextUpdate өнгөрөөгүй, thisUpdate ≤ 24 цагийн өмнө эсвэл
+  thisUpdate…nextUpdate нь шалгах цагийг хамарна (шалгах цаг = итгэмжлэгдсэн цагийн тэмдгийн цаг, эс бөгөөс `time`/одоо).
+  Эс бөгөөс тооцохгүй → `revocation_unavailable`. Олгогчийн гарын үсэгтэй «revoked» (OCSP эсвэл CRL, онлайн эсвэл DSS)
+  нь «good»-ийг үргэлж давна. **Өмнө `valid` байсан зарим баримт одоо `indeterminate` эсвэл `invalid`.**
+- Итгэлгүй PDF: задлахын өмнө массив/толийн давхарлалт > 256 → `PDF_INVALID` (`prepare` ч мөн; `complete` —
+  `STATE_INVALID`). Хамгаалалтын нэг давхарга л — хэмжээ (≤ 10 MiB) ба хугацааг хязгаарла.
 - Options: `roots`, `intermediates`, `issuers` (DER, тест), `time`, `offline`, `fetch`, `signal`.
 - `key_medium` — гэрчилгээнээс л: qcStatements-тэй иргэний SIGN → `phone`, бусад `unknown` (CA өөрийн бүртгэлээс `token`
   ч тогтооно). `session_id`, `doc_id`, `on_behalf_of_*` нь CA-ийн бүртгэлээс — локал тайланд байхгүй.
-- Хөтчийн bundle (минифай): ~245 KB, gzip ~134 KB (`npm run size:validate`, хязгаар 300 KB).
+- Хөтчийн bundle (минифай): ~253 KB, gzip ~137 KB (`npm run size:validate`, хязгаар 300 KB).
 
 ## 4. QR ба ижил төхөөрөмж — device link v3
 
@@ -947,7 +961,7 @@ npm run test:convert-e2e   # /convert жинхэнэ LibreOffice Chromium-д (BR
 
 `/pades`-ийн conformance fixture (golden: оролт, тестийн PKI-ийн гэрчилгээ, TSA/OCSP/CRL-ийн тогтмол хариу, хүлээгдэх
 sha256) ба фонт/гинжийн asset-ийг Go reference-ээс `node scripts/sync-pades-golden.mjs` хуулна (`GO_SDK_COMMIT` —
-tag `pades-golden-vN`, одоо v3); CI `--check`-ээр бэхэлсэн commit-тэй тулгана. Профайл: Go репогийн `pades/PROFILE.md`,
+tag `pades-golden-vN`, одоо v4); CI `--check`-ээр бэхэлсэн commit-тэй тулгана. Профайл: Go репогийн `pades/PROFILE.md`,
 `PAGE_SPEC.md`, `PRECHECKS.md`, `WIRE.md`, `APPEARANCE_SPEC.md`.
 
 ### Гэрээний шалгалт

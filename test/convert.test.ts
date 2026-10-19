@@ -322,7 +322,7 @@ const sha = (b: Uint8Array) => createHash("sha256").update(b).digest("hex");
 function runBin(cwd: string, out: string) {
   const r = spawnSync(process.execPath, [BIN, out], { cwd, encoding: "utf8" });
   const m = JSON.parse(readFileSync(join(out, "manifest.json"), "utf8"));
-  return { ...r, m, worker: readFileSync(join(out, "2.7.2/browser.worker.global.js")) };
+  return { ...r, m, worker: readFileSync(join(out, "2.7.2/browser.worker.global.js")), soffice: readFileSync(join(out, "2.7.2/soffice.js")) };
 }
 
 test("convert-assets: мэдэгдэж буй upstream → patch («+ALL» үгүй, print/printErr verbose-оор), manifest хэмжээ/rev таарна", () => {
@@ -341,6 +341,14 @@ test("convert-assets: мэдэгдэж буй upstream → patch («+ALL» үг�
     assert.equal(r.m.files["browser.worker.global.js"].bytes, r.worker.length);
     assert.notEqual(r.worker.length, readFileSync(join(UPSTREAM, "dist/browser.worker.global.js")).length);
     assert.match(r.stdout, /лог чимээгүй/);
+    // pthreadPoolSize 4 → 8 (удаан CPU-ийн documentLoad deadlock); зөвхөн энэ солилт.
+    const so = r.soffice.toString("utf8");
+    const up = readFileSync(join(UPSTREAM, "wasm/soffice.js"), "utf8");
+    assert.equal(so.split("var pthreadPoolSize=8;").length, 2);
+    assert.ok(!so.includes("var pthreadPoolSize=4;"));
+    assert.equal(so, up.replace("var pthreadPoolSize=4;", "var pthreadPoolSize=8;"));
+    assert.equal(r.m.pthreadPoolSize, 8);
+    assert.equal(r.m.files["soffice.js"].bytes, r.soffice.length);
   } finally {
     rmSync(out, { recursive: true, force: true });
   }
@@ -354,7 +362,8 @@ test("convert-assets: upstream hash таарахгүй → patch-гүй хуул
     mkdirSync(join(pkg, "wasm"), { recursive: true });
     writeFileSync(join(proj, "package.json"), "{}");
     writeFileSync(join(pkg, "package.json"), JSON.stringify({ name: "@matbee/libreoffice-converter", version: "2.7.2", license: "MPL-2.0" }));
-    for (const f of ["soffice.js", "soffice.wasm", "soffice.data", "soffice.worker.js"]) writeFileSync(join(pkg, "wasm", f), "x");
+    for (const f of ["soffice.wasm", "soffice.data", "soffice.worker.js"]) writeFileSync(join(pkg, "wasm", f), "x");
+    copyFileSync(join(UPSTREAM, "wasm/soffice.js"), join(pkg, "wasm/soffice.js"));
     const changed = Buffer.from('a.ENV.SAL_LOG="+ALL";print:console.log,printErr:console.error}//өөр build');
     writeFileSync(join(pkg, "dist/browser.worker.global.js"), changed);
     const out = join(proj, "out");
@@ -370,6 +379,25 @@ test("convert-assets: upstream hash таарахгүй → patch-гүй хуул
     const r2 = runBin(proj, out);
     assert.equal(r2.m.patched, true);
     assert.notEqual(r2.m.rev, r.m.rev);
+  } finally {
+    rmSync(proj, { recursive: true, force: true });
+  }
+});
+
+test("convert-assets: soffice.js hash таарахгүй → pthreadPoolSize patch-гүй тул build унана (exit 1)", () => {
+  const proj = mkdtempSync(join(tmpdir(), "eid-assets-proj-"));
+  try {
+    const pkg = join(proj, "node_modules/@matbee/libreoffice-converter");
+    mkdirSync(join(pkg, "dist"), { recursive: true });
+    mkdirSync(join(pkg, "wasm"), { recursive: true });
+    writeFileSync(join(proj, "package.json"), "{}");
+    writeFileSync(join(pkg, "package.json"), JSON.stringify({ name: "@matbee/libreoffice-converter", version: "2.7.2", license: "MPL-2.0" }));
+    for (const f of ["soffice.wasm", "soffice.data", "soffice.worker.js"]) writeFileSync(join(pkg, "wasm", f), "x");
+    writeFileSync(join(pkg, "wasm/soffice.js"), "var pthreadPoolSize=4;//өөр build");
+    copyFileSync(join(UPSTREAM, "dist/browser.worker.global.js"), join(pkg, "dist/browser.worker.global.js"));
+    const r = spawnSync(process.execPath, [BIN, join(proj, "out")], { cwd: proj, encoding: "utf8" });
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /pthreadPoolSize/);
   } finally {
     rmSync(proj, { recursive: true, force: true });
   }

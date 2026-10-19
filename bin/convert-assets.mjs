@@ -12,6 +12,10 @@
 // («warn:vcl…», «[LOK C++] …»). Patch-ийн дараа зөвхөн `wordToPdf({ verbose: true })` үед (worker `?verbose=1`).
 // Hash таарахгүй бол patch-гүй хуулж анхааруулна (build унахгүй) — хувиргалт ажиллана, лог л гарна.
 //
+// soffice.js-ийн `pthreadPoolSize` 4 → 8 (POOL_PATCH, ЗААВАЛ): 4 нь удаан CPU дээр documentLoad-д deadlock (LO-ийн
+// pthread-ийн MEMFS syscall нь LO worker руу sync proxy, worker нь pthread хүлээж хаагдсан); 5+ ажиллана. Hash эсвэл
+// солилт таарахгүй бол build унана (patch-гүй asset гацаж болзошгүй). Зөвхөн JS — wasm/data хөндөхгүй.
+//
 // `wordToPdf({ assetsBase: "<URL>/" })` нь <хавтас>-ын URL-ийг авна. Хуучин хувилбарын дэд хавтсыг устгана.
 import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
@@ -99,6 +103,26 @@ function quiet(buf) {
   return Buffer.from(s, "utf8");
 }
 
+/** soffice.js — мэдэгдэж буй upstream → яг нэг солилт; эс бөгөөс build унана. */
+const POOL_PATCH = {
+  file: "soffice.js",
+  // @matbee/libreoffice-converter@2.7.2 wasm/soffice.js
+  sha256: "b67acadcb30171e6ec018754fcbe5b527443a3ef1c84f352e29aecff6d210e43",
+  from: "var pthreadPoolSize=4;",
+  to: "var pthreadPoolSize=8;",
+};
+const PTHREAD_POOL_SIZE = 8;
+
+function pool(buf) {
+  const got = sha256(buf);
+  const s = buf.toString("utf8");
+  if (got !== POOL_PATCH.sha256 || s.split(POOL_PATCH.from).length !== 2) {
+    console.error(`${PKG}/wasm/${POOL_PATCH.file} sha256 ${got} — мэдэгдэж буй ${POOL_PATCH.sha256} биш (эсвэл «${POOL_PATCH.from}» яг нэг биш); pthreadPoolSize patch-гүйгээр хувиргалт удаан CPU дээр гацдаг тул зогсов — SDK-ийн peerDependency хувилбарыг суулга`);
+    process.exit(1);
+  }
+  return Buffer.from(s.replace(POOL_PATCH.from, () => POOL_PATCH.to), "utf8");
+}
+
 const files = {};
 let patched = false;
 const rev = createHash("sha256");
@@ -114,6 +138,8 @@ for (const [name, rel] of Object.entries(FILES)) {
     const q = quiet(buf);
     patched = q !== null;
     writeFileSync(to, q ?? buf);
+  } else if (name === POOL_PATCH.file) {
+    writeFileSync(to, pool(readFileSync(from)));
   } else {
     copyFileSync(from, to);
   }
@@ -126,6 +152,6 @@ writeFileSync(join(out, dir, "NOTICE.txt"),
   `${PKG}@${version} (${license}) — LibreOffice WebAssembly build.\n` +
   `Source: https://github.com/matbeedotcom/libreoffice-document-converter (tag v${version}); LibreOffice: https://www.libreoffice.org/about-us/source-code/\n` +
   `License text: https://www.mozilla.org/MPL/2.0/\n`);
-writeFileSync(join(out, "manifest.json"), JSON.stringify({ format: 1, converter: PKG, version, dir, rev: rev.digest("hex").slice(0, 16), patched, files }, null, 2) + "\n");
+writeFileSync(join(out, "manifest.json"), JSON.stringify({ format: 1, converter: PKG, version, dir, rev: rev.digest("hex").slice(0, 16), patched, pthreadPoolSize: PTHREAD_POOL_SIZE, files }, null, 2) + "\n");
 const sum = (k) => Object.values(files).reduce((s, f) => s + f[k], 0);
 console.log(`${PKG}@${version} → ${join(out, dir)} (${(sum("bytes") / 1e6).toFixed(1)} MB, gzip ${(sum("gzip") / 1e6).toFixed(1)} MB)${patched ? ", лог чимээгүй (patch)" : ""}`);

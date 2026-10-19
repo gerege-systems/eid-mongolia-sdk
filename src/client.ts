@@ -83,7 +83,9 @@ export const DEFAULT_PDF_TIMEOUT_MS = 80_000;
 // оронд тодорхой алдаа.
 const LEGACY_HOSTS = new Set(["ca.eidmongolia.mn", "e-id.mn", "www.e-id.mn"]);
 
-/** baseUrl-ийг шалгаж, төгсгөлийн "/"-ийг хасна. */
+const LOOPBACK = new Set(["localhost", "127.0.0.1", "[::1]"]);
+
+/** baseUrl-ийг шалгаж (https; http зөвхөн localhost / 127.0.0.1 / [::1]), төгсгөлийн "/"-ийг хасна. */
 export function resolveBaseUrl(baseUrl: string | undefined): string {
   const raw = (baseUrl ?? DEFAULT_BASE_URL).trim().replace(/\/+$/, "");
   let u: URL;
@@ -91,6 +93,10 @@ export function resolveBaseUrl(baseUrl: string | undefined): string {
     u = new URL(raw);
   } catch {
     throw new Error(`EidClient: baseUrl буруу URL: ${raw}`);
+  }
+  // RP secret (Bearer) ба иргэний мэдээлэл явна — зөвхөн https; http нь зөвхөн loopback (локал тест / mock).
+  if (u.protocol !== "https:" && !(u.protocol === "http:" && LOOPBACK.has(u.hostname))) {
+    throw new Error(`EidClient: baseUrl https байх ёстой (http зөвхөн localhost): ${u.protocol}//${u.host}`);
   }
   if (LEGACY_HOSTS.has(u.hostname) && (u.pathname === "" || u.pathname === "/")) {
     throw new Error(

@@ -18,6 +18,8 @@ import { assembleCMS, signedAttributes, CLAIMED_ROLE_MAX_RUNES } from "./pades/c
 import { randomBytes, sha256 } from "./pades/crypto.js";
 import { DEFAULT_TSA_URL, Fetcher, isBrowser, type FetchFn } from "./pades/fetch.js";
 import { LTVError, collectLTVWithWait, timestampToken } from "./pades/ltv.js";
+import { checkStructure } from "./pades/pdf/nesting.js";
+import { CertificateRevokedError } from "./pades/revocation.js";
 import { MAX_INPUT_BYTES } from "./pades/limits.js";
 import { AppearanceError, pageCount, round100, type Visible } from "./pades/page/appearance.js";
 import { appendVerifyPage } from "./pades/page/page.js";
@@ -26,6 +28,12 @@ import { embedCMS, PlaceholderOverflowError, prepareSignature, signatureContents
 import { PrecheckError, UUID_RE, VERIFY_URL_PREFIX, docIdFromPage, precheck, signatureCMSList } from "./pades/precheck.js";
 import { decodeState, encodeState } from "./pades/state.js";
 import { OID, checkSignatureFrom, parseCertificate, verifyCitizen, type Certificate } from "./pades/x509.js";
+
+/**
+ * `complete`: OCSP/CRL-ийн (олгогчийн гарын үсэгтэй) хариугаар гинжийн гэрчилгээ цуцлагдсан — `LTV_UNAVAILABLE`-ийн
+ * `cause`, дахин оролдохгүй (`retryable` false). Go `pades.ErrCertificateRevoked`.
+ */
+export { CertificateRevokedError };
 
 /** PDF/CMS профайлын хувилбар (Go reference `ProfileVersion`). */
 export const PROFILE_VERSION = "pades-client/1";
@@ -85,7 +93,9 @@ export class PadesError extends EidError {
     if (options?.cause !== undefined) (this as { cause?: unknown }).cause = options.cause;
   }
 
+  /** TSA_UNAVAILABLE / LTV_UNAVAILABLE — гэхдээ гэрчилгээ цуцлагдсан (`cause` нь {@link CertificateRevokedError}) бол үгүй. */
   get retryable(): boolean {
+    if ((this as { cause?: unknown }).cause instanceof CertificateRevokedError) return false;
     return this.code === "TSA_UNAVAILABLE" || this.code === "LTV_UNAVAILABLE";
   }
 }
@@ -293,6 +303,11 @@ export async function prepare(pdf: Uint8Array | ArrayBuffer, opts: PadesPrepareO
   const doc = u8(pdf, "pdf");
   if (doc.length > MAX_INPUT_BYTES) throw new PadesError("PDF_TOO_LARGE", "PDF 9.75 MB-аас их байна");
   if (doc.length < 5 || String.fromCharCode(...doc.subarray(0, 5)) !== "%PDF-") throw new PadesError("PDF_INVALID", "PDF биш эсвэл эвдэрсэн");
+  try {
+    checkStructure(doc);
+  } catch (e) {
+    throw new PadesError("PDF_INVALID", "PDF-ийн бүтэц хэт гүн эсвэл төвөгтэй", { cause: e });
+  }
   let cert: Certificate;
   try {
     cert = parseCertificate(u8(opts.signerCert, "signerCert"));
@@ -487,6 +502,15 @@ export async function complete(state: Uint8Array | ArrayBuffer, signature: Uint8
   let chain: Certificate[];
   try {
     st = await decodeState(u8(state, "state"));
+  } catch (e) {
+    throw new PadesError("STATE_INVALID", "state задарсангүй", { cause: e });
+  }
+  try {
+    checkStructure(st.pdf);
+  } catch (e) {
+    throw new PadesError("STATE_INVALID", "state-ийн PDF-ийн бүтэц хэт гүн эсвэл төвөгтэй", { cause: e });
+  }
+  try {
     cert = parseCertificate(st.signerCert);
     chain = st.chain.map((c) => parseCertificate(c));
   } catch (e) {
@@ -542,6 +566,7 @@ export async function complete(state: Uint8Array | ArrayBuffer, signature: Uint8
       break;
     } catch (e) {
       throwIfAborted(signal);
+      if (e instanceof CertificateRevokedError) throw new PadesError("LTV_UNAVAILABLE", "гэрчилгээ цуцлагдсан", { cause: e });
       if (attempt >= ltvRetries) {
         throw new PadesError("LTV_UNAVAILABLE", `OCSP/CRL бүрэн авч чадсангүй${e instanceof LTVError ? ": " + e.message : ""}`, { cause: e });
       }
