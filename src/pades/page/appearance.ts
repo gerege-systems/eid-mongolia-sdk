@@ -26,6 +26,8 @@ export interface Visible {
   date: string;
   /** https://ca.eidmongolia.mn/verify/<docID>/<revIndex> */
   url: string;
+  /** Scan the page and move the stamp off existing content (PLACEMENT_SPEC.md); false/absent = exactly (x, y). */
+  avoid?: boolean;
 }
 
 export interface AppearanceParams {

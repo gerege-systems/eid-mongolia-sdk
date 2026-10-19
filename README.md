@@ -552,7 +552,7 @@ DSS-д), Adobe / EU DSS-д «LTV enabled», баталгаажуулах (QR) х
 
 | Функц | Хаана | Тайлбар |
 |---|---|---|
-| `prepare(pdf, { signerCert, claimedRole?, verifyPage?, fileName?, lang?, docId?, appearance?, … })` | браузер / Node | `{ dtbs, digest, docId, state }` — сүлжээгүй |
+| `prepare(pdf, { signerCert, claimedRole?, verifyPage?, fileName?, lang?, docId?, appearance?, … })` | браузер / Node | `{ dtbs, digest, docId, state, placement? }` — сүлжээгүй |
 | `eid.signPdfDigest({ dtbs, fileName, signer, flow?, onBehalfOf? })` | RP backend | DTBS-д гарын үсгийн session (push эсвэл device-link) |
 | `complete(state, signature)` | браузер / Node | TSA + OCSP/CRL → `{ pdf, cms, docId, outSha256, inSha256, hasPage, pageSha256, … }` |
 | `eid.registerSignature(registrationFromCompleted(done, { fileName, sessionID }))` | RP backend | `POST /pdf/signatures` — `/verify/{docID}` бүртгэл |
@@ -628,9 +628,18 @@ reply({ verifyUrl: reg.verifyUrl });
 багтахгүй, docId-гүй (хуудасгүй гарын үсэгтэй баримт) бол `REQUEST_INVALID`. Харагдах бүр ~+90 KB. Дүрэм: Go репогийн
 `pades/APPEARANCE_SPEC.md`.
 
+`x, y` нь **хүссэн** байрлал: тэр хэсэгт хуудасны агуулга (бичвэр, хүснэгтийн зураас, зураг, өмнөх гарын үсэг) байвал
+дүрслэл чөлөөт зай руу шилжинэ — эхлээд толин тусгал багана (баруун доод → зүүн доод), дараа нь 12 pt-ээр дээш. Хуудсыг
+рендерлэхгүй, content stream-ийг л уншина (Go-той хайрцаг бүрээр ижил). Үр дүн: `p.placement` —
+`{ page, x, y, width, height, status }` (pt), `status`: `requested` (хүссэн газраа) | `moved` (шилжсэн) | `overlap` (чөлөөт
+зай алга — хүссэн газраа, агуулга дээр) | `unscanned` (хуудсыг хязгаарт багтааж уншиж чадсангүй — хүссэн газраа). Гарын
+үсэг аль ч үед хүчинтэй; `overlap` / `unscanned`-ийг хэрэглэгчид мэдэгдэх нь зүйтэй. Дүрэм: Go репогийн
+`pades/PLACEMENT_SPEC.md`.
+
 ```ts
 const p = await prepare(pdfBytes, { signerCert, verifyPage: true, fileName: "Гэрээ №12.pdf",
   appearance: { page: 1, x: 340, y: 36, width: 220, height: 64 } });
+if (p.placement?.status === "overlap") notice("Гарын үсэг хуудасны агуулга дээр давхцаж байрлана");
 ```
 
 ### Зөвхөн Node (backend бүгдийг хийнэ)
@@ -1035,8 +1044,8 @@ npm run test:convert-e2e   # /convert жинхэнэ LibreOffice Chromium-д (BR
 
 `/pades`-ийн conformance fixture (golden: оролт, тестийн PKI-ийн гэрчилгээ, TSA/OCSP/CRL-ийн тогтмол хариу, хүлээгдэх
 sha256) ба фонт/гинжийн asset-ийг Go reference-ээс `node scripts/sync-pades-golden.mjs` хуулна (`GO_SDK_COMMIT` —
-tag `pades-golden-vN`, одоо v4); CI `--check`-ээр бэхэлсэн commit-тэй тулгана. Профайл: Go репогийн `pades/PROFILE.md`,
-`PAGE_SPEC.md`, `PRECHECKS.md`, `WIRE.md`, `APPEARANCE_SPEC.md`.
+tag `pades-golden-vN`, одоо v5 — `placement/` scanner vectors-той); CI `--check`-ээр бэхэлсэн commit-тэй тулгана. Профайл:
+Go репогийн `pades/PROFILE.md`, `PAGE_SPEC.md`, `PRECHECKS.md`, `WIRE.md`, `APPEARANCE_SPEC.md`, `PLACEMENT_SPEC.md`.
 
 ### Гэрээний шалгалт
 

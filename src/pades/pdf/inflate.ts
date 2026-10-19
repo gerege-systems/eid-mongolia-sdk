@@ -67,6 +67,72 @@ export interface InflateInfo {
 
 /** Raw deflate (RFC 1951). Төгсгөлийн block хүртэл (дараах байт — adler — үл тоомсорлоно). */
 export function inflateRaw(src: Uint8Array, limit = 64 << 20, info?: InflateInfo, initial?: number): Uint8Array {
+  return inflate(src, limit, info, initial, false);
+}
+
+/**
+ * Go compress/zlib-тэй ижил хатуу zlib (RFC 1950): header (CM 8, CINFO ≤ 7, mod 31; FDICT бол Go zlib.NewReader шиг
+ * DICTID = Adler-32(хоосон толь) = 1 байвал зөвшөөрч дараагийн 4 байтыг алгасна, бусад нь алдаа), Go compress/flate шиг
+ * Huffman код бүрэн байх (ганц 1 битийн кодоос бусад), HLIT ≤ 286, HDIST ≤ 30, таслагдвал алдаа, deflate-ийн дараах
+ * Adler-32 таарах; түүнээс хойших байтыг үл тоомсорлоно. Гаралт `limit`-ээс хэтэрвэл InflateLimitError. Ямар ч зөрчил →
+ * InflateError (PLACEMENT_SPEC.md §3.1).
+ */
+export function zlibInflateStrict(src: Uint8Array, limit: number): Uint8Array {
+  if (src.length < 2) throw new InflateError("zlib: header алга");
+  const cmf = src[0]!;
+  const flg = src[1]!;
+  if ((cmf & 0x0f) !== 8 || cmf >> 4 > 7 || ((cmf << 8) | flg) % 31 !== 0) throw new InflateError("zlib: header буруу");
+  let start = 2;
+  if (flg & 0x20) {
+    // Go: preset dictionary = nil → DICTID нь adler32("") = 1 байх ёстой (ErrDictionary).
+    if (src.length < 6) throw new InflateError("zlib: DICTID дутуу");
+    if (src[2] !== 0 || src[3] !== 0 || src[4] !== 0 || src[5] !== 1) throw new InflateError("zlib: preset dictionary");
+    start = 6;
+  }
+  const info: InflateInfo = { end: 0, truncated: false };
+  const out = inflate(src.subarray(start), limit, info, undefined, true);
+  if (info.truncated) throw new InflateError("inflate: өгөгдөл дутуу");
+  const at = start + info.end;
+  if (at + 4 > src.length) throw new InflateError("zlib: adler32 алга");
+  const want = ((src[at]! << 24) | (src[at + 1]! << 16) | (src[at + 2]! << 8) | src[at + 3]!) >>> 0;
+  if (adler32(out) !== want) throw new InflateError("zlib: adler32 таарахгүй");
+  return out;
+}
+
+/** Adler-32 (RFC 1950 §8.2). */
+export function adler32(b: Uint8Array): number {
+  let a = 1;
+  let s = 0;
+  for (let i = 0; i < b.length; ) {
+    const n = Math.min(5552, b.length - i);
+    for (let j = 0; j < n; j++, i++) {
+      a += b[i]!;
+      s += a;
+    }
+    a %= 65521;
+    s %= 65521;
+  }
+  return ((s << 16) | a) >>> 0;
+}
+
+/** Go compress/flate huffmanDecoder.init: Kraft-ийн нийлбэр яг 1 (эсвэл ганц 1 битийн код), хоосон мод — ашиглахад унана. */
+function complete(lengths: ArrayLike<number>, n: number): boolean {
+  let max = 0;
+  let sum = 0;
+  let count = 0;
+  for (let i = 0; i < n; i++) if (lengths[i]! > max) max = lengths[i]!;
+  if (max === 0) return true;
+  for (let i = 0; i < n; i++) {
+    const l = lengths[i]!;
+    if (l) {
+      sum += 2 ** (max - l);
+      count++;
+    }
+  }
+  return sum === 2 ** max || (sum === 1 && max === 1 && count === 1);
+}
+
+function inflate(src: Uint8Array, limit: number, info: InflateInfo | undefined, initial: number | undefined, strict: boolean): Uint8Array {
   let pos = 0;
   let bitBuf = 0;
   let bitCnt = 0;
@@ -145,8 +211,10 @@ export function inflateRaw(src: Uint8Array, limit = 64 << 20, info?: InflateInfo
         const hlit = bits(5) + 257;
         const hdist = bits(5) + 1;
         const hclen = bits(4) + 4;
+        if (strict && (hlit > 286 || hdist > 30)) throw new InflateError("inflate: HLIT/HDIST");
         const cl = new Uint8Array(19);
         for (let i = 0; i < hclen; i++) cl[CL_ORDER[i]!] = bits(3);
+        if (strict && !complete(cl, 19)) throw new InflateError("inflate: код бүрэн биш");
         const clh = build(cl, 19);
         const lens = new Uint8Array(hlit + hdist);
         for (let i = 0; i < hlit + hdist; ) {
@@ -166,6 +234,9 @@ export function inflateRaw(src: Uint8Array, limit = 64 << 20, info?: InflateInfo
           if (i + rep > hlit + hdist) throw new InflateError("inflate: урт хэтэрсэн");
           lens.fill(val, i, i + rep);
           i += rep;
+        }
+        if (strict && (!complete(lens.subarray(0, hlit), hlit) || !complete(lens.subarray(hlit), hdist))) {
+          throw new InflateError("inflate: код бүрэн биш");
         }
         lit = build(lens.subarray(0, hlit), hlit);
         dist = build(lens.subarray(hlit), hdist);
