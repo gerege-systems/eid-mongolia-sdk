@@ -2,7 +2,7 @@
 
 export { EidClient, DEFAULT_BASE_URL, DEFAULT_PDF_TIMEOUT_MS, resolveBaseUrl, type ClientConfig } from "./client.js";
 export { Http, type HttpConfig } from "./http.js";
-export { AuthApi, type AuthOptions, type AuthDefaults } from "./auth.js";
+export { AuthApi, type AuthOptions, type AuthDefaults, type SessionTtl } from "./auth.js";
 export {
   SignApi,
   type SignOptions,
@@ -54,8 +54,11 @@ export {
   tokenAuthDigest,
   tokenLimitOf,
   TOKEN_CONFLICT_CODES,
+  APP_ATTESTATION_INVALID,
+  MAX_APP_TRANSACTION_BYTES,
   type TokenConflictCode,
   type TokenCertInfo,
+  type TokenCertPreview,
   type TokenCertInput,
   type TokenCertStart,
   type TokenCertItem,
@@ -139,6 +142,7 @@ export {
   NetworkError,
   SessionFailedError,
   ValidationError,
+  AppTransactionTooLargeError,
   DeviceLinkError,
   ResponseTooLargeError,
   ON_BEHALF_ERROR_CODES,

@@ -1,4 +1,48 @@
 # Changelog
+## 0.23.0 — 2026-10-19
+
+### Changed — `createEidLogin`: хугацаа CA-ийн session-оос урт байхгүй; `auth.sessionTtl()` (discovery `sessionTtl`)
+
+- **Юу:** `client.auth.sessionTtl()` — discovery `/.well-known/eid`-ийн `sessionTtl` (`{ authMs, signMs }`; хуучин CA-д 0).
+  `createEidLogin`: start-ийн `expiresIn`, cookie `Max-Age`, store-ийн хугацаа = QR/Web2App-д min(`ttlMs`, CA-ийн
+  `expiresAt` − одоо); push-д (бодит ба decoy ижил) min(`ttlMs`, discovery `sessionTtl.auth`, 10 мин кэш). Хуучин CA-д
+  бодит push-ийн `expiresAt`-аас ажигласан утгыг decoy авна. `ttlMs` анхдагч (120 000) хэвээр.
+- **Яагаад:** RP `ttlMs`-ийг CA-ийнхаас урт тохируулбал иргэн CA дууссан session-ийг хүлээж үлддэг; decoy-д CA хариу
+  байхгүй тул CA-ийн `expiresAt`-аар таслах нь бодит/decoy push-ийн хугацааг ялгаж (бүртгэлтэй эсэхийн oracle) болох байв.
+  Go `eidlogin`-тэй ижил.
+- **Хаана:** `src/auth.ts` (`sessionTtl`, `SessionTtl`), `src/login.ts`, `src/index.ts`, README (eid-login §хугацаа,
+  `expiresAt`), `test/login.test.ts` (3 шинэ тест; fake discovery).
+- **Шалгасан:** `npm run lint`, `npm test` (261 pass).
+- **Үлдсэн:** CA discovery-д `sessionTtl` (CA MR) deploy болтол push нь ажигласан утгаар (±1 с) ажиллана.
+### Added — `TokenCertInput.appTransaction?`, `APP_ATTESTATION_INVALID`
+
+- **Юу:** `token.issueCertificate`-д заавал биш `appTransaction` (StoreKit 2 AppTransaction JWS, ≤ 16 KiB; хоосон бол
+  илгээхгүй). `MAX_APP_TRANSACTION_BYTES`-аас их бол илгээхгүй — `AppTransactionTooLargeError`. 400
+  `APP_ATTESTATION_INVALID` тогтмол. Discovery `TokenCertInfo.appTransaction` (`"optional"`; хуучин CA-д `""`).
+- **Яагаад:** CA (MR !390) macOS App Store build-ийн апп баталгааг токены олголтод нэмсэн; SDK-ийн хүсэлт талбаргүй
+  байсан тул RP дамжуулж чадахгүй байв.
+- **Хаана:** `src/token.ts`, `src/errors.ts`, `src/index.ts`, README §3c, `test/portal-gaps.test.ts`,
+  `test/contract.test.ts` (live discovery-д `appTransaction: "optional"`).
+- **Шалгасан:** `npm run lint`, `npm test` (259 pass), `npm run test:contract`.
+### Added — `token.previewCertificate()` (dryRun), `TokenCertInfo.dryRun`
+
+- **Юу:** `eid.token.previewCertificate(input)` — `POST /token/certificate` ижил бие + `"dryRun": true` →
+  `TokenCertPreview { supersedes? }`; алдаа `issueCertificate`-тэй ижил (`ApiError`, `tokenLimitOf` …); хариунд
+  `dryRun: true` алга бол `ValidationError`. Оролтын шалгалт/бие угсралт нэг `certBody`-д. Discovery `TokenCertInfo.dryRun`.
+- **Яагаад:** `supersedes` бодит эхлэлийн хариунд ирэх үед PIN2 push явсан байдаг; RP push-ээс өмнө иргэнд анхааруулах
+  хэрэгтэй (CA MR feat/token-cert-dryrun). Go `Token.PreviewCertificate`-тэй ижил.
+- **Хаана:** `src/token.ts`, `src/index.ts`, README §3c, `test/portal-gaps.test.ts`, `test/contract.test.ts` (live
+  discovery-д `dryRun: true` — CA d3e071f7 прод).
+- **Шалгасан:** `npm run lint`, `npm test` (260 pass), `npm run test:contract`.
+### Added — `TokenCertStart.supersedes?`, `TokenCertInfo.personalAutoSupersede`
+
+- **Юу:** `token.issueCertificate`-ийн хариунд `supersedes?: { tokenSerial }[]` — хувийн хязгаар хүрсэн үед олголт
+  амжилттай болоход superseded (4)-оор цуцлагдах өмнөх хувийн токенууд. Discovery `personalAutoSupersede` (хуучин CA-д
+  false). 409 `TOKEN_LIMIT_REACHED` `kind: "PERSONAL"` одоо зөвхөн `limit: 0`.
+- **Яагаад:** CA !392 (прод b09b755e) хувийн токены автомат солилт; RP PIN2-оос өмнө иргэнд анхааруулах ёстой.
+- **Хаана:** `src/token.ts`, README §3c, `test/portal-gaps.test.ts`, `test/contract.test.ts`.
+- **Шалгасан:** `npm run lint`, `npm test`, `npm run test:contract` (live discovery).
+
 ## 0.22.0 — 2026-10-19
 
 ### Tests — `convert-e2e`: Linux WebKit-д цуцалсны дараах дахин хувиргалтыг алгасахаа болив

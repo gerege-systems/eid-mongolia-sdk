@@ -253,6 +253,12 @@ RP талд нэмэлт шалгалт хэрэггүй. Эх сурвалж: e
   порталын зан: тасалдлыг decoy-оор нуувал иргэн дуусахгүй spinner харна; эдгээр нь дугаараас хамаардаггүй тул oracle
   биш). Унтраах: `decoy: false`, `pushFloorMs: 0` — **⚠️** тэгвэл `/start` нь «энэ регистр eID-д бүртгэлтэй эсэх»-ийг
   нэвтрээгүй хэнд ч хэлнэ; зөвхөн дотоод/тестийн орчинд.
+- **Хугацаа (`ttlMs`, анхдагч 120 000) CA-ийн session-оос урт байхгүй.** QR / Web2App: `expiresIn`, cookie `Max-Age`,
+  store = min(`ttlMs`, CA-ийн start хариуны `expiresAt` − одоо). Push (бодит ба decoy **ижил**): min(`ttlMs`, discovery
+  `sessionTtl.auth`) — decoy-д CA хариу байхгүй тул CA-ийн `expiresAt`-аас бус discovery-оос (`client.auth.sessionTtl()`,
+  10 мин кэш, алдаа бол `onError` + 1 мин-ийн дараа дахин) — хугацааны зөрүү oracle болохгүй. Хуучин CA (discovery-д
+  `sessionTtl` алга): бодит push-ийн `expiresAt`-аас ажигласан утгыг дараагийн decoy авна (±1 с); анхны бодит push-ээс
+  өмнө `ttlMs`.
 - **Гэрчилгээний цуцлалт (OCSP, анхдагчаар асаалттай).** `validateAuth`-ийн дараа, `onSuccess`-ийн өмнө иргэний гэрчилгээг
   түүний AIA-д бичигдсэн OCSP responder-оос асууна (`revocation`, анхдагч `ocspRevocationChecker()`; хариу олгогч эсвэл
   түүний OCSPSigning responder-ийн гарын үсэгтэй, энэ serial-ийн, thisUpdate ≤ 48 цаг, good-ийг 5 мин кэшлэнэ). `revoked`,
@@ -381,7 +387,8 @@ RAW_DIGEST_SIGNATURE-д `flowType` гарын үсэгт ордоггүй (зө�
 **`expiresAt`** (ms epoch) — session дуусах мөч: CA-ийн session start хариуны `expiresAt` (RFC 3339; auth / sign /
 certificate-choice бүгдэд, 2026-10-14-өөс). Хуучин CA (талбаргүй) үед sign / certificate-choice-д SDK тооцоолно — CA-ийн
 анхдагч 600с (`DEFAULT_SIGN_SESSION_TTL_MS`; CA админ 60–1800с болгож болно → `signSessionTtlMs`), auth-д undefined.
-Эцсийн үнэн нь `GET /session` (`TIMEOUT`).
+Эцсийн үнэн нь `GET /session` (`TIMEOUT`). CA-ийн тохиргооны амьд утга: `client.auth.sessionTtl()` — discovery
+`sessionTtl` (`{ authMs, signMs }`; хуучин CA-д 0).
 
 **Session эхлэх алдаа** (`ApiError`-ийн дэд анги, `.code`-той): `NoSigningCertificateError` — 409
 `NO_SIGNING_CERTIFICATE` (sign / certificate-choice start: иргэнд идэвхтэй төхөөрөмж / хүчинтэй
@@ -480,12 +487,16 @@ const byToken = Map.groupBy(certificates.filter((c) => c.tokenSerial), (c) => c.
 import { verifyTokenCertificates, tokenAuthDigest, tokenLimitOf } from "@gerege-systems/eid-mongolia-sdk";
 
 // гэрчилгээ олголт (TOKEN_ISSUE эрх) — иргэн утсаараа PIN2-оор батална
-const st = await eid.token.issueCertificate({ signerEtsi, csrAuth, csrSign, tokenSerial: "EP2003-0042A1" }); // onBehalfOf алга = хувийн
+const input = { signerEtsi, csrAuth, csrSign, tokenSerial: "EP2003-0042A1" }; // onBehalfOf алга = хувийн
+// push-ээс ӨМНӨ: ижил оролтоор dryRun — session/push үүсэхгүй, алдааны код бодиттой ижил
+const pv = await eid.token.previewCertificate(input); // pv.supersedes байвал иргэнд анхааруулж зөвшөөрүүлээд ↓
+const st = await eid.token.issueCertificate(input);
 // … eid.session.poll(st.sessionId) → result.tokenCertificate?.status === "ISSUED"
 const res = await eid.token.certificateResult(st.sessionId);
 verifyTokenCertificates(res, csrAuth, csrSign); // гэрчилгээ бүр CSR-ийн түлхүүртэй
 // 409 TOKEN_LIMIT_REACHED → tokenLimitOf(err): { kind, limit, organization? }
 // 409 TOKEN_IN_USE — serial өөр иргэнд; 409 TOKEN_SCOPE_CHANGE — сунгалт scope солих гэсэн (доор)
+// 400 APP_ATTESTATION_INVALID — appTransaction ирсэн боловч хүчингүй (доор)
 
 // токеноор нэвтрэх (AUTH эрх)
 const ch = await eid.token.authChallenge();
@@ -504,6 +515,29 @@ const who = await eid.token.authVerify(ch, authCertDer, rs);
 батлалтын дараа `certificateResult`) 409 `TOKEN_SCOPE_CHANGE`, session-ий `tokenCertificate.errorCode` мөн ийм — override
 байхгүй. Scope солих = иргэн eID апп-аас токеноо цуцлаад (`/v3/mobile/tokens/{tokenSerial}/revoke`) шинээр олгуулна;
 хэрэглэгчид: «Токены төрлийг (хувийн/байгууллага) солихын тулд eID апп-аас токеныг цуцлаад шинээр олгуулна уу».
+
+**Хувийн токены автомат солилт** (CA 2026-10-19, discovery `tokenCertificate.personalAutoSupersede: true`): хувийн
+хязгаар хүрсэн үед өөр `tokenSerial`-тай шинэ хувийн токен 409 биш — `st.supersedes` (`{ tokenSerial }[]`) ирнэ; хувийн
+токенд шинэ олголт амжилттай болбол (PIN2 + гэрчилгээ) өмнөх хувийн токены AUTH + SIGN superseded (4)-оор цуцлагдана.
+Татгалзсан / хугацаа дууссан олголт өмнөхийг хөндөхгүй. PIN2-оос өмнө: «Таны өмнөх USB токен (EP2003-…)-ийн гэрчилгээ
+хүчингүй болно». 409 `TOKEN_LIMIT_REACHED` `kind: "PERSONAL"` зөвхөн `limit: 0` (хувийн олголт хаалттай) үед;
+байгууллагын токен хатуу хязгаар хэвээр.
+
+**dryRun — push-ээс өмнөх шалгалт** (CA 2026-10-19, discovery `tokenCertificate.dryRun: true` —
+`certificateInfo().dryRun`): `issueCertificate`-ийн хариунд `supersedes` ирэх үед утас руу PIN2 push явсан байдаг —
+desktop дээр цуцалсан ч иргэн утсаараа баталбал хуучин токен солигдоно. Тиймээс урсгал: CSR →
+`eid.token.previewCertificate(input)` (бие нь ижил + `"dryRun": true`; бүх шалгалт, ижил алдааны код — өөр CSR хостой
+хүлээгдэж буй олголт `409 TOKEN_ISSUANCE_PENDING` ч; session / push / state үүсэхгүй) → `supersedes` байвал анхааруулга,
+иргэн зөвшөөрөх → `issueCertificate(input)`. Хурдны хязгаар (RP, иргэн) 20/мин ба RP нийт 120/10 мин — push-ийн 3/цагийг
+зарцуулахгүй. Хариунд `dryRun: true` ирээгүй бол `ValidationError` (хуучин CA танихгүй талбарт 400 буцаана).
+
+**Апп баталгаа (`appTransaction`, заавал биш)** (CA 2026-10-19, discovery `tokenCertificate.appTransaction:
+"optional"` — `eid.token.certificateInfo().appTransaction`): macOS App Store build нь StoreKit 2 `AppTransaction`-ийн
+JWS (compact) мөрийг desktop-оос дамжуулна — `issueCertificate({ …, appTransaction: jws })`. CA Apple-ийн сервер рүү
+дуудахгүй, offline шалгана; ирсэн бол заавал хүчинтэй, эс бөгөөс 400 `APP_ATTESTATION_INVALID` (SDK-ийн
+тогтмол; аль алхам унасныг хэлэхгүй, утас руу push явахгүй). Хоосон/алга (Windows) = баталгаагүй олголт.
+`MAX_APP_TRANSACTION_BYTES` (16 KiB)-аас их бол SDK илгээхгүй, `AppTransactionTooLargeError` шиднэ. Хуучин CA-д талбар
+илгээвэл 400.
 
 `/token/auth/*` нь `/.well-known/eid`-ийн `endpoints.token.auth_challenge` / `auth_verify`-д жагсаагдсан (AUTH эрх) —
 гэрээний тест бусад route-ийн адил шалгана.
