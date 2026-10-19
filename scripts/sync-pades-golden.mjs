@@ -17,7 +17,7 @@ import { fileURLToPath } from "node:url";
 
 export const GO_SDK_REPO = "https://github.com/gerege-systems/eid-mongolia-sdk-go";
 // main #33 (golden v5: харагдах дүрслэлийн байршил — PLACEMENT_SPEC.md, placement/ vectors).
-export const GO_SDK_COMMIT = "b5c1fdc9966ad5cde69ca787e591d04a112f6012";
+export const GO_SDK_COMMIT = "29b00a8d0d7a911e3e8b481e6800b7342906cdd4";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const check = process.argv.includes("--check");
