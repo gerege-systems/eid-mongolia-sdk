@@ -10,7 +10,7 @@
 - **Хаана.** `src/pades/page/occupancy.ts` (scanner + candidate, Go `occupancy.go`/`placement.go`-ийн 1:1 порт),
   `src/pades/pdf/signature.ts`, `src/pades.ts` (`PadesPlacement`), `src/pades/pdf/inflate.ts`
   (`zlibInflateStrict` — Go compress/zlib шиг header (FDICT нь зөвхөн DICTID 1) + Huffman бүрэн байдал + Adler-32; `adler32`-ийг validate-тэй
-  хуваалцана). Golden pin Go `b5c1fdc` (#33), sync-д `placement/` нэмэгдсэн.
+  хуваалцана). Golden pin Go `4e87dc1` (#34: #33 + PLACEMENT_SPEC port traps, 29 vector), sync-д `placement/` нэмэгдсэн.
 - **Шалгасан.** `placement/vectors.json`-ийн 21 оролт хайрцаг бүрээр ижил; golden v5-ийн 6 шинэ тохиолдол
   (`libreoffice-contract-visible`, `…-second`, `table-bottom-visible`, `rotated90-footer-visible`,
   `quartz-pdf13-visible-third`, `full-page-visible`) prepare + complete байт-ижил (`output/*.pdf`-тэй тулгасан), хуучин
