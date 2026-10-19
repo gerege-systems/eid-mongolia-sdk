@@ -459,6 +459,10 @@ test("PII — NetworkError замд PNOMN/РД/documentNumber орохгүй (op
     () => eid.sign.digestByDocument("doc-12345678", sha256Base64("x"), []),
     (e: unknown) => e instanceof NetworkError && e.op === "POST /signature/notification/document/…" && noPII(e),
   );
+  await assert.rejects(
+    () => eid.sign.digestForSigner({ documentNumber: "PNOMN-12345678-ABCD-Q", certChoiceSessionId: "cc-1" }, sha256Base64("x"), []),
+    (e: unknown) => e instanceof NetworkError && e.op === "POST /signature/notification/linked/…" && noPII(e),
+  );
   const slow = new EidClient({
     credentials: CREDS, timeoutMs: 20,
     fetchImpl: hangUntilAbort,

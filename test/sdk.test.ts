@@ -202,6 +202,11 @@ test("resolveBaseUrl — анхдагч rp., /v3 залгахгүй, хуучи�
   assert.equal(resolveBaseUrl("http://localhost:8080/v3"), "http://localhost:8080/v3");
   assert.throws(() => resolveBaseUrl("https://ca.eidmongolia.mn"), /rp\.eidmongolia\.mn/);
   assert.throws(() => resolveBaseUrl("not a url"), /буруу URL/);
+  assert.equal(resolveBaseUrl("http://127.0.0.1:9000"), "http://127.0.0.1:9000");
+  assert.equal(resolveBaseUrl("http://[::1]:9000/"), "http://[::1]:9000");
+  assert.throws(() => resolveBaseUrl("http://rp.eidmongolia.mn"), /https байх ёстой/);
+  assert.throws(() => resolveBaseUrl("http://localhost.evil.example"), /https байх ёстой/);
+  assert.throws(() => resolveBaseUrl("ftp://rp.eidmongolia.mn"), /https байх ёстой/);
 });
 
 test("EidClient — rp. хост руу /v3-гүй зам дууддаг", async () => {
