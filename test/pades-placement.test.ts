@@ -8,6 +8,7 @@ import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { tmpdir } from "node:os";
+import { deflateSync } from "node:zlib";
 import { build } from "esbuild";
 
 const G = new URL("./fixtures/pades/golden/", import.meta.url);
@@ -255,4 +256,86 @@ test("placement limits (§5) — хязгаар бүр «unscanned», хязга
   // inline image without EI ends the content; with EI it is one unit-square box
   assert.deepEqual(scan(s("q 10 0 0 10 100 100 cm BI /W 1 ID xx")), []);
   assert.deepEqual(scan(s("q 10 0 0 10 100 100 cm BI /W 1 ID xx EI Q")), [[10000, 10000, 11000, 11000]]);
+});
+
+// ── Cross-checks against the Go reference (b5c1fdc Occupancy run on the same objects; its results are pasted below) ──
+
+function onePage(pageKeys: string, contents: Uint8Array, ...extra: string[]): Uint8Array {
+  return fxPDF([
+    s("<< /Type /Catalog /Pages 2 0 R >>"),
+    s("<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+    s(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] ${pageKeys} /Contents 4 0 R >>`),
+    contents,
+    ...extra.map(s),
+  ]);
+}
+
+function occ(doc: Uint8Array): Box[] | "unscanned" {
+  const page = I.nthPage(new I.Incremental(doc).root().key("Pages"), 1)!;
+  try {
+    return I.occupancy(page, LETTER);
+  } catch (e) {
+    assert.ok(e instanceof I.UnscannableError, String(e));
+    return "unscanned";
+  }
+}
+
+test("placement zlib — тасархай/буруу Adler-32 → unscanned, FDICT зөвхөн DICTID 1 (Go compress/zlib)", () => {
+  const z = deflateSync(Buffer.from("0 g 10 10 50 50 re f"), { level: 9 });
+  const fdict = (id: number): Buffer => {
+    let flg = 0x20;
+    while (((0x78 << 8) | flg) % 31 !== 0) flg++;
+    const h = Buffer.from([0x78, flg, 0, 0, 0, 0]);
+    h.writeUInt32BE(id, 2);
+    return Buffer.concat([h, z.subarray(2)]);
+  };
+  const bad = Buffer.from(z);
+  bad[bad.length - 1] = bad[bad.length - 1]! ^ 1;
+  const box: Box[] = [[1000, 1000, 6000, 6000]];
+  const cases: [string, Uint8Array, Box[] | "unscanned"][] = [
+    ["ok", z, box],
+    ["trailing bytes after Adler-32", Buffer.concat([z, Buffer.from("garbage")]), box],
+    ["FDICT, DICTID 1 = adler32(empty)", fdict(1), box],
+    ["FDICT, DICTID 2", fdict(2), "unscanned"],
+    ["no Adler-32", z.subarray(0, z.length - 4), "unscanned"],
+    ["half Adler-32", z.subarray(0, z.length - 2), "unscanned"],
+    ["wrong Adler-32", bad, "unscanned"],
+    ["truncated deflate data", z.subarray(0, z.length >> 1), "unscanned"],
+  ];
+  for (const [name, data, want] of cases) assert.deepStrictEqual(occ(onePage("", fxStream("/Filter /FlateDecode ", data))), want, name);
+});
+
+test("placement fonts — нэг объект доторх шууд фонтууд нэг cache мөр хуваалцана (Go GetPtr id)", () => {
+  const doc = onePage(
+    "/Resources << /Font 5 0 R >>",
+    fxStream("", s("BT /A 10 Tf 72 700 Td (aaaa) Tj ET BT /B 10 Tf 72 600 Td (aaaa) Tj ET BT /C 10 Tf 72 500 Td (aaaa) Tj ET")),
+    "<< /A << /Subtype /Type1 /FirstChar 97 /Widths [100] >> /B << /Subtype /Type1 /FirstChar 97 /Widths [900] >> /C 6 0 R >>",
+    "<< /Subtype /Type1 /FirstChar 97 /Widths [500] >>",
+  );
+  // /B is measured with /A's widths (both direct in object 5); /C (object 6) with its own.
+  assert.deepStrictEqual(occ(doc), [
+    [7200, 69700, 7600, 71000],
+    [7200, 59700, 7600, 61000],
+    [7200, 49700, 9200, 51000],
+  ]);
+});
+
+test("placement fonts — хэт том /FirstChar, /W CID нь saturating int (Go)", () => {
+  const huge = "99999999999999999999999999999999.0";
+  const doc = onePage(
+    "/Resources << /Font << /S 5 0 R /N 6 0 R /T 7 0 R /U 9 0 R >> >>",
+    fxStream("", s("BT /S 10 Tf 72 700 Td (aaaa) Tj ET BT /N 10 Tf 72 600 Td (aaaa) Tj ET BT /T 10 Tf 72 500 Td <00010002> Tj ET BT /U 10 Tf 72 400 Td <00010002> Tj ET")),
+    `<< /Subtype /Type1 /FirstChar ${huge} /Widths [100 100 100] >>`,
+    `<< /Subtype /Type1 /FirstChar -${huge} /Widths [100 100 100] >>`,
+    "<< /Subtype /Type0 /Encoding /Identity-H /DescendantFonts [8 0 R] >>",
+    `<< /Subtype /CIDFontType2 /DW 300 /W [${huge} 1 2000 -${huge} [700 800]] >>`,
+    "<< /Subtype /Type0 /Encoding /Identity-H /DescendantFonts [10 0 R] >>",
+    `<< /Subtype /CIDFontType2 /DW 300 /W [-${huge} ${huge} 1500] >>`,
+  );
+  assert.deepStrictEqual(occ(doc), [
+    [7200, 69700, 11200, 71000],
+    [7200, 59700, 11200, 61000],
+    [7200, 49700, 7800, 51000],
+    [7200, 39700, 10200, 41000],
+  ]);
 });

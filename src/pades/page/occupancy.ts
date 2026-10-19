@@ -110,6 +110,13 @@ const newFont = (kind: FontKind): Font => ({ kind, first: 0, widths: [], missing
 
 const DEFAULT_FONT: Font = newFont(FontKind.Default);
 
+/**
+ * Go int(float64) — truncation toward zero, saturating at the int64 range (Go on arm64). The bounds only make the
+ * saturation explicit: every caller compares the result against 0…65535 or a list length, which a huge double and a
+ * saturated int64 fail alike.
+ */
+const toInt = (v: number): number => Math.min(Math.max(Math.trunc(v), -(2 ** 63)), 2 ** 63);
+
 function number(v: Value): number | undefined {
   const k = v.kind();
   return k === "int" || k === "real" ? v.float64() : undefined;
@@ -137,7 +144,7 @@ function loadFont(v: Value): Font {
       read: for (let i = 0; i < n; ) {
         const c0f = number(w.index(i));
         if (c0f === undefined || i + 1 >= n) break;
-        const c0 = Math.trunc(c0f);
+        const c0 = toInt(c0f);
         const arr = w.index(i + 1);
         if (arr.kind() === "array") {
           const m = Math.min(arr.len(), MAX_W_ENTRIES);
@@ -151,7 +158,7 @@ function loadFont(v: Value): Font {
         const c1 = number(w.index(i + 1));
         const x = number(w.index(i + 2));
         if (c1 === undefined || x === undefined || i + 2 >= n) break;
-        const hi = Math.trunc(c1);
+        const hi = toInt(c1);
         for (let c = Math.max(c0, 0); c <= hi && c <= 0xffff; c++) {
           if (!set(c, x)) break read;
         }
@@ -162,7 +169,7 @@ function loadFont(v: Value): Font {
   }
   const f = newFont(FontKind.Simple);
   const fc = number(v.key("FirstChar"));
-  if (fc !== undefined) f.first = Math.trunc(fc);
+  if (fc !== undefined) f.first = toInt(fc);
   const ws = v.key("Widths");
   const m = Math.min(ws.len(), 256);
   for (let i = 0; i < m; i++) f.widths.push(number(ws.index(i)) ?? NaN);

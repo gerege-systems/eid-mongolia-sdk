@@ -71,7 +71,8 @@ export function inflateRaw(src: Uint8Array, limit = 64 << 20, info?: InflateInfo
 }
 
 /**
- * Go compress/zlib-тэй ижил хатуу zlib (RFC 1950): header (CM 8, CINFO ≤ 7, FDICT 0, mod 31), Go compress/flate шиг
+ * Go compress/zlib-тэй ижил хатуу zlib (RFC 1950): header (CM 8, CINFO ≤ 7, mod 31; FDICT бол Go zlib.NewReader шиг
+ * DICTID = Adler-32(хоосон толь) = 1 байвал зөвшөөрч дараагийн 4 байтыг алгасна, бусад нь алдаа), Go compress/flate шиг
  * Huffman код бүрэн байх (ганц 1 битийн кодоос бусад), HLIT ≤ 286, HDIST ≤ 30, таслагдвал алдаа, deflate-ийн дараах
  * Adler-32 таарах; түүнээс хойших байтыг үл тоомсорлоно. Гаралт `limit`-ээс хэтэрвэл InflateLimitError. Ямар ч зөрчил →
  * InflateError (PLACEMENT_SPEC.md §3.1).
@@ -80,11 +81,18 @@ export function zlibInflateStrict(src: Uint8Array, limit: number): Uint8Array {
   if (src.length < 2) throw new InflateError("zlib: header алга");
   const cmf = src[0]!;
   const flg = src[1]!;
-  if ((cmf & 0x0f) !== 8 || cmf >> 4 > 7 || ((cmf << 8) | flg) % 31 !== 0 || flg & 0x20) throw new InflateError("zlib: header буруу");
+  if ((cmf & 0x0f) !== 8 || cmf >> 4 > 7 || ((cmf << 8) | flg) % 31 !== 0) throw new InflateError("zlib: header буруу");
+  let start = 2;
+  if (flg & 0x20) {
+    // Go: preset dictionary = nil → DICTID нь adler32("") = 1 байх ёстой (ErrDictionary).
+    if (src.length < 6) throw new InflateError("zlib: DICTID дутуу");
+    if (src[2] !== 0 || src[3] !== 0 || src[4] !== 0 || src[5] !== 1) throw new InflateError("zlib: preset dictionary");
+    start = 6;
+  }
   const info: InflateInfo = { end: 0, truncated: false };
-  const out = inflate(src.subarray(2), limit, info, undefined, true);
+  const out = inflate(src.subarray(start), limit, info, undefined, true);
   if (info.truncated) throw new InflateError("inflate: өгөгдөл дутуу");
-  const at = 2 + info.end;
+  const at = start + info.end;
   if (at + 4 > src.length) throw new InflateError("zlib: adler32 алга");
   const want = ((src[at]! << 24) | (src[at + 1]! << 16) | (src[at + 2]! << 8) | src[at + 3]!) >>> 0;
   if (adler32(out) !== want) throw new InflateError("zlib: adler32 таарахгүй");
