@@ -2,7 +2,7 @@
 // ⚠️ Энэ бол SDK-ийн гол аюулгүйн давхарга. endResult==OK гэдэгт ДАНГААР нь итгэхгүй:
 // RP-API эвдэрсэн/proxy хийгдсэн бол хуурамч OK ирж болзошгүй. Иймд:
 //   1) state==COMPLETE && endResult==OK
-//   2) Иргэний cert-ийг trust anchor (Gerege Root CA) хүртэл chain-аар баталгаажуулах
+//   2) Иргэний cert-ийг trust anchor (Mongolian National Root CA) хүртэл chain-аар баталгаажуулах
 //   3) cert хүчинтэй хугацаанд байх + шаардсан certLevel хангах
 //   4) Гарын үсгийг иргэний cert-ийн public key-ээр шалгах (signatureAlgorithm-ийн дагуу:
 //      rsassa-pss / shaNNNWithRSAEncryption / хуучин ecdsa-with-SHA256):

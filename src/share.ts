@@ -1,7 +1,7 @@
 // Гарын үсэгтэй файлыг имэйлээр дамжуулах — `POST /share` (CA docs/SHARE_EMAIL.md). RP гарын үсэг зурсан файлаа
 // дараагийн гарын үсэг зурагч / хүлээн авагч руу хавсралтаар илгээнэ. CA файлыг хадгалахгүй: eID-ийн хүчинтэй гарын
-// үсэгтэй эсэхийг шалгаад email-service руу дамжуулж хаяна. SIGN эрх. CA-ийн туг `EID_SHARE_ENABLED` унтраалттай үед
-// 503 SHARE_DISABLED — асаалттай эсэхийг {@link ShareInfo.enabled}-ээр (discovery) шалга.
+// үсэгтэй эсэхийг шалгаад email-service руу дамжуулж хаяна. SIGN эрх. CA-д туг байхгүй (2026-10-16-аас); имэйл/шалгагч
+// тохируулаагүй үед 503 MAIL_UNAVAILABLE / VALIDATOR_UNAVAILABLE (хуучин CA: SHARE_DISABLED) — {@link ShareInfo.enabled}-ээр шалга.
 //
 // multipart/form-data-г стандарт `FormData` + `Blob`-оор угсарна — Node ≥ 18 ба хөтөчид ижил ажиллана (API secret
 // шаарддаг тул хөтөчөөс шууд биш, RP backend-ээс дуудна).
@@ -118,7 +118,7 @@ export class ShareError extends ApiError {
 
 /** Discovery (`/.well-known/eid`)-ийн `share` блок. */
 export interface ShareInfo {
-  /** CA-ийн туг. false бол `share()` → 503 SHARE_DISABLED. */
+  /** Имэйлийн үйлчилгээ ба шалгагч тохируулагдсан эсэх. false бол `share()` → 503 MAIL_UNAVAILABLE / VALIDATOR_UNAVAILABLE (хуучин CA: SHARE_DISABLED). */
   enabled: boolean;
   endpoint: string;
   formats: { name: string; extension: string; mime: string }[];

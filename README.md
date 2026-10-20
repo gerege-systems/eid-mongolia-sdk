@@ -35,7 +35,7 @@ Smart-ID-тэй RP-үүдийн хэв маяг: хөтөчид **нэг тов�
 
 | Хаана | Юу болно |
 |---|---|
-| Desktop хөтөч | Цонх: QR (секунд тутам шинэчлэгдэнэ) + баталгаажуулах код + «Хүсэлтийн хугацаа m:ss» (сүүлийн 30с анхааруулах өнгө) + «Регистрийн дугаараар нэвтрэх» товч (ижил цонхонд доош дэлгэгдэх push хэсэг), шууд төлөв |
+| Desktop хөтөч | Цонх: QR (~1–2 секунд тутам шинэчлэгдэнэ — status long-poll ≤ 1 с + 1 с) + баталгаажуулах код + «Хүсэлтийн хугацаа m:ss» (сүүлийн 30с анхааруулах өнгө) + «Регистрийн дугаараар нэвтрэх» товч (ижил цонхонд доош дэлгэгдэх push хэсэг), шууд төлөв |
 | Утасны хөтөч | Товч → `start?mode=web2app` → сервер 302 → eID апп (Web2App). Апп баталгаажуулаад `/auth/eid/callback` руу буцаана |
 | Backend | session эхлүүлэх, QR угсрах (`sessionSecret` серверт), poll, `validateAuth` (гинж + ACSP_V2 + `flowType` + Web2App-д `userChallengeVerifier`) → таны `onSuccess` |
 
@@ -227,8 +227,8 @@ eid-login-button::part(icon) { width: 24px; height: 24px; }
 **eID аппын доод хувилбар.** `flowType` бэхлэлт (device link v3) ба Web2App-ийн `userChallengeVerifier` нь
 **iOS 2.2.3 (build 59)**, **Android 2.2.3 (versionCode 60)**-аас эхэлсэн. eID сервер 2026-10-07-оос legacy холбоосыг
 бүрэн хассан (v3-гүй session-д утас `DEVICE_LINK_REQUIRED`) бөгөөд доод хувилбарыг `/mobile/app-config`-оор албадан
-шинэчлүүлдэг: Android 2026-10-07-оос ≥ 70 (төхөөрөмжийн баталгаатай), 2026-10-15-ны байдлаар iOS ≥ 2.2.7,
-Android ≥ 83 (`curl https://ca.eidmongolia.mn/mobile/app-config`). Иймд гарын үсэг зурж чадах бүх апп эдгээрийг дэмжинэ —
+шинэчлүүлдэг: Android 2026-10-07-оос ≥ 70 (төхөөрөмжийн баталгаатай), 2026-10-20-ны байдлаар iOS ≥ 2.2.8,
+Android ≥ 91 (`curl https://ca.eidmongolia.mn/mobile/app-config`). Иймд гарын үсэг зурж чадах бүх апп эдгээрийг дэмжинэ —
 RP талд нэмэлт шалгалт хэрэггүй. Эх сурвалж: eID CA-ийн `docs/DEVICE_LINK_V3.md` §5, §7; changelog
 `2026-10-02-ios-min-version-2-2-3`, `2026-10-07-android-min-70`.
 
@@ -247,8 +247,8 @@ RP талд нэмэлт шалгалт хэрэггүй. Эх сурвалж: e
   5 оронтой — eID-тэй ижил хэлбэр), expiresIn}`, ижил cookie; `status` нь eID-ээс асуулгүй `pollMs`-ийн хугацаанд барьж
   `PENDING`, TTL-ийн дараа `EXPIRED` — утсаа аваагүй иргэнтэй ялгаагүй (бодит push-ийн CA `TIMEOUT` ч `EXPIRED` болно). Push start-ийн хариу бүр (бодит, decoy, 502)
   `pushFloorMs`-оос (анхдагч 1000) хурдан гарахгүй — decoy-г цагаар ялгахгүйн тулд (`handle(Request)`-д хүсэлт тасарвал
-  хүлээхгүй; `handleRequest`-д `signal` өг). Хязгаар (`push:<idCode>`, `start:<ip>`) decoy-д ч үйлчилнэ; 429 ба 400
-  (`invalid_id` — хэлбэрийн алдаа, бүртгэлээс хамааралгүй) нь floor-гүй. eID-ийн 5xx, холболтын алдаа, JSON бус 4xx (eID-ийн
+  хүлээхгүй; `handleRequest`-д `signal` өг). Хязгаар (`push:<idCode>`, `start:<ip>`) decoy-д ч үйлчилнэ; хязгаарлагчийн 429 ба 400
+  (`invalid_id` — хэлбэрийн алдаа, бүртгэлээс хамааралгүй) нь floor-гүй (eID-ийн 429 ба 503 `busy` floor-той). eID-ийн 5xx, холболтын алдаа, JSON бус 4xx (eID-ийн
   өмнөх proxy, ж: mTLS татгалзал), 401/403 (RP-ийн нууц/эрх) ба 429 нь **decoy биш** — `502 eid_unavailable` / `429` (eID
   порталын зан: тасалдлыг decoy-оор нуувал иргэн дуусахгүй spinner харна; эдгээр нь дугаараас хамаардаггүй тул oracle
   биш). Унтраах: `decoy: false`, `pushFloorMs: 0` — **⚠️** тэгвэл `/start` нь «энэ регистр eID-д бүртгэлтэй эсэх»-ийг
@@ -279,7 +279,7 @@ RP талд нэмэлт шалгалт хэрэггүй. Эх сурвалж: e
 **Redis store** (SDK нэмэлт хамааралгүй — жишээ нь `ioredis`):
 
 ```ts
-import Redis from "ioredis";
+import { Redis } from "ioredis";
 import type { EidLoginStore, EidLoginTx } from "@gerege-systems/eid-mongolia-sdk";
 
 const redis = new Redis(process.env.REDIS_URL!);
@@ -304,13 +304,13 @@ Tx-д `sessionSecret` (QR угсрах материал) байдаг — Redis-
 ## 2. Нэвтрэлт (push)
 
 ```ts
-import { EidClient } from "@gerege-systems/eid-mongolia-sdk";
+import { EidClient, NATIONAL_ROOT_CA_PEM } from "@gerege-systems/eid-mongolia-sdk";
 
 const eid = new EidClient({
   // baseUrl анхдагч https://rp.eidmongolia.mn (RP-API, /v3-гүй) — mTLS-тэй RP ч мөн энэ хост
   credentials: {
     rpUUID: process.env.EID_RP_UUID!,
-    rpName: "Интернэт банк", // дэд системийн нэр, ≤120 тэмдэгт
+    rpName: "Интернэт банк", // дэд системийн нэр, ≤ 120 байт UTF-8 (кирилл ≈ 60 үсэг; CA илүүг таслана)
     apiSecret: process.env.EID_SECRET!, // rp_sk_…
   },
   trust: { trustAnchorsPem: [NATIONAL_ROOT_CA_PEM] }, // ← Mongolian National Root CA, production-д ЗААВАЛ (завсрын 02–04 SDK-д суусан)
@@ -323,11 +323,11 @@ const s = await eid.auth.notificationByEtsi("PNOMN-12345678", [
 
 showToUser(s.vc); // ← иргэний утсан дээр харагдах баталгаажуулах код (VC)
 
-const result = await eid.session.waitForResult(s.sessionId); // long-poll
-const who = eid.validator.validateAuth(result, s.acsp); // ← гинж + ACSP_V2 крипто-баталгаажуулна
+const result = await eid.session.waitForResult(s.sessionId); // long-poll; анхдагч 150 с (CA auth TTL 300 с) — { maxWaitMs }
+const who = eid.validator.validateAuth(result, s.acsp!); // ← гинж + ACSP_V2 крипто-баталгаажуулна (RUNNING бол ValidationError)
 
 console.log(who.documentNumber, who.subject); // баталгаажсан иргэн
-const { name, serialNumber } = who.parsedSubject; // "Болд Бат", "PNOMN-12345678" (givenName/surname/commonName/country…)
+const { name, serialNumber } = who.parsedSubject; // латин «givenName surname», "PNOMN-12345678" (givenName/surname/commonName/country…)
 ```
 
 Session-ий `person` блок (CA бүртгэлээс — гэрчилгээнд байдаггүй кирилл нэр, төрсөн огноо, хүйс) гарын үсэгт **ордоггүй** —
@@ -405,7 +405,8 @@ certificate-choice хүчингүй / хуучирсан / ашиглагдса�
 ```ts
 const cc = await eid.sign.certificateChoiceByEtsi("PNOMN-12345678"); // эсвэл certificateChoiceDeviceLink() (зөвхөн QR)
 const signer = eid.validator.validateCertificateChoice(await eid.session.waitForResult(cc.sessionId), cc.sessionId);
-const dtbs = buildDtbs(signer.certificate); // 32 байт SHA-256, стандарт base64
+const dtbs = myCmsBuilder.dtbs(signer.certificate); // таных: SHA-256(signedAttrs), 32 байт, стандарт base64 (PDF бол /pades prepare)
+const ix = [{ type: "displayTextAndPIN" as const, displayText60: "Гэрээнд гарын үсэг зурах" }];
 const s = await eid.sign.digestForSigner(signer, dtbs, ix, { fileName: "Гэрээ.pdf" }); // linked/{documentNumber}
 // QR / Web2App: eid.sign.deviceLinkForSigner(signer, dtbs, ix, { callbackUrl })
 const r = await eid.session.waitForResult(s.sessionId);
@@ -470,7 +471,7 @@ Session-ий `onBehalfOf` блок (`role`/`roleLabel`/`rightType`/`rightTypeLab
 
 Гэрчилгээ бүрт (0.18.0-аас) `issuedAt` (олгосон), `revokedAt?` (цуцалсан — REVOKED), `revocationReason?` (RFC 5280
 нэр: `keyCompromise`, `superseded`, `cessationOfOperation` …). `status` өөрчлөгдөхгүй: сунгалт/дахин бүртгэлээр
-солигдсон мөр `SUSPENDED` + `revocationReason: "superseded"`, `revokedAt`-гүй.
+солигдсон мөр `SUSPENDED` + `revocationReason: "superseded"` + `revokedAt` (солигдсон мөч, CA 2026-10-16-аас).
 
 `keyMedium: "TOKEN"` мөрөнд `organization?` (байгууллагын токен) ба `tokenSerial?` — гэрчилгээ олгогдсон USB токены
 серийн дугаар. Нэг токены AUTH + SIGN-ийг байгууллага/огноогоор таамаглахгүй, `tokenSerial`-аар бүлэглэ (сунгалтаар
@@ -478,7 +479,8 @@ Session-ий `onBehalfOf` блок (`role`/`roleLabel`/`rightType`/`rightTypeLab
 
 ```ts
 const { certificates } = await eid.person.certificates(etsi);
-const byToken = Map.groupBy(certificates.filter((c) => c.tokenSerial), (c) => c.tokenSerial!);
+const byToken = new Map<string, typeof certificates>(); // Map.groupBy нь Node ≥ 21 — Node 18/20-д ажиллахгүй
+for (const c of certificates) if (c.tokenSerial) byToken.set(c.tokenSerial, [...(byToken.get(c.tokenSerial) ?? []), c]);
 ```
 
 ## 3c. USB токен
@@ -557,11 +559,11 @@ DSS-д), Adobe / EU DSS-д «LTV enabled», баталгаажуулах (QR) х
 | `complete(state, signature)` | браузер / Node | TSA + OCSP/CRL → `{ pdf, cms, docId, outSha256, inSha256, hasPage, pageSha256, … }` |
 | `eid.registerSignature(registrationFromCompleted(done, { fileName, sessionID }))` | RP backend | `POST /pdf/signatures` — `/verify/{docID}` бүртгэл |
 
-`/pades` хөтчийн bundle ~127 KB gzip (Noto Sans фонт asset-тэй, CI-д ≤ 300 KB); үндсэн entry үүнийг агуулахгүй. `/pades` (ба бүх багц) **Node ≥ 18** (CI: 18 / 20 / 22),
+`/pades` хөтчийн bundle ~136 KB gzip (Noto Sans фонт asset-тэй, CI-д ≤ 300 KB); үндсэн entry үүнийг агуулахгүй. `/pades` (ба бүх багц) **Node ≥ 18** (CI: 18 / 20 / 22),
 орчин үеийн хөтөч. Браузерийн CSP: `connect-src https://tsa.timeserver.mn https://ocsp.eidmongolia.mn
 https://crl.eidmongolia.mn`. Хөтөчид гэрчилгээний `http://` AIA/CDP-г зөвхөн эдгээр хостод `https://` болгоно; үндэсний
-CA-ийн CRL (`esign.gov.mn`) нь `crl.eidmongolia.mn` толин хуулбараас (бүх платформд). Шалгагч (`verify`) энд
-**байхгүй** — бүрэн криптограф шалгалт Go backend SDK-д; `prepare` нь өмнөх гарын үсгийг «хөнгөн» шалгуураар (бүтэц,
+CA-ийн CRL (`esign.gov.mn`) нь `crl.eidmongolia.mn` толин хуулбараас (бүх платформд). Шалгагч `/pades`-д
+**байхгүй** — бүрэн шалгалт `@gerege-systems/eid-mongolia-sdk/validate` (`validatePdf`, §3g) эсвэл Go `pades.ValidatePDF`-д; `prepare` нь өмнөх гарын үсгийг «хөнгөн» шалгуураар (бүтэц,
 CMS гарын үсэг, eID олгогч, timestamp, DSS) л шалгана.
 
 **Зурагчийн гэрчилгээ.** `prepare` иргэний SIGN гэрчилгээг (`signingCertificateV2`) шаарддаг тул session-оос ӨМНӨ
@@ -577,7 +579,8 @@ Session-ийг тэр `documentNumber`-ээр эхлүүлнэ — өөр төх
 // ── браузер ─────────────────────────────────────────────────────────────────────────────
 import { prepare, complete } from "@gerege-systems/eid-mongolia-sdk/pades";
 
-const { signerCert, documentNumber } = await api("/sign/pdf/signer");          // backend: person.certificates
+const { certB64, documentNumber } = await api("/sign/pdf/signer");             // backend: person.certificates
+const signerCert = Uint8Array.from(atob(certB64), (ch) => ch.charCodeAt(0));     // prepare нь DER Uint8Array авна
 const p = await prepare(pdfBytes, {
   signerCert, verifyPage: true, fileName: "Гэрээ №12.pdf",
   claimedRole, // байгууллагаар бол getRepresentations()-ийн claimedRole ЯГ ХЭВЭЭР
@@ -590,8 +593,12 @@ const done = await complete(p.state, signature);                                
 const { pdf, signerCert: _c, ...meta } = done;                                     // PDF backend рүү очихгүй
 await api(`/sign/pdf/${s.sessionId}/register`, { ...meta, cms: b64(done.cms) });
 download(done.pdf, "Гэрээ №12.pdf");
+```
 
+```ts
 // ── RP backend (Node) ─────────────────────────────────────────────────────────────────────
+import { registrationFromCompleted } from "@gerege-systems/eid-mongolia-sdk";
+
 // /sign/pdf/start — sessionSecret (device-link) backend-ээс гарахгүй; s.digest-ийг session-д хадгал.
 const s = await eid.signPdfDigest({
   dtbs: req.body.dtbs, fileName: req.body.fileName,
@@ -646,6 +653,7 @@ if (p.placement?.status === "overlap") notice("Гарын үсэг хуудас�
 ### Зөвхөн Node (backend бүгдийг хийнэ)
 
 ```ts
+import { writeFileSync } from "node:fs";
 import { registrationFromCompleted } from "@gerege-systems/eid-mongolia-sdk";
 import { prepare, complete, PadesError } from "@gerege-systems/eid-mongolia-sdk/pades";
 
@@ -680,12 +688,12 @@ TSA timestamp-аар өөрөө **2 удаа** дахин оролдоно (ни
 `PadesError.code` (тогтвортой, бүх платформд ижил): `PDF_INVALID`, `PDF_ENCRYPTED`, `PDF_LOCKED` (DocMDP P=1),
 `PDF_TOO_LARGE`, `PDF_TOO_MANY_SIGNATURES`, `PDF_PRIOR_SIGNATURE_INVALID`, `PDF_FOREIGN_SIGNATURE`, `SIGNER_INVALID`,
 `REQUEST_INVALID`, `SIGNATURE_INVALID` (state хэвээр — дахин зуруулж болно), `TSA_UNAVAILABLE`, `LTV_UNAVAILABLE`
-(`retryable`), `SELF_VALIDATION_FAILED`, `PLACEHOLDER_OVERFLOW`, `STATE_INVALID`, `INTERNAL`.
+(`retryable`), `SELF_VALIDATION_FAILED`, `PLACEHOLDER_OVERFLOW`, `STATE_INVALID`, `INTERNAL` (зөвхөн TS — Go-д байхгүй).
 `state` нь бэлтгэсэн PDF-ийг агуулна — PDF-тэй ижил нууцлалтай хадгал. Формат нь Go SDK-тай ижил (хөтөчид `prepare`,
 Go backend-д `complete` хийж болно).
 
 0.15.0-д `eid.pdf` (`prepare`, `document`, `documentVerified`, `tokenPrepare`, `tokenFinalize`, `tokenDocument`) ба
-`pdfTimeoutMs` / `pdfMaxBytes` устсан — PDF upload endpoint-ууд CA-д байхгүй (2026-10-14-нд устсан, 404).
+`pdfMaxBytes` устсан (`pdfTimeoutMs` 0.19.0-д `registerSignature`-д зориулж буцаж нэмэгдсэн — доор) — PDF upload endpoint-ууд CA-д байхгүй (2026-10-14-нд устсан, 404).
 
 **Хугацаа.** `registerSignature` (`POST /pdf/signatures` — CA CMS + TSA + LTV-г шалгадаг) 0.19.0-аас өөрийн
 `pdfTimeoutMs`-тэй, анхдагч **80 с** (`DEFAULT_PDF_TIMEOUT_MS`; Go SDK `Config.PDFTimeout` / `DefaultPDFTimeout`-тэй ижил);
@@ -705,6 +713,7 @@ npx eid-mongolia-convert-assets public/eid-convert                              
 
 ```ts
 import { wordToPdf, converterStatus, isWordFile, ConvertError } from "@gerege-systems/eid-mongolia-sdk/convert";
+import { prepare } from "@gerege-systems/eid-mongolia-sdk/pades";
 
 if (isWordFile(file)) {
   const s = await converterStatus({ assetsBase: "/eid-convert/" });   // { cached, downloadBytes } — мобайл датанд анхааруул
@@ -778,7 +787,7 @@ if (isWordFile(file)) {
 - MPL-2.0: `<хувилбар>/NOTICE.txt` (эх код, лицензийн холбоос) asset-уудтай хамт үйлчилгээнд байна — хэрэглэгчийн
   нүүрэнд (тусламж/лиценз хэсэгт) LibreOffice-ийг дурд.
 
-`ConvertError.code`: `UNSUPPORTED_ENVIRONMENT`, `NOT_ISOLATED`, `UNSUPPORTED_FILE`, `INPUT_TOO_LARGE` (> 50 MB),
+`ConvertError.code`: `UNSUPPORTED_ENVIRONMENT`, `NOT_ISOLATED`, `UNSUPPORTED_FILE`, `INPUT_TOO_LARGE` (хоосон эсвэл > 50 MiB),
 `ASSETS_UNAVAILABLE` (`retryable`), `CONVERT_FAILED` (эвдэрсэн / нууц үгтэй баримт). `warnings[].code`:
 `FONT_SUBSTITUTED` (`fonts` — хувиргагчид байхгүй, хэмжээ-нийцтэй орлуулагчгүй фонт; Times New Roman / Arial /
 Calibri / Cambria / Courier New-ийн Liberation / Carlito / Caladea орлуулагч анхааруулахгүй), `FONT_FALLBACK` (`fonts` —
@@ -825,13 +834,13 @@ if (info.enabled) {
 |---|---|---|
 | 400 | `REQUEST_INVALID`, `FILE_EMPTY`, `RECIPIENT_REQUIRED`, `TOO_MANY_RECIPIENTS`, `RECIPIENT_INVALID`, `RECIPIENT_DUPLICATE` | талбарын алдаа |
 | 413 | `FILE_TOO_LARGE` | файл / имэйл хязгаараас их |
-| 415 | `FILE_TYPE_NOT_SUPPORTED` | PDF биш (өргөтгөл, Content-Type, `%PDF-` гурвуулаа таарна) |
+| 415 | `FILE_TYPE_NOT_SUPPORTED` | PDF биш (өргөтгөл, Content-Type, `%PDF-` гурвуулаа таарна), задрахгүй эсвэл шифрлэгдсэн PDF |
 | 422 | `FILE_NOT_SIGNED` | `.reason`: `no_signature` \| `invalid` \| `untrusted` |
 | 429 | `RATE_LIMITED` | квот; `.retryAfterMs`, `.retryable` |
 | 502 | `MAIL_FAILED` | `.sent`, `.failed`, `.recipients` — зөвхөн `failed`-ийг дахин илгээ |
 | 503 | `MAIL_UNAVAILABLE`, `VALIDATOR_UNAVAILABLE`, `VALIDATOR_BUSY` (`SHARE_DISABLED` — хуучин CA) | тохиргоо / ачаалал (`VALIDATOR_*` — Retry-After) |
 
-401 → `AuthenticationError`, 403 (SIGN эрхгүй, IP/mTLS) → `ForbiddenError`. Квот: RP тутам цагт 30 / өдөрт 200 хүсэлт,
+401 → `AuthenticationError`, 403 (SIGN эрхгүй, IP/mTLS) → `ForbiddenError`. Квот: RP тутам цагт 300 / өдөрт 3000 хүсэлт,
 хүлээн авагч тутам өдөрт 10 имэйл (бодит утгыг `shareInfo().quota`-аас). Хугацаа анхдагч 150 с (`timeoutMs`).
 
 ## 3g. Гарын үсэгтэй PDF шалгах — `@gerege-systems/eid-mongolia-sdk/validate` (0.20.0)
@@ -849,7 +858,7 @@ try {
     s.signer_name; s.signing_time; s.signature_level; s.certificate_level; s.problems; s.visible; s.key_medium;
   }
 } catch (e) {
-  if (e instanceof ValidatePdfError) e.code; // PDF_NO_SIGNATURE | PDF_INVALID | PDF_ENCRYPTED | PDF_TOO_LARGE | PDF_TOO_MANY_SIGNATURES | UNSUPPORTED_ENVIRONMENT
+  if (e instanceof ValidatePdfError) e.code; // PDF_NO_SIGNATURE | PDF_INVALID | PDF_ENCRYPTED | PDF_TOO_LARGE | PDF_TOO_MANY_SIGNATURES | UNSUPPORTED_ENVIRONMENT | REQUEST_INVALID (roots/intermediates/issuers)
 }
 ```
 
@@ -942,10 +951,10 @@ SSE/WebSocket-оор түлхэх бол `qrDeviceLinkTicker(input, (link) => se
 
 ```ts
 // QR хуудас → poll-оор дууссан үр дүн
-eid.validator.validateAuth(result, s.acsp, { expectedFlowType: "QR" });
+eid.validator.validateAuth(result, s.acsp!, { expectedFlowType: "QR" });
 
 // Web2App/App2App товч → апп callback URL-д `userChallengeVerifier` нэмж буцна
-eid.validator.validateAuth(result, s.acsp, {
+eid.validator.validateAuth(result, s.acsp!, {
   expectedFlowType: "Web2App", // RP-ийн апп дахь товч бол "App2App"
   userChallengeVerifier: callbackQuery.get("userChallengeVerifier") ?? undefined,
 });
@@ -957,7 +966,7 @@ QR ба товч хоёуланг харуулсан хуудсанд: callback-
 
 > ⚠️ **Legacy холбоос хасагдсан.** Статик `{deviceLinkBase}?sessionId=…&vc=…` холбоосыг сервер 2026-10-07-нд,
 > түүнийг угсардаг `deviceLink` / `openOrShowQR`-ийг SDK 0.16.0-д хассан — зөвхөн v3 (`buildDeviceLink`) ажиллана.
-> v3 (`flowType`, `userChallengeVerifier`) iOS 2.2.3 (59) / Android 60-аас дэмжигдэнэ; сервер албадах доод хувилбар 2026-10-15-ны байдлаар iOS ≥ 2.2.7, Android ≥ 83
+> v3 (`flowType`, `userChallengeVerifier`) iOS 2.2.3 (59) / Android 60-аас дэмжигдэнэ; сервер албадах доод хувилбар 2026-10-20-ны байдлаар iOS ≥ 2.2.8, Android ≥ 91
 > (`/mobile/app-config`, §«eID аппын доод хувилбар»).
 
 ## Аюулгүй байдал — яагаад `validator` заавал
@@ -1036,7 +1045,7 @@ const eid = new EidClient({
 
 ```bash
 npm install
-npm run lint          # tsc --noEmit
+npm run lint          # tsc --noEmit (үндсэн + tsconfig.button.json)
 npm test              # build + node --test (pades golden — Go reference-тэй байт-ижил)
 npm run golden:check  # test/fixtures/pades/golden + src/pades/assets ↔ бэхэлсэн Go commit
 npm run size:pades    # /pades хөтчийн bundle gzip ≤ 300 KB
@@ -1045,7 +1054,7 @@ npm run test:convert-e2e   # /convert жинхэнэ LibreOffice Chromium-д (BR
 
 `/pades`-ийн conformance fixture (golden: оролт, тестийн PKI-ийн гэрчилгээ, TSA/OCSP/CRL-ийн тогтмол хариу, хүлээгдэх
 sha256) ба фонт/гинжийн asset-ийг Go reference-ээс `node scripts/sync-pades-golden.mjs` хуулна (`GO_SDK_COMMIT` —
-tag `pades-golden-vN`, одоо v5 — `placement/` scanner vectors-той); CI `--check`-ээр бэхэлсэн commit-тэй тулгана. Профайл:
+tag `pades-golden-vN`, одоо v6 — `placement/` scanner vectors-той, page 0 verify хуудас алгасна); CI `--check`-ээр бэхэлсэн commit-тэй тулгана. Профайл:
 Go репогийн `pades/PROFILE.md`, `PAGE_SPEC.md`, `PRECHECKS.md`, `WIRE.md`, `APPEARANCE_SPEC.md`, `PLACEMENT_SPEC.md`.
 
 ### Гэрээний шалгалт

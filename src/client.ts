@@ -65,8 +65,8 @@ export interface ClientConfig {
   language?: string;
   /**
    * Sign / certificate-choice session-ий `expiresAt`-ийг тооцоолох хугацаа (мс). Анхдагч 600000
-   * ({@link DEFAULT_SIGN_SESSION_TTL_MS}, CA-ийн анхдагч); CA-ийн админ тохиргоог өөрчилсөн бол тааруул. CA session start
-   * хариунд хугацаа буцаадаггүй.
+   * ({@link DEFAULT_SIGN_SESSION_TTL_MS}, CA-ийн анхдагч); CA-ийн админ тохиргоог өөрчилсөн бол тааруул. Зөвхөн CA-ийн
+   * start хариунд `expiresAt` ирээгүй (хуучин CA) үед хэрэглэгдэнэ.
    */
   signSessionTtlMs?: number;
   /** Trust anchor (Root CA) — validator-д. Production-д ЗААВАЛ. */
@@ -156,8 +156,8 @@ export class EidClient {
   /**
    * `POST /share` (SIGN эрх) — гарын үсэгтэй файлыг (PDF, eID-ийн хүчинтэй гарын үсэгтэй) 1–5 хүлээн авагч руу
    * имэйлээр, хавсралтаар илгээнэ; CA файлыг хадгалахгүй. Алдаа: `ShareError` (`code`, 422-д `reason`, 502-д
-   * `sent`/`failed`/`recipients`), 401 AuthenticationError, 403 ForbiddenError. CA-ийн туг унтраалттай бол 503
-   * SHARE_DISABLED — {@link shareInfo}-оор урьдчилан шалга.
+   * `sent`/`failed`/`recipients`), 401 AuthenticationError, 403 ForbiddenError. Имэйл/шалгагч тохируулаагүй бол 503
+   * MAIL_UNAVAILABLE / VALIDATOR_UNAVAILABLE (хуучин CA: SHARE_DISABLED) — {@link shareInfo}-оор урьдчилан шалга.
    */
   share(input: ShareInput): Promise<ShareResult> {
     return shareFile(this.http, input);

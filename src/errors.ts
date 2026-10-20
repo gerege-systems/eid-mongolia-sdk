@@ -97,9 +97,9 @@ export class ApiError extends EidError {
 export class NoSigningCertificateError extends ApiError {}
 
 /**
- * 409 `CERT_CHOICE_INVALID` — linked sign-ийн `linkedSessionID` (certificate-choice) хүчингүй: өөр RP, COMPLETE+OK биш,
+ * 409 `CERT_CHOICE_INVALID` — linked sign-ийн `linkedSessionID` (certificate-choice) хүчингүй: COMPLETE+OK биш,
  * өөр documentNumber, 5 минутаас хуучин, гэрчилгээ солигдсон, эсвэл аль хэдийн ашиглагдсан. Certificate-choice-ийг
- * дахин эхлүүлнэ.
+ * дахин эхлүүлнэ. (Өөр RP-ийн эсвэл олдохгүй linked session → 404 ApiError.)
  */
 export class CertChoiceInvalidError extends ApiError {}
 
@@ -274,7 +274,8 @@ export class ValidationError extends EidError {}
 export class AppTransactionTooLargeError extends EidError {}
 
 /**
- * Device-link (App2App/Web2App) холбоос угсрах боломжгүй — хариунд `deviceLinkBase` байхгүй,
- * эсвэл sessionId/vc/суурь URL хэлбэр буруу. Session-ийг дахин эхлүүлнэ; холбоосыг таахгүй.
+ * Device-link (App2App/Web2App) холбоос угсрах боломжгүй — `deviceLinkBase` https биш,
+ * sessionToken/sessionSecret/lang хэлбэр буруу, эсвэл төрөлд хэрэгтэй талбар (receivedAt, rpChallenge/digest,
+ * initialCallbackUrl) дутуу. Session-ийг дахин эхлүүлнэ; холбоосыг таахгүй.
  */
 export class DeviceLinkError extends EidError {}

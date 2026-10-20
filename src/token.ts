@@ -128,12 +128,15 @@ function hexSha256Equal(hex: unknown, data: Uint8Array): boolean {
 }
 
 /**
- * Токены олголтын 409 кодууд (`ApiError.code`; session-ий `tokenCertificate.errorCode`-д ч ирнэ):
+ * Токены олголтын гол 409 кодууд (`ApiError.code`; session-ий `tokenCertificate.errorCode`-д ч ирнэ):
  * - `TOKEN_LIMIT_REACHED` — иргэний токены хязгаар хүрсэн ({@link tokenLimitOf});
  * - `TOKEN_IN_USE` — `tokenSerial` өөр иргэнд хүчинтэй гэрчилгээтэй бүртгэлтэй;
  * - `TOKEN_SCOPE_CHANGE` — сунгалт scope-ийг солих гэсэн (хувийн ↔ байгууллага, эсвэл өөр `onBehalfOf`). Override
  *   байхгүй: иргэн eID апп-аас токеноо цуцалж (`/v3/mobile/tokens/{tokenSerial}/revoke`) байж шинэ scope-оор олгуулна;
  * - `ACCOUNT_DELETE_PENDING` — иргэн «Бүртгэл устгах» хүсэлт (PENDING) өгсөн: токен олгохгүй (CA !377).
+ *
+ * CA өөр 409 ч буцаана — `TOKEN_ISSUANCE_PENDING`, `KYC_INCOMPLETE`, `NO_ACTIVE_DEVICE`, `CSR_KEY_REUSED` — эдгээр нь
+ * энэ төрөл/{@link TOKEN_CONFLICT_CODES}-д ороогүй; `ApiError.code`-оор шууд шалга.
  */
 export type TokenConflictCode = "TOKEN_LIMIT_REACHED" | "TOKEN_IN_USE" | "TOKEN_SCOPE_CHANGE" | "ACCOUNT_DELETE_PENDING";
 

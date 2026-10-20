@@ -36,7 +36,7 @@ export function interactionsToBase64(interactions: Interaction[]): string {
 
 /** ACSP_V2 payload-ийн бүх орц (Smart-ID v3 §ACSP_V2 digest calculation). */
 export interface AcspV2Params {
-  /** default "smart-id" (серверийн SMARTID_ACSP_SCHEME_NAME-тэй ижил). */
+  /** default "smart-id" (серверийн EID_ACSP_SCHEME_NAME-тэй ижил). */
   schemeName?: string;
   serverRandom: string; // base64, хариунаас, ЯГ ТЭР ХЭВЭЭР
   rpChallenge: string; // base64, RP-ийн илгээсэн
