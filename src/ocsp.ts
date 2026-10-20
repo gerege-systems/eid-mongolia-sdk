@@ -1,5 +1,5 @@
 // Гэрчилгээний AIA-д бичигдсэн OCSP responder-оос асуух RevocationChecker (Go SDK-ийн eid.NewOCSPChecker, eID порталын
-// EID_OCSP-тэй ижил дүрэм). OCSP-ийн DER-ийг PAdES-ийн LTV-д ашигладаг задлагчаар (pades/ltv.ts) уншина.
+// EID_OCSP-тэй ижил дүрэм; ялгаа: «good»-ийг тогтмол 5 мин кэшилнэ — Go min(CacheTTL, nextUpdate)-ээр). OCSP-ийн DER-ийг PAdES-ийн LTV-д ашигладаг задлагчаар (pades/ltv.ts) уншина.
 
 import type { X509Certificate } from "node:crypto";
 import { createHash } from "node:crypto";
