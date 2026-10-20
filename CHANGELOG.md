@@ -1,4 +1,25 @@
 # Changelog
+## 0.28.0 — 2026-10-20
+
+### Changed — `<eid-login-button>`: шинэ «e-ID» wordmark лого (inline SVG), `--eid-logo` токен
+
+- **Юу:** товч болон QR цонхны толгойн хуучин 96×96 PNG лого (data URI) → шинэ «e-ID» wordmark, inline SVG (нэг path,
+  гадны файл/сүлжээ үгүй). Өнгө — шинэ токен `--eid-logo` / `--eid-logo-dark` (анхдагч light `#1430FD`, dark `#fff`):
+  outline товч (light цагаан / dark хар хөх дэвсгэр) хоёр theme-д тод. Хэмжээ: товчинд өндөр 16 px, `variant="icon"`-д
+  12 px (44×44 дотор), цонхны толгойд 20 px. `part="icon"` хэвээр (одоо `<svg>`, өмнө нь `<img>`). API өөрчлөгдөөгүй.
+- **Яагаад:** eID-ийн шинэ брэнд (developer.eidmongolia.mn лого, 2026-10-20). `dist/button.js` 61.2 → 51.2 KB.
+- **Хаана:** `src/logo.ts`, `src/button.ts`, README (`icon`, токены хүснэгт), `test/button.test.ts`.
+- **Шалгасан:** `npm run lint`, `npm test`, `size:pades`/`size:validate`; Playwright зураг (light/dark × default/en/icon/
+  icon=none, цонхны толгой).
+### Docs — CA !403 (b040b463) нийцэл
+
+- **Юу:** токен олголт / dryRun — RP-д зөвхөн `TOKEN_ISSUE` эрх (SIGN биш); `ACCOUNT_DELETE_PENDING` эхлэл ба preview-д
+  push-ээс өмнө 409 (өмнө зөвхөн үр дүнгийн шатанд) — token start/preview-ийн алдааны жагсаалтад нэмэв; `claimedRole`
+  mn ба en хоёуланг CA хүлээн авна; RP нэр ≤ 120 **тэмдэгт** (байт биш, CA тэмдэгтээр таслана).
+- **Яагаад:** CA !403 прод дээр (`ca.eidmongolia.mn`) — бодлого өөрчлөгдсөн. Кодын зан өөрчлөгдөөгүй (SDK-д discovery
+  `registration` блокийн төрөл байхгүй тул `registration.paused` нэмэх зүйлгүй).
+- **Шалгасан:** CA `origin/main` b040b463-ийн `tokencert.go`, `store.go` (`displayNameMaxRunes`), `pades_register.go`.
+
 ## 0.27.0 — 2026-10-20
 
 ### Fixed — SDK аудитын кодын алдаанууд (Go / .NET / Swift / Kotlin-той нийцүүлэв)
