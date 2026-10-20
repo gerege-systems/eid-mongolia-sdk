@@ -310,7 +310,7 @@ const eid = new EidClient({
   // baseUrl анхдагч https://rp.eidmongolia.mn (RP-API, /v3-гүй) — mTLS-тэй RP ч мөн энэ хост
   credentials: {
     rpUUID: process.env.EID_RP_UUID!,
-    rpName: "Интернэт банк", // дэд системийн нэр, ≤ 120 байт UTF-8 (кирилл ≈ 60 үсэг; CA илүүг таслана)
+    rpName: "Интернэт банк", // дэд системийн нэр, ≤ 120 тэмдэгт (CA илүүг тэмдэгтээр таслана)
     apiSecret: process.env.EID_SECRET!, // rp_sk_…
   },
   trust: { trustAnchorsPem: [NATIONAL_ROOT_CA_PEM] }, // ← Mongolian National Root CA, production-д ЗААВАЛ (завсрын 02–04 SDK-д суусан)

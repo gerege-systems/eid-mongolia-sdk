@@ -141,7 +141,8 @@ function hexSha256Equal(hex: unknown, data: Uint8Array): boolean {
  * - `TOKEN_IN_USE` — `tokenSerial` өөр иргэнд хүчинтэй гэрчилгээтэй бүртгэлтэй;
  * - `TOKEN_SCOPE_CHANGE` — сунгалт scope-ийг солих гэсэн (хувийн ↔ байгууллага, эсвэл өөр `onBehalfOf`). Override
  *   байхгүй: иргэн eID апп-аас токеноо цуцалж (`/v3/mobile/tokens/{tokenSerial}/revoke`) байж шинэ scope-оор олгуулна;
- * - `ACCOUNT_DELETE_PENDING` — иргэн «Бүртгэл устгах» хүсэлт (PENDING) өгсөн: токен олгохгүй (CA !377).
+ * - `ACCOUNT_DELETE_PENDING` — иргэн «Бүртгэл устгах» хүсэлт (PENDING) өгсөн: токен олгохгүй (CA !377). CA !403-оос
+ *   эхлэл ба `previewCertificate` push-ээс ӨМНӨ 409 буцаана; үр дүнгийн шатанд (session errorCode) ч хэвээр.
  *
  * CA өөр 409 ч буцаана — {@link TOKEN_ISSUANCE_PENDING}, {@link KYC_INCOMPLETE}, {@link NO_ACTIVE_DEVICE},
  * {@link CSR_KEY_REUSED} — exhaustive `switch`-ийг эвдэхгүйн тулд энэ төрөлд биш, тусдаа тогтмол ба
@@ -296,7 +297,9 @@ export class TokenApi {
    * Сунгалт: ижил `tokenSerial` дээр энэ иргэний ACTIVE бүртгэл байвал олголт = сунгалт, **scope-ийг хадгална** —
    * байгууллагын токен зөвхөн тэр байгууллагаар (`onBehalfOf` ижил), хувийн токен зөвхөн хувиараа. Өөр scope бол
    * 409 `TOKEN_SCOPE_CHANGE` (override үгүй); scope солих = иргэн eID апп-аас токеноо цуцлаад шинээр олгуулна.
-   * Бусад 409: `TOKEN_LIMIT_REACHED` ({@link tokenLimitOf}), `TOKEN_IN_USE` ({@link TokenConflictCode}).
+   * Бусад 409: `TOKEN_LIMIT_REACHED` ({@link tokenLimitOf}), `TOKEN_IN_USE`, `ACCOUNT_DELETE_PENDING` (push-ээс өмнө, CA
+   * !403) ({@link TokenConflictCode}), {@link TOKEN_ISSUANCE_PENDING}, {@link NO_ACTIVE_DEVICE}, {@link KYC_INCOMPLETE},
+   * {@link CSR_KEY_REUSED}. RP-д зөвхөн `TOKEN_ISSUE` эрх хэрэгтэй (SIGN биш) — эрхгүй бол 403.
    * 400 {@link APP_ATTESTATION_INVALID} — `appTransaction` хүчингүй; {@link MAX_APP_TRANSACTION_BYTES}-аас их бол
    * {@link AppTransactionTooLargeError} (илгээхгүй).
    */
@@ -321,6 +324,7 @@ export class TokenApi {
    * бүх шалгалт ижил алдааны кодтой, гэхдээ session / утас руу push үүсэхгүй. Урсгал: CSR → previewCertificate →
    * `supersedes` байвал иргэнд анхааруулж зөвшөөрүүлэх → issueCertificate (ижил оролт). Хурдны хязгаар (RP, иргэн) 20/мин
    * (push-ийн 3/цагийг зарцуулахгүй). Хариунд `dryRun: true` алга бол ValidationError. Хуучин CA-д 400 (танихгүй талбар).
+   * Иргэн бүртгэл устгах хүсэлттэй бол 409 `ACCOUNT_DELETE_PENDING` (CA !403-оос). Зөвхөн `TOKEN_ISSUE` эрх.
    */
   async previewCertificate(input: TokenCertInput): Promise<TokenCertPreview> {
     const r = rec(await this.http.post(routePath(RP_ROUTES.tokenCertificate), { ...this.certBody(input), dryRun: true }));
