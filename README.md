@@ -156,7 +156,7 @@ app.use("/auth/eid", express.json(), async (req, res) => {
 | `theme` | `auto` \| `light` \| `dark` | `auto` |
 | `success-url` (`successUrl`) | backend redirect өгөөгүй үед шилжих URL | — |
 | `label` | товчны текст; `""` → зөвхөн лого | i18n: «eID-ээр нэвтрэх» / «Log in with eID» |
-| `icon` | `eid` (eID лого) \| `none` (логогүй) | `eid` |
+| `icon` | `eid` («e-ID» wordmark, inline SVG — light брэнд цэнхэр, dark цагаан; `--eid-logo`) \| `none` (логогүй) | `eid` |
 | `variant` | `default` (лого + текст) \| `icon` (зөвхөн лого, 44×44) | `default` |
 | `aria-label` | товчны хүртээмжийн нэр (дэлгэц уншигч) | зөвхөн-лого үед `label` эсвэл i18n текст |
 
@@ -208,6 +208,7 @@ eid-login-button::part(icon) { width: 24px; height: 24px; }
 | Хувьсагч (`-dark` хувилбартай) | Юунд | Light анхдагч | Dark анхдагч |
 |---|---|---|---|
 | `--eid-accent` | үндсэн товч | `oklch(0.534 0.2 259)` | `oklch(0.64 0.15 259)` |
+| `--eid-logo` | «e-ID» лого (товч, цонхны толгой; inline SVG) | `#1430FD` | `#fff` |
 | `--eid-accent-fg` | үндсэн товчны текст | `#fff` | `hsl(229 50% 6%)` |
 | `--eid-accent-subtle` | алхмын дугаарын дэвсгэр | `oklch(0.97 0.03 259)` | `oklch(0.24 0.06 259)` |
 | `--eid-accent-subtle-fg` | алхмын дугаар | `oklch(0.474 0.19 259)` | `oklch(0.82 0.1 259)` |
