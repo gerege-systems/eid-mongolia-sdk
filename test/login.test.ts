@@ -621,6 +621,15 @@ test("ocspRevocationChecker: good / revoked / unknown→revoked, хуучин х
   assert.equal(await c(leaf, ca), "good", "good 5 мин кэшлэгдэнэ");
   assert.equal(calls, before);
   assert.equal(await mk()(leaf, leaf), "unknown", "буруу issuer-ийн гарын үсэг");
+  // Кэш nextUpdate-ээс хэтрэхгүй (min(5 мин, nextUpdate), Go-той ижил): fixture nextUpdate = at + 24 ц.
+  const next = Date.parse(FIX.at!) + 24 * 3600_000;
+  let t = next - 60_000;
+  const c2 = ocspRevocationChecker({ fetchImpl, now: () => t });
+  answer = "good";
+  assert.equal(await c2(leaf, ca), "good");
+  answer = 500;
+  t = next + 1_000; // 5 мин дотор, гэхдээ nextUpdate өнгөрсөн
+  assert.equal(await c2(leaf, ca), "unknown", "nextUpdate-ээс хойш кэш хүчингүй");
 });
 
 test("ocspRevocationChecker: олгогч өөрөө зурж ӨӨРИЙН гэрчилгээг шигтгэсэн хариу → good (RFC 6960 §4.2.2.2, Go v0.6.0-тэй ижил)", async () => {

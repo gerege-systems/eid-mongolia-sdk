@@ -1,5 +1,5 @@
 // Иргэний USB токен (PKCS#11, EC P-256):
-//   - гэрчилгээ олголт (CA docs/TOKEN_CERT.md, RP-д TOKEN_ISSUE + SIGN эрх): issueCertificate → иргэн утсаараа PIN2-оор
+//   - гэрчилгээ олголт (CA docs/TOKEN_CERT.md, RP-д TOKEN_ISSUE эрх): issueCertificate → иргэн утсаараа PIN2-оор
 //     батална → session.poll (`tokenCertificate.status` = ISSUED) → certificateResult → verifyTokenCertificates;
 //   - токеноор нэвтрэлт (docs/TOKEN_AUTH.md, AUTH эрх): authChallenge → токен tokenAuthDigest-ийг CKM_ECDSA-аар зурна
 //     (түүхий r||s) → authVerify.
@@ -9,7 +9,15 @@
 
 import { X509Certificate, createHash, createPublicKey, timingSafeEqual } from "node:crypto";
 import { RP_ROUTES, routePath } from "./contract.js";
-import { ApiError, AppTransactionTooLargeError, ValidationError } from "./errors.js";
+import {
+  ApiError,
+  AppTransactionTooLargeError,
+  ON_BEHALF_ERROR_CODES,
+  RETRYABLE_ERROR_CODES,
+  ValidationError,
+  type OnBehalfErrorCode,
+  type RetryableErrorCode,
+} from "./errors.js";
 import type { Http } from "./http.js";
 import type { TokenOrganization } from "./person.js";
 import { parseSubject, tlv } from "./subject.js";
@@ -135,13 +143,99 @@ function hexSha256Equal(hex: unknown, data: Uint8Array): boolean {
  *   байхгүй: иргэн eID апп-аас токеноо цуцалж (`/v3/mobile/tokens/{tokenSerial}/revoke`) байж шинэ scope-оор олгуулна;
  * - `ACCOUNT_DELETE_PENDING` — иргэн «Бүртгэл устгах» хүсэлт (PENDING) өгсөн: токен олгохгүй (CA !377).
  *
- * CA өөр 409 ч буцаана — `TOKEN_ISSUANCE_PENDING`, `KYC_INCOMPLETE`, `NO_ACTIVE_DEVICE`, `CSR_KEY_REUSED` — эдгээр нь
- * энэ төрөл/{@link TOKEN_CONFLICT_CODES}-д ороогүй; `ApiError.code`-оор шууд шалга.
+ * CA өөр 409 ч буцаана — {@link TOKEN_ISSUANCE_PENDING}, {@link KYC_INCOMPLETE}, {@link NO_ACTIVE_DEVICE},
+ * {@link CSR_KEY_REUSED} — exhaustive `switch`-ийг эвдэхгүйн тулд энэ төрөлд биш, тусдаа тогтмол ба
+ * {@link TOKEN_ERROR_CODES} (токены бүх код)-д.
  */
 export type TokenConflictCode = "TOKEN_LIMIT_REACHED" | "TOKEN_IN_USE" | "TOKEN_SCOPE_CHANGE" | "ACCOUNT_DELETE_PENDING";
 
 /** {@link TokenConflictCode}-ийн бүх утга (runtime шалгалтад). */
 export const TOKEN_CONFLICT_CODES: readonly TokenConflictCode[] = ["TOKEN_LIMIT_REACHED", "TOKEN_IN_USE", "TOKEN_SCOPE_CHANGE", "ACCOUNT_DELETE_PENDING"];
+
+/** 409 — энэ иргэнд өөр CSR-тэй олголт хүлээгдэж байна (утсаар батлах эсвэл хугацаа дуусахыг хүлээнэ); dryRun-д ч. */
+export const TOKEN_ISSUANCE_PENDING = "TOKEN_ISSUANCE_PENDING";
+/** 409 — иргэний латин нэр бүртгэлгүй (гэрчилгээний subject үүсэхгүй); session-ий `tokenCertificate.errorCode`-д ч. */
+export const KYC_INCOMPLETE = "KYC_INCOMPLETE";
+/** 409 — иргэнд идэвхтэй eID утас (хүчинтэй гарын үсгийн гэрчилгээ) алга — батлах push очихгүй. */
+export const NO_ACTIVE_DEVICE = "NO_ACTIVE_DEVICE";
+/** 409 — CSR-ийн түлхүүрт гэрчилгээ аль хэдийн олгогдсон — токенд шинэ түлхүүр үүсгэнэ. */
+export const CSR_KEY_REUSED = "CSR_KEY_REUSED";
+
+/**
+ * Токены олголт / үр дүн / нэвтрэлтийн CA-ийн тогтвортой кодууд (`ApiError.code` / `ForbiddenError.code`, session-ий
+ * `tokenCertificate.errorCode`; CA `tokencert.go`, `token_auth.go`). {@link TokenConflictCode}-оос тусдаа — шинэ код
+ * нэмэгдэхэд тэр төрлийн exhaustive `switch` эвдрэхгүй.
+ * - олголт 400: CSR_INVALID, CSR_KEY_UNSUPPORTED, CSR_SIGNATURE_INVALID, CSR_KEYS_IDENTICAL, APP_ATTESTATION_INVALID,
+ *   REQUEST_INVALID; 409: {@link TokenConflictCode}, TOKEN_ISSUANCE_PENDING, KYC_INCOMPLETE, NO_ACTIVE_DEVICE,
+ *   CSR_KEY_REUSED; 403/404: {@link OnBehalfErrorCode}-ийн кодууд;
+ * - үр дүн (`certificateResult`): 409 SESSION_NOT_COMPLETE, SESSION_FAILED, ISSUANCE_FAILED; 410 RESULT_EXPIRED;
+ * - session-ий errorCode (FAILED): SESSION_MISMATCH, CSR_DIGEST_MISMATCH, SIGNER_CERT_CHANGED, SIGNATURE_INVALID,
+ *   ISSUANCE_ERROR, REGISTRY_FAILED (+ дээрх зарим нь);
+ * - токеноор нэвтрэлт: 403 RP_REQUIRED; 400 CERT_INVALID, SIGNATURE_INVALID; 409 CHALLENGE_USED, CERT_NOT_ACTIVE;
+ *   410 CHALLENGE_EXPIRED;
+ * - түр: {@link RETRYABLE_ERROR_CODES}.
+ */
+export type TokenErrorCode =
+  | TokenConflictCode
+  | "APP_ATTESTATION_INVALID"
+  | "TOKEN_ISSUANCE_PENDING"
+  | "KYC_INCOMPLETE"
+  | "NO_ACTIVE_DEVICE"
+  | "CSR_KEY_REUSED"
+  | "CSR_INVALID"
+  | "CSR_KEY_UNSUPPORTED"
+  | "CSR_SIGNATURE_INVALID"
+  | "CSR_KEYS_IDENTICAL"
+  | "ISSUANCE_FAILED"
+  | "RESULT_EXPIRED"
+  | "CSR_DIGEST_MISMATCH"
+  | "SIGNER_CERT_CHANGED"
+  | "ISSUANCE_ERROR"
+  | "REGISTRY_FAILED"
+  | "RP_REQUIRED"
+  | "CHALLENGE_EXPIRED"
+  | "CHALLENGE_USED"
+  | "CERT_INVALID"
+  | "CERT_NOT_ACTIVE"
+  | "REQUEST_INVALID"
+  | "SIGNATURE_INVALID"
+  | "SESSION_MISMATCH"
+  | "SESSION_NOT_COMPLETE"
+  | "SESSION_FAILED"
+  | OnBehalfErrorCode
+  | RetryableErrorCode;
+
+/** {@link TokenErrorCode}-ийн бүх утга (runtime шалгалтад). */
+export const TOKEN_ERROR_CODES: readonly TokenErrorCode[] = [
+  ...TOKEN_CONFLICT_CODES,
+  "APP_ATTESTATION_INVALID",
+  "TOKEN_ISSUANCE_PENDING",
+  "KYC_INCOMPLETE",
+  "NO_ACTIVE_DEVICE",
+  "CSR_KEY_REUSED",
+  "CSR_INVALID",
+  "CSR_KEY_UNSUPPORTED",
+  "CSR_SIGNATURE_INVALID",
+  "CSR_KEYS_IDENTICAL",
+  "ISSUANCE_FAILED",
+  "RESULT_EXPIRED",
+  "CSR_DIGEST_MISMATCH",
+  "SIGNER_CERT_CHANGED",
+  "ISSUANCE_ERROR",
+  "REGISTRY_FAILED",
+  "RP_REQUIRED",
+  "CHALLENGE_EXPIRED",
+  "CHALLENGE_USED",
+  "CERT_INVALID",
+  "CERT_NOT_ACTIVE",
+  "REQUEST_INVALID",
+  "SIGNATURE_INVALID",
+  "SESSION_MISMATCH",
+  "SESSION_NOT_COMPLETE",
+  "SESSION_FAILED",
+  ...ON_BEHALF_ERROR_CODES,
+  ...RETRYABLE_ERROR_CODES,
+];
 
 /** {@link TokenApi.previewCertificate}-ийн хариу. `supersedes` — бодит олголт амжилттай болоход солигдох хувийн токенууд. */
 export interface TokenCertPreview {

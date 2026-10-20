@@ -86,6 +86,14 @@ test("complete — SIGNATURE_INVALID / STATE_INVALID / TSA_UNAVAILABLE / LTV_UNA
   await assert.rejects(() => pades.complete(tampered, sig, completeOpts()), code("STATE_INVALID"));
   await assert.rejects(() => pades.complete(p.state, sig, completeOpts((k) => k.includes("tsa.pki.test"))), (e: unknown) => code("TSA_UNAVAILABLE")(e) && (e as pades.PadesError).retryable);
   await assert.rejects(() => pades.complete(p.state, sig, completeOpts((k) => k.includes("/04 ") || k.includes("04.crl"))), code("LTV_UNAVAILABLE"));
+  // fetch алга (тохиргоо) → REQUEST_INVALID, retryable биш (өмнө TSA_UNAVAILABLE + retryable байв).
+  const realFetch = globalThis.fetch;
+  (globalThis as { fetch?: typeof fetch }).fetch = undefined;
+  try {
+    await assert.rejects(() => pades.complete(p.state, sig, { ...completeOpts(), fetch: undefined }), (e: unknown) => code("REQUEST_INVALID")(e) && !(e as pades.PadesError).retryable);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
   // base64 мөрөөр (session signature.value) — ижил state-ээр дахин оролдоно.
   const r = await pades.complete(p.state, sig.toString("base64"), completeOpts());
   assert.equal(r.outSha256, CASE.expect.outSha256);

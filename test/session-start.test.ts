@@ -77,3 +77,32 @@ test("typed алдаа: NO_SIGNING_CERTIFICATE / CERT_CHOICE_INVALID / REQUEST_I
     return true;
   });
 });
+
+test("waitForResult: анхдагч хугацаа session-ий TTL-ийг дагана (150 с биш)", async () => {
+  // serverPollMs-ийг их тавьж эхний poll-ийн timeoutMs = deadline − одоо болгоно.
+  const run = async (disc: { status: number; body: unknown }, opts: { maxWaitMs?: number; expiresAt?: number }) => {
+    const urls: string[] = [];
+    const eid = client((u) => {
+      urls.push(u);
+      return u.includes("/.well-known/eid") ? disc : { status: 200, body: { state: "COMPLETE", result: { endResult: "OK" } } };
+    });
+    const r = await eid.session.waitForResult("s-1", { serverPollMs: 10_000_000, ...opts });
+    assert.equal(r.state, "COMPLETE");
+    const poll = urls.find((u) => u.includes("/session/"))!;
+    return { ms: Number(new URL(poll).searchParams.get("timeoutMs")), discovery: urls.some((u) => u.includes("/.well-known/eid")) };
+  };
+  const near = (got: number, want: number) => assert.ok(got <= want && got > want - 5_000, `${got} ≉ ${want}`);
+  const ttl = { status: 200, body: { sessionTtl: { auth: 300, sign: 600 } } };
+  let r = await run(ttl, {});
+  assert.ok(r.discovery);
+  near(r.ms, 615_000); // max(auth, sign) + WAIT_GRACE_MS
+  r = await run(ttl, { expiresAt: Date.now() + 280_000 });
+  assert.ok(!r.discovery);
+  near(r.ms, 295_000);
+  r = await run(ttl, { expiresAt: Date.now() - 3_600_000 }); // өнгөрсөн — нэг poll
+  near(r.ms, 1_000);
+  r = await run(ttl, { maxWaitMs: 42_000, expiresAt: Date.now() + 280_000 }); // maxWaitMs давуу
+  near(r.ms, 42_000);
+  near((await run({ status: 200, body: { version: "v3" } }, {})).ms, 600_000); // хуучин CA
+  near((await run({ status: 500, body: {} }, {})).ms, 600_000); // discovery унасан
+});

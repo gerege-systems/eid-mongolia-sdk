@@ -236,6 +236,11 @@ export interface PadesCompleted {
   priorRevisionSha256: string[];
   /** Зурагчийн гэрчилгээ (DER). */
   signerCert: Uint8Array;
+  /**
+   * `prepare`-ийн `claimedRole` (signedAttrs-д орсон); "" = хувиараа. `registrationFromCompleted` үүнийг `onBehalfOf`-той
+   * тулгана.
+   */
+  claimedRole: string;
 }
 
 const MAX_OUTPUT_BYTES = 10 << 20;
@@ -531,7 +536,7 @@ function abortableSleep(sleep: (ms: number) => Promise<void>, ms: number, signal
  * OCSP/CRL цуглуулалт унавал `ltvRetries` (анхдагч 2) удаа өөрөө дахин оролдоно (PIN дахин асуухгүй).
  *
  * @throws {PadesError} SIGNATURE_INVALID / TSA_UNAVAILABLE / LTV_UNAVAILABLE / PLACEHOLDER_OVERFLOW / STATE_INVALID /
- *   PDF_TOO_LARGE / SELF_VALIDATION_FAILED / REQUEST_INVALID (`ltvRetries`)
+ *   PDF_TOO_LARGE / SELF_VALIDATION_FAILED / REQUEST_INVALID (`ltvRetries`; `fetch` алга — тохиргоо, retryable биш)
  * @throws `signal.reason` (анхдагч `DOMException` `AbortError`) — `signal` цуцлагдвал.
  */
 export async function complete(state: Uint8Array | ArrayBuffer, signature: Uint8Array | string, opts: PadesCompleteOptions = {}): Promise<PadesCompleted> {
@@ -558,7 +563,8 @@ export async function complete(state: Uint8Array | ArrayBuffer, signature: Uint8
   const now = opts.now ?? (() => new Date());
   const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   const fetchFn = opts.fetch ?? (globalThis.fetch?.bind(globalThis) as unknown as FetchFn | undefined);
-  if (!fetchFn) throw new PadesError("TSA_UNAVAILABLE", "fetch алга (Node ≥ 18 эсвэл opts.fetch)");
+  // Тохиргооны (байнгын) алдаа — TSA_UNAVAILABLE биш (retryable биш, давтах нь утгагүй).
+  if (!fetchFn) throw new PadesError("REQUEST_INVALID", "fetch алга (Node ≥ 18 эсвэл opts.fetch)");
   const ltvRetries = opts.ltvRetries ?? DEFAULT_LTV_RETRIES;
   if (!Number.isInteger(ltvRetries) || ltvRetries < 0 || ltvRetries > MAX_LTV_RETRIES) {
     throw new PadesError("REQUEST_INVALID", `ltvRetries 0–${MAX_LTV_RETRIES} бүхэл тоо`);
@@ -643,5 +649,6 @@ export async function complete(state: Uint8Array | ArrayBuffer, signature: Uint8
     priorCmsSha256: prior,
     priorRevisionSha256: priorRev,
     signerCert: cert.raw,
+    claimedRole: st.claimedRole,
   };
 }
