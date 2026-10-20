@@ -14,8 +14,18 @@ import type {
 
 /** Серверийн нэг long-poll-ийн дээд хугацаа (мс). */
 const SERVER_POLL_MS = 30_000;
-/** Нийт хүлээх дээд хугацаа (мс) — иргэн хариу өгөхгүй бол үүгээр таслана. */
-const MAX_WAIT_MS = 150_000;
+/**
+ * Нийт хүлээх хугацааны нөөц утга (мс): `maxWaitMs`, `expiresAt` өгөөгүй, discovery-ийн `sessionTtl` ч мэдэгдэхгүй үед
+ * (CA-ийн гарын үсгийн session-ий анхдагч 600 с).
+ */
+export const DEFAULT_MAX_WAIT_MS = 600_000;
+/**
+ * `expiresAt` / discovery `sessionTtl`-ээс хойш нэмж хүлээх хугацаа (мс): CA хугацаа дууссан session-ийг дараагийн poll-д
+ * COMPLETE/TIMEOUT болгодог тул сүүлчийн poll дуусах мөчөөс хойш явагдаж, цагийн бага зөрүүг даана.
+ */
+export const WAIT_GRACE_MS = 15_000;
+/** Discovery-г татах хугацааны дээд хязгаар (мс) — унавал нөөц утга. */
+const DISCOVERY_TIMEOUT_MS = 5_000;
 
 function asRecord(v: unknown): Record<string, unknown> {
   return v && typeof v === "object" ? (v as Record<string, unknown>) : {};
@@ -139,14 +149,17 @@ export class SessionApi {
   }
 
   /**
-   * COMPLETE болтол давтаж poll хийнэ. maxWaitMs дуустал хүлээгээд гараагүй бол сүүлчийн
+   * COMPLETE болтол давтаж poll хийнэ. Анхдагчаар session-ий амьдрах хугацаа дуустал хүлээнэ: `expiresAt` (start
+   * хариуны `expiresAt`, мс epoch) + {@link WAIT_GRACE_MS}; алга бол discovery `sessionTtl` (max(auth, sign)) + grace;
+   * тэр нь ч мэдэгдэхгүй бол {@link DEFAULT_MAX_WAIT_MS}. `maxWaitMs` өгвөл түүнийг л дагана. CA хугацаа дууссан
+   * session-ийг COMPLETE/TIMEOUT болгодог тул ердийн үед тэр үр дүн ирнэ; хугацаа дуустал COMPLETE болоогүй бол сүүлчийн
    * (RUNNING) үр дүнг буцаана — дуудагч endResult==null-ийг TIMEOUT мэт боловсруулна.
    */
   async waitForResult(
     sessionId: string,
-    opts?: { maxWaitMs?: number; serverPollMs?: number },
+    opts?: { maxWaitMs?: number; serverPollMs?: number; expiresAt?: number },
   ): Promise<SessionResult> {
-    const deadline = Date.now() + (opts?.maxWaitMs ?? MAX_WAIT_MS);
+    const deadline = await this.waitDeadline(opts);
     const pollMs = opts?.serverPollMs ?? SERVER_POLL_MS;
     let last: SessionResult = { state: "RUNNING" } as SessionResult;
     while (Date.now() < deadline) {
@@ -155,5 +168,26 @@ export class SessionApi {
       if (last.state === "COMPLETE") return last;
     }
     return last;
+  }
+
+  /** waitForResult-ийн дуусах мөч (мс epoch): maxWaitMs > expiresAt > discovery sessionTtl > DEFAULT_MAX_WAIT_MS. */
+  private async waitDeadline(opts?: { maxWaitMs?: number; expiresAt?: number }): Promise<number> {
+    const now = Date.now();
+    if (opts?.maxWaitMs !== undefined) return now + opts.maxWaitMs;
+    if (opts?.expiresAt !== undefined && Number.isFinite(opts.expiresAt)) {
+      // Хугацаа аль хэдийн өнгөрсөн ч нэг poll хийнэ — CA-ийн COMPLETE/TIMEOUT-ийг авна.
+      return Math.max(opts.expiresAt + WAIT_GRACE_MS, now + 1_000);
+    }
+    // Session-ий төрөл (auth / sign) энд мэдэгдэхгүй — урт нь аюулгүй (CA хугацаа дууссан session-ийг өөрөө TIMEOUT
+    // болгоно). Discovery унавал нөөц утга (алдаа биш).
+    try {
+      const t = asRecord(asRecord(await this.http.get("/.well-known/eid", DISCOVERY_TIMEOUT_MS)).sessionTtl);
+      const sec = (v: unknown) => (typeof v === "number" && Number.isFinite(v) && v > 0 ? Math.floor(v) : 0);
+      const ttl = Math.max(sec(t.auth), sec(t.sign)) * 1000;
+      if (ttl > 0) return now + ttl + WAIT_GRACE_MS;
+    } catch {
+      // нөөц утга
+    }
+    return now + DEFAULT_MAX_WAIT_MS;
   }
 }

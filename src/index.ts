@@ -20,7 +20,7 @@ export {
   buildRegisterBody,
 } from "./sign.js";
 export { PDF_SIGNATURE_REGISTER_FIELDS, SHARE_FORM_FIELDS } from "./contract.js";
-export { SessionApi, parseSessionResult, personMatchesCertificate } from "./session.js";
+export { SessionApi, parseSessionResult, personMatchesCertificate, DEFAULT_MAX_WAIT_MS, WAIT_GRACE_MS } from "./session.js";
 export { OrganizationApi } from "./organization.js";
 export {
   ShareError,
@@ -54,9 +54,15 @@ export {
   tokenAuthDigest,
   tokenLimitOf,
   TOKEN_CONFLICT_CODES,
+  TOKEN_ERROR_CODES,
+  TOKEN_ISSUANCE_PENDING,
+  KYC_INCOMPLETE,
+  NO_ACTIVE_DEVICE,
+  CSR_KEY_REUSED,
   APP_ATTESTATION_INVALID,
   MAX_APP_TRANSACTION_BYTES,
   type TokenConflictCode,
+  type TokenErrorCode,
   type TokenCertInfo,
   type TokenCertPreview,
   type TokenCertInput,

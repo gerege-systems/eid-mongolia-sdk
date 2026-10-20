@@ -323,7 +323,9 @@ const s = await eid.auth.notificationByEtsi("PNOMN-12345678", [
 
 showToUser(s.vc); // ← иргэний утсан дээр харагдах баталгаажуулах код (VC)
 
-const result = await eid.session.waitForResult(s.sessionId); // long-poll; анхдагч 150 с (CA auth TTL 300 с) — { maxWaitMs }
+// long-poll; session-ий хугацаа дуустал хүлээнэ: expiresAt + 15 с (алга бол discovery sessionTtl, эс бөгөөс 600 с).
+// CA хугацаа дууссан session-ийг COMPLETE/TIMEOUT болгоно. { maxWaitMs } өгвөл түүгээр таслана (RUNNING буцна).
+const result = await eid.session.waitForResult(s.sessionId, { expiresAt: s.expiresAt });
 const who = eid.validator.validateAuth(result, s.acsp!); // ← гинж + ACSP_V2 крипто-баталгаажуулна (RUNNING бол ValidationError)
 
 console.log(who.documentNumber, who.subject); // баталгаажсан иргэн
@@ -557,7 +559,7 @@ DSS-д), Adobe / EU DSS-д «LTV enabled», баталгаажуулах (QR) х
 | `prepare(pdf, { signerCert, claimedRole?, verifyPage?, fileName?, lang?, docId?, appearance?, … })` | браузер / Node | `{ dtbs, digest, docId, state, placement? }` — сүлжээгүй |
 | `eid.signPdfDigest({ dtbs, fileName, signer, flow?, onBehalfOf? })` | RP backend | DTBS-д гарын үсгийн session (push эсвэл device-link) |
 | `complete(state, signature)` | браузер / Node | TSA + OCSP/CRL → `{ pdf, cms, docId, outSha256, inSha256, hasPage, pageSha256, … }` |
-| `eid.registerSignature(registrationFromCompleted(done, { fileName, sessionID }))` | RP backend | `POST /pdf/signatures` — `/verify/{docID}` бүртгэл |
+| `eid.registerSignature(registrationFromCompleted(done, { fileName, sessionID, onBehalfOf? }))` | RP backend | `POST /pdf/signatures` — `/verify/{docID}` бүртгэл. `medium` алга бол `sessionID`-аас (phone ⇔ sessionID); зөрчил эсвэл `claimedRole`-той гарын үсэгт `onBehalfOf` алга бол `ValidationError` |
 
 `/pades` хөтчийн bundle ~136 KB gzip (Noto Sans фонт asset-тэй, CI-д ≤ 300 KB); үндсэн entry үүнийг агуулахгүй. `/pades` (ба бүх багц) **Node ≥ 18** (CI: 18 / 20 / 22),
 орчин үеийн хөтөч. Браузерийн CSP: `connect-src https://tsa.timeserver.mn https://ocsp.eidmongolia.mn

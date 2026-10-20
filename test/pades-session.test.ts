@@ -143,6 +143,14 @@ test("registrationFromCompleted — complete()-ийн үр дүнгээс", () =
   assert.equal("pageSha256" in b, false);
   assert.deepEqual(b.priorCmsSha256, [sha("c")]);
   assert.equal(b.signerEtsi, "PNOMN-1");
+  assert.equal(second.medium, "token"); // sessionID алга → token (CA: phone ⇔ sessionID)
+  // Зөрчил ба claimedRole-той, onBehalfOf-гүй бүртгэл — CA-д очихоос өмнө (Go/.NET/Swift/Kotlin REQUEST_INVALID).
+  assert.throws(() => registrationFromCompleted(done, { fileName: "a.pdf", medium: "phone" }), ValidationError);
+  assert.throws(() => registrationFromCompleted(done, { fileName: "a.pdf", medium: "token", sessionID: "s1" }), ValidationError);
+  assert.throws(() => registrationFromCompleted(done, { fileName: "a.pdf", medium: "usb" as "token" }), ValidationError);
+  const role = { ...done, claimedRole: "Гүйцэтгэх захирал" };
+  assert.throws(() => registrationFromCompleted(role, { fileName: "a.pdf", sessionID: "s1" }), /onBehalfOf/);
+  assert.equal(registrationFromCompleted(role, { fileName: "a.pdf", sessionID: "s1", onBehalfOf: "NTRMN-1" }).onBehalfOf, "NTRMN-1");
 });
 
 test("registerSignature — POST /pdf/signatures бие ба хариу; алдааны код", async () => {

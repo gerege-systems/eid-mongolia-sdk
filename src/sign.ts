@@ -166,16 +166,29 @@ export interface CompletedForRegistration {
   priorCmsSha256: string[];
   /** `complete().priorRevisionSha256` (0.15.2+) — байвал `priorSignatures` бөглөгдөж горим A-ийн өмнөх мөрийг SDK өөрөө тааруулна. */
   priorRevisionSha256?: string[];
+  /** `complete().claimedRole` (0.27.0+) — хоосон биш бол `onBehalfOf` заавал. */
+  claimedRole?: string;
 }
 
 /**
  * `pades.complete()`-ийн үр дүнгээс `registerSignature`-ийн биеийг бөглөнө (`hasPage`-ийг илгээхгүй — CA `revIndex`-ээс
- * тооцно; `pageSha256` зөвхөн хуудастай үед).
+ * тооцно; `pageSha256` зөвхөн хуудастай үед). `medium` алга бол `sessionID`-аас (CA-ийн дүрэм: phone ⇔ sessionID).
+ * @throws {ValidationError} phone + sessionID алга, token + sessionID, үл мэдэгдэх medium, эсвэл `claimedRole`-той гарын
+ *   үсэгт `onBehalfOf` алга (CA-д очихоос өмнө; Go / .NET / Swift / Kotlin-д REQUEST_INVALID).
  */
 export function registrationFromCompleted(
   done: CompletedForRegistration,
   extra: Pick<RegisterSignatureInput, "fileName" | "sessionID" | "medium" | "onBehalfOf" | "signerEtsi" | "priorRevisionSha256">,
 ): RegisterSignatureInput {
+  const fail = (m: string): never => {
+    throw new ValidationError(`registrationFromCompleted: ${m}`);
+  };
+  const sessionID = extra.sessionID?.trim() ?? "";
+  const medium = extra.medium || (sessionID ? "phone" : "token");
+  if (medium !== "phone" && medium !== "token") fail("medium: phone | token");
+  if (medium === "phone" && !sessionID) fail("medium phone-д sessionID заавал");
+  if (medium === "token" && sessionID) fail("medium token-д sessionID илгээхгүй");
+  if (done.claimedRole && !extra.onBehalfOf?.trim()) fail("claimedRole-той гарын үсэгт onBehalfOf (NTRMN-…) заавал");
   const out: RegisterSignatureInput = {
     docID: done.docId,
     revIndex: done.revIndex,
@@ -185,8 +198,8 @@ export function registrationFromCompleted(
     sigRevSha256: done.sigRevSha256,
     outSha256: done.outSha256,
   };
-  if (extra.medium) out.medium = extra.medium;
-  if (extra.sessionID) out.sessionID = extra.sessionID;
+  out.medium = medium;
+  if (sessionID) out.sessionID = sessionID;
   if (done.hasPage && done.pageSha256) out.pageSha256 = done.pageSha256;
   if (extra.priorRevisionSha256?.length) {
     // Дуудагч өөрөө ангилсан (хуучин зан) — CMS-ийн жагсаалтаас хасах нь түүний үүрэг.
@@ -270,6 +283,7 @@ export function buildRegisterBody(input: RegisterSignatureInput): Record<string,
   const medium = input.medium ?? (sessionID ? "phone" : "token");
   if (medium !== "phone" && medium !== "token") fail("medium: phone | token");
   if (medium === "phone" && !sessionID) fail("phone-д sessionID заавал");
+  if (medium === "token" && sessionID) fail("token-д sessionID илгээхгүй");
   const priorCms = (input.priorCmsSha256 ?? []).map((h, i) => hex(`priorCmsSha256[${i}]`, h));
   const priorRev = (input.priorRevisionSha256 ?? []).map((h, i) => hex(`priorRevisionSha256[${i}]`, h));
   if (priorCms.length + priorRev.length !== input.revIndex - 1) fail("priorCmsSha256 + priorRevisionSha256-ийн тоо = revIndex − 1");

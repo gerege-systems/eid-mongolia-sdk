@@ -1,5 +1,5 @@
 // Гэрчилгээний AIA-д бичигдсэн OCSP responder-оос асуух RevocationChecker (Go SDK-ийн eid.NewOCSPChecker, eID порталын
-// EID_OCSP-тэй ижил дүрэм; ялгаа: «good»-ийг тогтмол 5 мин кэшилнэ — Go min(CacheTTL, nextUpdate)-ээр). OCSP-ийн DER-ийг PAdES-ийн LTV-д ашигладаг задлагчаар (pades/ltv.ts) уншина.
+// EID_OCSP-тэй ижил дүрэм; «good»-ийг min(5 мин, nextUpdate) кэшилнэ — Go-той ижил). OCSP-ийн DER-ийг PAdES-ийн LTV-д ашигладаг задлагчаар (pades/ltv.ts) уншина.
 
 import type { X509Certificate } from "node:crypto";
 import { createHash } from "node:crypto";
@@ -28,7 +28,7 @@ const MAX_AGE_MS = 48 * 3600_000;
 /**
  * AIA OCSP-оор цуцлалт шалгагч ({@link RevocationChecker}):
  *
- * - good → "good" (5 мин кэшлэнэ);
+ * - good → "good" (min(5 мин, хариуны nextUpdate) кэшлэнэ);
  * - revoked, мөн unknown (олгогч энэ serial-ийг олгоогүй — өөр хэн нэгний хийсэн гэрчилгээ) → "revoked";
  * - хариугүй (AIA алга, issuer олдоогүй, timeout, HTTP ≠ 200, гарын үсэг/serial/хугацаа таараагүй) → "unknown" —
  *   `revocationMode` шийднэ: soft-fail — зөвшөөрнө ("unchecked"), hard-fail — татгалзана.
@@ -43,7 +43,7 @@ export function ocspRevocationChecker(opts: OcspCheckerOptions = {}): Revocation
   const now = opts.now ?? Date.now;
   const cache = new Map<string, number>(); // key → good-ийн дуусах цаг
 
-  async function ask(leaf: Certificate, issuer: Certificate): Promise<RevocationStatus | undefined> {
+  async function ask(leaf: Certificate, issuer: Certificate): Promise<{ status: RevocationStatus; nextUpdate?: number } | undefined> {
     const body = await ocspRequest(leaf, issuer);
     // Нийт хугацаа (AIA-д олон URL байсан ч) — иргэн poll дээр хүлээж байна.
     const deadline = Date.now() + totalMs;
@@ -73,7 +73,7 @@ export function ocspRevocationChecker(opts: OcspCheckerOptions = {}): Revocation
         const tu = resp.thisUpdate.date.getTime();
         if (tu > t + CLOCK_SKEW_MS || tu < t - MAX_AGE_MS) continue;
         if (resp.nextUpdate && resp.nextUpdate.getTime() < t) continue;
-        return resp.status === "good" ? "good" : "revoked";
+        return { status: resp.status === "good" ? "good" : "revoked", nextUpdate: resp.nextUpdate?.getTime() };
       } catch {
         // дараагийн responder; бүгд унавал хариугүй
       }
@@ -93,13 +93,18 @@ export function ocspRevocationChecker(opts: OcspCheckerOptions = {}): Revocation
     const key = createHash("sha256").update(issuer.raw).digest("hex").slice(0, 16) + ":" + cert.serialNumber;
     const exp = cache.get(key);
     if (exp !== undefined && now() < exp) return "good";
-    const status = await ask(leaf, iss);
-    if (!status) return "unknown";
+    const r = await ask(leaf, iss);
+    if (!r) return "unknown";
     // Зөвхөн "good"-ийг кэшлэнэ: revoked эцсийн, unknown нь дөнгөж олгогдсон гэрчилгээг кэшийн хугацаанд түгжихгүй.
-    if (status === "good") {
-      if (cache.size >= CACHE_MAX) cache.clear();
-      cache.set(key, now() + CACHE_TTL_MS);
+    // Хугацаа = min(5 мин, nextUpdate) — responder-ийн өөрийн хүчинтэй хугацаанаас хэтрэхгүй (Go-той ижил).
+    if (r.status === "good") {
+      const t = now();
+      const until = Math.min(t + CACHE_TTL_MS, r.nextUpdate ?? Infinity);
+      if (until > t) {
+        if (cache.size >= CACHE_MAX) cache.clear();
+        cache.set(key, until);
+      }
     }
-    return status;
+    return r.status;
   };
 }
