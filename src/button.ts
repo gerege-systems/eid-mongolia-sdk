@@ -19,8 +19,8 @@ const T = {
   mn: {
     button: "eID-ээр нэвтрэх",
     title: "eID-ээр нэвтрэх",
-    // Лого «e-ID» гэж бичигддэг тул логотой үед «eID»-г давтахгүй: [лого]-ээр нэвтрэх.
-    withLogo: ["", "-ээр нэвтрэх"],
+    // Лого «e-ID» гэж бичигддэг тул логотой үед «eID»-г давтахгүй, зураасгүй: [лого] нэвтрэх.
+    withLogo: ["", "нэвтрэх"],
     close: "Хаах",
     loading: "Ачаалж байна",
     qrAlt: "Нэвтрэх QR код — утсан дээрх eID Mongolia аппаар уншуулна",
@@ -223,7 +223,6 @@ h2, p, ol { margin: 0; }
 .btn-sm { width: auto; min-height: 36px; padding: 0 14px; font-size: 0.8125rem; }
 .trigger { width: auto; }
 .brand { display: inline-flex; align-items: center; gap: 6px; }
-.brand.tight { gap: 2px; }
 .logo { display: block; flex: none; height: 16px; width: auto; aspect-ratio: 3840 / 1372; fill: var(--_eid-logo); }
 .trigger.icon-only .logo { height: 12px; }
 .trigger.icon-only { width: 44px; height: 44px; padding: 0; }
@@ -408,7 +407,7 @@ export class EidLoginButton extends Base {
         console.warn('<eid-login-button>: icon="none" ба текстгүй (variant="icon" эсвэл label="") — анхдагч текстийг харуулав.');
       }
     }
-    // Анхдагч текст + лого → лого «eID»-г орлоно: [лого]-ээр нэвтрэх.
+    // Анхдагч текст + лого → лого «eID»-г орлоно: [лого] нэвтрэх.
     const brand = hasIcon && !iconOnly && !label;
     const nodes: Node[] = [];
     if (brand) nodes.push(this.brand({ part: "icon" }, { part: "label" }));
@@ -427,7 +426,7 @@ export class EidLoginButton extends Base {
   /** Лого + i18n-ийн өмнөх/дараах текст. Лого aria-hidden — дуудагч бүтэн нэрийг aria-label-аар өгнө. */
   private brand(logoAttrs: Record<string, string> = {}, textAttrs: Record<string, string> = {}): HTMLElement {
     const [pre, post] = this.t.withLogo;
-    const box = el("span", { class: post && !pre ? "brand tight" : "brand" });
+    const box = el("span", { class: "brand" });
     if (pre) box.append(el("span", textAttrs, pre));
     box.append(logo(logoAttrs));
     if (post) box.append(el("span", textAttrs, post));
