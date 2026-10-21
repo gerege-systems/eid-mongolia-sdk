@@ -7,7 +7,7 @@ import { Incremental } from "./incremental.js";
 import { PdfError, Value } from "./reader.js";
 import { escapeName, hexString, serialize } from "./serialize.js";
 import { AppearanceError, appearanceObjects, nthPage, pageGeometry, visibleRect, visibleWidget, type Visible } from "../page/appearance.js";
-import { occupancy, placeVisible, type Box, type PlaceStatus } from "../page/occupancy.js";
+import { placeOnPage, type PlaceStatus } from "../page/occupancy.js";
 
 /** CMS-ийн дээд хэмжээ (хэмжсэн 14 KiB) × 2 — /Contents-ийн binary багтаамж. */
 export const MEASURED_MAX_CMS = 14 << 10;
@@ -94,21 +94,10 @@ export async function prepareSignature(base: Uint8Array, signingTime: Date, sign
     let rect = visibleRect(box, rot, vis.x, vis.y, vis.w, vis.h);
     placement = { x: vis.x, y: vis.y, status: "requested" };
     if (vis.avoid) {
-      // PLACEMENT_SPEC.md: move off existing page content; the requested rect stays when nothing is free.
-      let occ: Box[] | undefined;
-      try {
-        occ = occupancy(page, box as Box);
-      } catch {
-        placement.status = "unscanned";
-      }
-      if (occ) {
-        const at = placeVisible(box, rot, vis.x, vis.y, vis.w, vis.h, occ);
-        if (!at) placement.status = "overlap";
-        else if (at[0] !== vis.x || at[1] !== vis.y) {
-          placement = { x: at[0], y: at[1], status: "moved" };
-          rect = visibleRect(box, rot, at[0], at[1], vis.w, vis.h);
-        }
-      }
+      // PLACEMENT_SPEC.md: move off existing page content (exact: only report it); the requested rect stays when
+      // nothing is free.
+      placement = placeOnPage(page, box, rot, vis.x, vis.y, vis.w, vis.h, vis.exact === true);
+      if (placement.x !== vis.x || placement.y !== vis.y) rect = visibleRect(box, rot, placement.x, placement.y, vis.w, vis.h);
     }
     const bodies = appearanceObjects({ w: vis.w, h: vis.h, rotate: rot, name: vis.name, role: vis.role, lang: vis.lang, date: vis.date, url: vis.url }, apIDs);
     inc.writeObject(fieldID, visibleWidget(fieldName, rect, page.ptr.id, page.ptr.gen, sigID, apIDs[0]!));

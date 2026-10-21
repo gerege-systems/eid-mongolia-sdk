@@ -558,6 +558,7 @@ DSS-д), Adobe / EU DSS-д «LTV enabled», баталгаажуулах (QR) х
 | Функц | Хаана | Тайлбар |
 |---|---|---|
 | `prepare(pdf, { signerCert, claimedRole?, verifyPage?, fileName?, lang?, docId?, appearance?, … })` | браузер / Node | `{ dtbs, digest, docId, state, placement? }` — сүлжээгүй |
+| `suggestPlacement(pdf, appearance)` | браузер / Node | гарын үсэггүйгээр тэмдгийн байршил + хуудасны хэмжээ (урьдчилан харах, 0.29.0+) — сүлжээгүй |
 | `eid.signPdfDigest({ dtbs, fileName, signer, flow?, onBehalfOf? })` | RP backend | DTBS-д гарын үсгийн session (push эсвэл device-link) |
 | `complete(state, signature)` | браузер / Node | TSA + OCSP/CRL → `{ pdf, cms, docId, outSha256, inSha256, hasPage, pageSha256, … }` |
 | `eid.registerSignature(registrationFromCompleted(done, { fileName, sessionID, onBehalfOf? }))` | RP backend | `POST /pdf/signatures` — `/verify/{docID}` бүртгэл. `medium` алга бол `sessionID`-аас (phone ⇔ sessionID); зөрчил эсвэл `claimedRole`-той гарын үсэгт `onBehalfOf` алга бол `ValidationError` |
@@ -631,7 +632,7 @@ reply({ verifyUrl: reg.verifyUrl });
   `SESSION_FAILED` / `CLAIMED_ROLE_MISMATCH` / `DOC_ID_CONFLICT` / `REGISTRY_CONFLICT` / `PRIOR_MISMATCH`; 413
   `REQUEST_TOO_LARGE`; 429 `RATE_LIMITED`, 503 `STATE_UNAVAILABLE` (`retryable`).
 
-**Харагдах гарын үсэг (сонголттой).** `appearance: { page?, x, y, width, height, lang? }` өгвөл гарын үсэг хуудсан дээр
+**Харагдах гарын үсэг (сонголттой).** `appearance: { page?, x, y, width, height, lang?, exact? }` өгвөл гарын үсэг хуудсан дээр
 харагдана (QR + нэр, `claimedRole`, «eID Mongolia-аар зурсан», огноо `YYYY-MM-DD HH:MM (+08)`); байхгүй бол үл харагдах
 (өмнөхтэй байт-ижил). Координат pt-ээр, хуудасны CropBox-ийн `/Rotate`-ийн дараах (дэлгэцэнд харагдах) зүүн доод булангаас;
 `page` 1-ээс (байхгүй/0 = оролтын eID verify хуудас БИШ сүүлийн хуудас — энэ prepare-ийн нэмэх ба өмнөх гарын үсгүүдийн
@@ -651,6 +652,26 @@ reply({ verifyUrl: reg.verifyUrl });
 const p = await prepare(pdfBytes, { signerCert, verifyPage: true, fileName: "Гэрээ №12.pdf",
   appearance: { page: 1, x: 340, y: 36, width: 220, height: 64 } });
 if (p.placement?.status === "overlap") notice("Гарын үсэг хуудасны агуулга дээр давхцаж байрлана");
+```
+
+**Иргэн байршлыг өөрөө сонгох (0.29.0+).** `suggestPlacement(pdf, appearance)` нь `prepare`-ийн байршлын алгоритмыг
+(page 0 шийдэл, хуудас уншилт, чөлөөт зай хайлт) гэрчилгээ, гарын үсэг, сүлжээгүйгээр ажиллуулна:
+`{ page, x, y, width, height, status, pageWidth, pageHeight, pageCount, pages: [{ width, height }] }` (pt; `pages[i]` —
+хуудас бүрийн харагдах хэмжээ, геометр нь уншигдахгүй хуудас `{0, 0}`). `page, x, y, width, height, status` нь ижил PDF +
+appearance-ийн `prepare().placement`-тэй ижил (гарын үсэггүй баримт дээр page 0 нь юуг ч алгасахгүй — сүүлийн хуудас).
+UI хуудсыг `s` px/pt-ээр, зүүн дээд эхтэй зурвал: `left = x·s`, `top = (pageHeight − y − height)·s`; буцаахдаа
+`x = left/s`, `y = pageHeight − top/s − height`, тэгээд `appearance.exact: true` — тэмдэг яг тэнд зурагдана, хэзээ ч
+шилжихгүй (хуудаснаас гарвал `REQUEST_INVALID`, тайрахгүй). Хуудсыг уншсаар байгаа тул `status`: `requested` (чөлөөтэй) |
+`overlap` (агуулга дээр) | `unscanned`; `moved` хэзээ ч биш. `exact` байхгүй/false бол өмнөхтэй байт-ижил. Шалгах дараалал:
+`PDF_TOO_LARGE` → `PDF_INVALID` (толгой/бүтэц) → `REQUEST_INVALID` (appearance утга) → `PDF_ENCRYPTED` → `PDF_INVALID`
+(гарын үсгийн уншилт) → `REQUEST_INVALID` (хуудасны тоо, хайрцаг, хуудаснаас гарах). Өмнөх гарын үсгийн шалгалт,
+signer, нэр багтах эсэхийг шалгахгүй (`prepare` шалгана). Дүрэм: `PLACEMENT_SPEC.md` §6a/§6b.
+
+```ts
+const s = await suggestPlacement(pdfBytes, { x: 340, y: 36, width: 220, height: 64 }); // анхдагч байрлал
+// … иргэн тэмдгийг preview дээр чирнэ → { page, x, y } (pt, зүүн доод эх) …
+const p = await prepare(pdfBytes, { signerCert, verifyPage: true, fileName: "Гэрээ №12.pdf",
+  appearance: { page, x, y, width: s.width, height: s.height, exact: true } });
 ```
 
 ### Зөвхөн Node (backend бүгдийг хийнэ)
@@ -1057,7 +1078,8 @@ npm run test:convert-e2e   # /convert жинхэнэ LibreOffice Chromium-д (BR
 
 `/pades`-ийн conformance fixture (golden: оролт, тестийн PKI-ийн гэрчилгээ, TSA/OCSP/CRL-ийн тогтмол хариу, хүлээгдэх
 sha256) ба фонт/гинжийн asset-ийг Go reference-ээс `node scripts/sync-pades-golden.mjs` хуулна (`GO_SDK_COMMIT` —
-tag `pades-golden-vN`, одоо v6 — `placement/` scanner vectors-той, page 0 verify хуудас алгасна); CI `--check`-ээр бэхэлсэн commit-тэй тулгана. Профайл:
+tag `pades-golden-vN`, одоо v7 — `placement/` scanner vectors-той, page 0 verify хуудас алгасна, `exact` +
+`expect.suggestion`); CI `--check`-ээр бэхэлсэн commit-тэй тулгана. Профайл:
 Go репогийн `pades/PROFILE.md`, `PAGE_SPEC.md`, `PRECHECKS.md`, `WIRE.md`, `APPEARANCE_SPEC.md`, `PLACEMENT_SPEC.md`.
 
 ### Гэрээний шалгалт

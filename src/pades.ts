@@ -25,7 +25,8 @@ import { AppearanceError, defaultStampPage, round100, type Visible } from "./pad
 import { appendVerifyPage } from "./pades/page/page.js";
 import { appendDSS } from "./pades/pdf/dss.js";
 import { embedCMS, PlaceholderOverflowError, prepareSignature, signatureContents } from "./pades/pdf/signature.js";
-import { PrecheckError, UUID_RE, VERIFY_URL_PREFIX, docIdFromPage, precheck, signatureCMSList } from "./pades/precheck.js";
+import { PrecheckError, UUID_RE, VERIFY_URL_PREFIX, docIdFromPage, encrypted, precheck, scanSignatures, signatureCMSList } from "./pades/precheck.js";
+import { suggestVisible } from "./pades/page/suggest.js";
 import { decodeState, encodeState } from "./pades/state.js";
 import { OID, checkSignatureFrom, parseCertificate, verifyCitizen, type Certificate } from "./pades/x509.js";
 
@@ -130,7 +131,8 @@ export interface PadesPrepareOptions {
  * (байхгүй бол MediaBox)-ийн /Rotate-ийн ДАРААХ (дэлгэцэнд харагдах) зүүн доод булангаас; x баруун тийш, y дээш. Утга бүр
  * 0.01 pt хүртэл тойрогдоно. Өндөр ≥ 45 pt (QR), эс бөгөөс REQUEST_INVALID.
  * `x, y` нь хүссэн байрлал: тэнд хуудасны агуулга байвал дүрслэл чөлөөт зай руу шилжинэ (PLACEMENT_SPEC.md) — эцсийн
- * байрлал {@link PadesPrepared.placement}-д.
+ * байрлал {@link PadesPrepared.placement}-д. `exact: true` бол яг энд зурна (шилжүүлэхгүй, §6a). Урьдчилан харах /
+ * координат хөрвүүлэхэд {@link suggestPlacement}.
  */
 export interface PadesAppearance {
   /**
@@ -145,6 +147,14 @@ export interface PadesAppearance {
   height: number;
   /** `mn` | `en`; байхгүй бол `lang` (тэр нь байхгүй бол mn). */
   lang?: "mn" | "en";
+  /**
+   * Draw the stamp exactly at page/x/y/width/height — a position the signer chose (e.g. dragged on a page preview);
+   * never moved off page content (PLACEMENT_SPEC.md §6a). The rect must still lie inside the page (else
+   * `REQUEST_INVALID`, never clamped). The page is still scanned: `placement.status` is `requested` when the rect is
+   * free, `overlap` when content is under it, `unscanned` when the page cannot be scanned — never `moved`.
+   * false / absent (default) = the rect is only the preferred spot. Not written into the PDF. Since 0.29.0.
+   */
+  exact?: boolean;
 }
 
 export interface PadesPrepared {
@@ -165,10 +175,11 @@ export interface PadesPrepared {
  * - `requested` — drawn at `appearance.x/y` (that spot was free);
  * - `moved` — that spot overlapped page content; the stamp moved to the first free spot (mirrored column, then up in
  *   12 pt steps);
- * - `overlap` — no free spot; drawn at the requested spot over content;
+ * - `overlap` — no free spot (with `appearance.exact`: content under the rect); drawn at the requested spot over content;
  * - `unscanned` — the page could not be scanned within the limits; drawn at the requested spot.
  *
- * The signature is valid in every case; surface `overlap` / `unscanned` to the user (e.g. a notice).
+ * With `appearance.exact` the status is never `moved`. The signature is valid in every case; surface `overlap` /
+ * `unscanned` to the user (e.g. a notice).
  */
 export interface PadesPlacement {
   /** 1-based page of the input document the stamp is on. */
@@ -181,6 +192,32 @@ export interface PadesPlacement {
 }
 
 export type PadesPlacementStatus = "requested" | "moved" | "overlap" | "unscanned";
+
+/**
+ * {@link suggestPlacement}'s result (Go `pades.Suggestion`, PLACEMENT_SPEC.md §6b), pt. `page, x, y, width, height,
+ * status` are exactly what {@link prepare} returns in {@link PadesPrepared.placement} for the same PDF and appearance
+ * (except an unsigned input that already carries verify pages of the docId later passed to prepare). Coordinates are the
+ * appearance space: origin at the visible lower-left, x right, y up. A UI that renders page `page` at `s` px/pt with a
+ * top-left origin maps `left = x·s`, `top = (pageHeight − y − height)·s`; back: `x = left/s`,
+ * `y = pageHeight − top/s − height`, then pass `exact: true` so the stamp stays where the user put it.
+ */
+export interface PlacementSuggestion {
+  /** 1-based page of the input document (page 0 resolved as in prepare). */
+  page: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  /** `requested` | `moved` | `overlap` | `unscanned` (never `moved` with `exact`). */
+  status: "requested" | "moved" | "overlap" | "unscanned";
+  /** Visible size of `page` (CropBox, else MediaBox; after /Rotate) = `pages[page - 1]`. */
+  pageWidth: number;
+  pageHeight: number;
+  /** Pages in /Pages tree order. */
+  pageCount: number;
+  /** Visible size of every page, index 0 = page 1; `{0, 0}` = that page's geometry is unreadable (no stamp there). */
+  pages: { width: number; height: number }[];
+}
 
 export interface PadesCompleteOptions {
   /** RFC 3161 TSA. Анхдагч `https://tsa.timeserver.mn/`. */
@@ -447,7 +484,7 @@ export async function prepare(pdf: Uint8Array | ArrayBuffer, opts: PadesPrepareO
 }
 
 /** Appearance-ийн PDF-ээс үл хамаарах шалгалт (Go checkAppearance, APPEARANCE_SPEC.md §1). */
-function checkAppearance(o: PadesPrepareOptions): void {
+function checkAppearance(o: Pick<PadesPrepareOptions, "appearance" | "claimedRole">): void {
   const a = o.appearance;
   if (a === undefined) return;
   const bad = (msg: string): PadesError => new PadesError("REQUEST_INVALID", `appearance: ${msg}`);
@@ -457,6 +494,7 @@ function checkAppearance(o: PadesPrepareOptions): void {
   const page = a.page ?? 0;
   if (!Number.isInteger(page) || page < 0) throw bad("page ≥ 0");
   if (a.lang !== undefined && (a.lang as string) !== "" && a.lang !== "mn" && a.lang !== "en") throw bad("lang: mn | en");
+  if (a.exact !== undefined && typeof a.exact !== "boolean") throw bad("exact: boolean");
   const role = o.claimedRole ?? "";
   if (role !== "" && /[\p{Cc}\p{Cf}\p{Cs}]/u.test(role)) throw bad("claimedRole-д удирдах тэмдэгт");
 }
@@ -488,6 +526,69 @@ function visibleSpec(doc: Uint8Array, o: PadesPrepareOptions, name: string, now:
     date: `${String(z.getUTCFullYear()).padStart(4, "0")}-${p2(z.getUTCMonth() + 1)}-${p2(z.getUTCDate())} ${p2(z.getUTCHours())}:${p2(z.getUTCMinutes())} (+08)`,
     url: `${VERIFY_URL_PREFIX}${docId}/${revIndex}`,
     avoid: true,
+    exact: a.exact === true,
+  };
+}
+
+/**
+ * Runs {@link prepare}'s stamp placement (page 0 resolution, page scan, candidate search; `appearance.exact`) on `pdf`
+ * without signing — no certificate, no network (PLACEMENT_SPEC.md §6b). A UI shows the default stamp position and the
+ * page sizes before signing, maps the user's drag back to `appearance` coordinates and passes `exact: true` to prepare.
+ *
+ * Checks, in order: size (`PDF_TOO_LARGE`), `%PDF-` header and structure (`PDF_INVALID`), the appearance values
+ * (`REQUEST_INVALID`), encryption (`PDF_ENCRYPTED`), the signature scan (`PDF_INVALID`), page > page count / page box /
+ * `/Rotate` / rect outside the page (`REQUEST_INVALID`). Not checked (prepare does): prior signatures
+ * (`PDF_FOREIGN_SIGNATURE`, `PDF_PRIOR_SIGNATURE_INVALID`, `PDF_LOCKED`, `PDF_TOO_MANY_SIGNATURES`), the signer, `docId`,
+ * whether the name/role fit the stamp. Page 0 skips this document's eID verify pages using the docId read from its
+ * verify page; an unsigned document skips no page (the last page). Since 0.29.0.
+ *
+ * @throws {PadesError} PDF_TOO_LARGE / PDF_INVALID / REQUEST_INVALID / PDF_ENCRYPTED
+ */
+export async function suggestPlacement(pdf: Uint8Array, appearance: PadesAppearance): Promise<PlacementSuggestion> {
+  const doc = u8(pdf, "pdf");
+  if (doc.length > MAX_INPUT_BYTES) throw new PadesError("PDF_TOO_LARGE", "PDF 9.75 MB-аас их байна");
+  if (doc.length < 5 || String.fromCharCode(...doc.subarray(0, 5)) !== "%PDF-") throw new PadesError("PDF_INVALID", "PDF биш эсвэл эвдэрсэн");
+  try {
+    checkStructure(doc);
+  } catch (e) {
+    throw new PadesError("PDF_INVALID", "PDF-ийн бүтэц хэт гүн эсвэл төвөгтэй", { cause: e });
+  }
+  if (appearance === null || typeof appearance !== "object") throw new PadesError("REQUEST_INVALID", "appearance заавал");
+  checkAppearance({ appearance });
+  if (encrypted(doc)) throw new PadesError("PDF_ENCRYPTED", "шифрлэгдсэн PDF дэмжигдэхгүй");
+  let signed: boolean;
+  try {
+    signed = scanSignatures(doc).sigs.length > 0;
+  } catch (e) {
+    throw new PadesError("PDF_INVALID", "PDF биш эсвэл эвдэрсэн", { cause: e });
+  }
+  let verifyUri = "";
+  if (signed) {
+    const id = docIdFromPage(doc);
+    if (id !== "") verifyUri = VERIFY_URL_PREFIX + id;
+  }
+  const w = round100(appearance.width);
+  const h = round100(appearance.height);
+  let s: ReturnType<typeof suggestVisible>;
+  try {
+    s = suggestVisible(doc, verifyUri, appearance.page ?? 0, round100(appearance.x), round100(appearance.y), w, h, appearance.exact === true);
+  } catch (e) {
+    if (e instanceof AppearanceError) throw new PadesError("REQUEST_INVALID", `appearance: ${e.message}`, { cause: e });
+    throw new PadesError("PDF_INVALID", "PDF задарсангүй", { cause: e });
+  }
+  const pages = s.pages.map((p) => (p ? { width: p.w / 100, height: p.h / 100 } : { width: 0, height: 0 }));
+  const cur = pages[s.page - 1]!;
+  return {
+    page: s.page,
+    x: s.placement.x / 100,
+    y: s.placement.y / 100,
+    width: w / 100,
+    height: h / 100,
+    status: s.placement.status,
+    pageWidth: cur.width,
+    pageHeight: cur.height,
+    pageCount: pages.length,
+    pages,
   };
 }
 

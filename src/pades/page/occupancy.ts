@@ -1,5 +1,5 @@
 // Visible stamp placement — PLACEMENT_SPEC.md (pades-client/1), a 1:1 port of the Go reference
-// pades/internal/core/occupancy.go (Occupancy) and placement.go (placeCandidates, placeVisible).
+// pades/internal/core/occupancy.go (Occupancy) and placement.go (placeCandidates, placeVisible, PlaceOnPage).
 //
 // The occupancy scanner is a pure function of the page objects: it never renders and never loads a system font. All
 // arithmetic is IEEE-754 binary64 with +, −, ×, ÷ in exactly the order written in the spec (§2) — JS never fuses
@@ -1083,11 +1083,43 @@ export function placeVisible(box: number[], rot: number, x: number, y: number, w
     } catch {
       continue;
     }
-    const e0 = r[0]! - PLACE_PAD;
-    const e1 = r[1]! - PLACE_PAD;
-    const e2 = r[2]! + PLACE_PAD;
-    const e3 = r[3]! + PLACE_PAD;
-    if (!occ.some((b) => b[0] < e2 && e0 < b[2] && b[1] < e3 && e1 < b[3])) return [cx, cy];
+    if (placeFree(r, occ)) return [cx, cy];
   }
   return undefined;
+}
+
+/** r (user space, h100) grown by PLACE_PAD on every side overlaps no occupied box (strict overlap: touching edges are free). */
+function placeFree(r: number[], occ: Box[]): boolean {
+  const e0 = r[0]! - PLACE_PAD;
+  const e1 = r[1]! - PLACE_PAD;
+  const e2 = r[2]! + PLACE_PAD;
+  const e3 = r[3]! + PLACE_PAD;
+  return !occ.some((b) => b[0] < e2 && e0 < b[2] && b[1] < e3 && e1 < b[3]);
+}
+
+/**
+ * Go core.PlaceOnPage — PLACEMENT_SPEC §6 on a page whose geometry (box, rot) is known and whose requested rect is inside
+ * it: scan the page and return the final (x, y) and status. exact (§6a) → the requested rect is the only candidate
+ * (never moved): "requested" when free, "overlap" when not. Shared by prepare and suggestPlacement.
+ */
+export function placeOnPage(page: Value, box: number[], rot: number, x: number, y: number, w: number, h: number, exact: boolean): { x: number; y: number; status: PlaceStatus } {
+  let occ: Box[];
+  try {
+    occ = occupancy(page, box as Box);
+  } catch {
+    return { x, y, status: "unscanned" };
+  }
+  if (exact) {
+    let r: number[];
+    try {
+      r = visibleRect(box, rot, x, y, w, h);
+    } catch {
+      return { x, y, status: "overlap" };
+    }
+    return { x, y, status: placeFree(r, occ) ? "requested" : "overlap" };
+  }
+  const at = placeVisible(box, rot, x, y, w, h, occ);
+  if (!at) return { x, y, status: "overlap" };
+  if (at[0] !== x || at[1] !== y) return { x: at[0], y: at[1], status: "moved" };
+  return { x, y, status: "requested" };
 }

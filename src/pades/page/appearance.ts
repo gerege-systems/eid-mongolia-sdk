@@ -28,6 +28,11 @@ export interface Visible {
   url: string;
   /** Scan the page and move the stamp off existing content (PLACEMENT_SPEC.md); false/absent = exactly (x, y). */
   avoid?: boolean;
+  /**
+   * With `avoid`: never move; the page is still scanned so the status says "overlap" when content is under the rect
+   * (PLACEMENT_SPEC.md §6a).
+   */
+  exact?: boolean;
 }
 
 export interface AppearanceParams {
@@ -281,7 +286,23 @@ const MAX_VERIFY_ANNOTS = 10000;
  * `/Subtype /Link`, `/A << /S /URI /URI verifyUri >>` (байт-ижил) annotation-тай хуудас. Бүх хуудас verify бол n.
  */
 export function defaultStampPage(doc: Uint8Array, verifyUri: string): { page: number; n: number } {
-  const inc = new Incremental(doc);
+  const pages = pageList(new Incremental(doc).root().key("Pages"));
+  return { page: lastNonVerifyPage(pages, verifyUri), n: pages.length };
+}
+
+/**
+ * The last page (1-based) of `pages` that is not a verify page of `verifyUri`; n when every page is one. verifyUri ""
+ * skips nothing (the last page) — SuggestPlacement on an unsigned document (PLACEMENT_SPEC §6b).
+ */
+export function lastNonVerifyPage(pages: Value[], verifyUri: string): number {
+  for (let i = pages.length - 1; verifyUri !== "" && i >= 0; i--) {
+    if (!isVerifyPage(pages[i]!, verifyUri)) return i + 1;
+  }
+  return pages.length;
+}
+
+/** Go core.pageList — the /Page objects in /Pages tree order (depth ≤ 32, at most 65 537). */
+export function pageList(root: Value): Value[] {
   const pages: Value[] = [];
   const walk = (v: Value, depth: number): void => {
     if (depth > MAX_DEPTH || pages.length > 1 << 16) return;
@@ -295,12 +316,8 @@ export function defaultStampPage(doc: Uint8Array, verifyUri: string): { page: nu
       }
     }
   };
-  walk(inc.root().key("Pages"), 0);
-  const n = pages.length;
-  for (let i = n - 1; i >= 0; i--) {
-    if (!isVerifyPage(pages[i]!, verifyUri)) return { page: i + 1, n };
-  }
-  return { page: n, n };
+  walk(root, 0);
+  return pages;
 }
 
 /** Go isVerifyPage — хуудсын /Annots-д verifyUri руу заасан Link байгаа эсэх; уншиж чадахгүй бол false (агуулга). */

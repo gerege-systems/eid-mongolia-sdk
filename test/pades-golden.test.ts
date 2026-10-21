@@ -51,6 +51,7 @@ test("pades golden — Go reference-тэй байт-ижил (prepare + complete
   const chain = ["04", "03", "02"].map(pem);
   const outputs = new Map<string, Uint8Array>();
   let n = 0;
+  let nSug = 0;
   for (const c of M.cases) {
     const input = c.input.startsWith("case:") ? outputs.get(c.input.slice(5)) : read(c.input);
     assert.ok(input, `${c.name}: оролт алга`);
@@ -67,6 +68,21 @@ test("pades golden — Go reference-тэй байт-ижил (prepare + complete
       lang: c.prepare.lang,
       appearance: c.prepare.appearance,
     };
+    // PLACEMENT_SPEC.md §6b (golden v7): suggestPlacement on the same input + appearance, field-for-field.
+    let sug: pades.PlacementSuggestion | undefined;
+    if (c.prepare.appearance) {
+      if (c.expect.suggestionError) {
+        await assert.rejects(
+          () => pades.suggestPlacement(input, c.prepare.appearance!),
+          (e: unknown) => e instanceof pades.PadesError && e.code === c.expect.suggestionError,
+          `${c.name}: suggestionError ${c.expect.suggestionError}`,
+        );
+      } else {
+        sug = await pades.suggestPlacement(input, c.prepare.appearance);
+        assert.deepEqual(sug, c.expect.suggestion, `${c.name}: suggestion`);
+        nSug++;
+      }
+    }
     if (c.expect.error) {
       await assert.rejects(
         () => pades.prepare(input, opts),
@@ -91,6 +107,12 @@ test("pades golden — Go reference-тэй байт-ижил (prepare + complete
     assert.deepEqual(head.byteRange, e.byteRange, `${c.name}: byteRange`);
     // PLACEMENT_SPEC.md (golden v5): харагдах тохиолдол бүрд эцсийн байршил + төлөв; үл харагдахад байхгүй.
     assert.deepEqual(p.placement, c.expect.placement, `${c.name}: placement`);
+    // suggestion ⊇ placement, except page0-two-verify (unsigned input carrying verify pages of the docId passed to
+    // prepare — suggestPlacement has no docId there, §6b).
+    if (sug && c.name !== "page0-two-verify") {
+      const { page, x, y, width, height, status } = sug;
+      assert.deepEqual({ page, x, y, width, height, status }, p.placement, `${c.name}: suggestion ⊇ placement`);
+    }
     assert.equal(Buffer.from(head.signedAttrs, "base64").toString("hex"), e.signedAttrs, `${c.name}: signedAttrs`);
     const log: string[] = [];
     const r = await pades.complete(p.state, Buffer.from(String(e.signature), "hex"), {
@@ -126,6 +148,17 @@ test("pades golden — Go reference-тэй байт-ижил (prepare + complete
     n++;
   }
   assert.equal(n, M.cases.length);
+  // Golden v7: every visible case carries expect.suggestion (or suggestionError).
+  const visible = M.cases.filter((c) => c.prepare.appearance);
+  assert.ok(visible.every((c) => c.expect.suggestion || c.expect.suggestionError), "golden v7: suggestion алга");
+  assert.equal(nSug, visible.filter((c) => c.expect.suggestion).length);
+  // §6a: an exact request at a free spot is byte-identical to the auto placement that lands there.
+  const prepSha = (name: string): unknown => M.cases.find((c) => c.name === name)?.expect.preparedSha256;
+  assert.equal(prepSha("exact-free"), prepSha("table-bottom-visible"), "exact-free = table-bottom-visible");
+  assert.equal(prepSha("exact-page0-after-verify"), prepSha("page0-after-verify"), "exact-page0-after-verify = page0-after-verify");
+  for (const c of visible.filter((x) => x.prepare.appearance!.exact)) {
+    assert.notEqual((c.expect.placement as { status?: string } | undefined)?.status, "moved", `${c.name}: exact → moved`);
+  }
   assert.ok(n >= 16, "golden case цөөн");
   assert.ok(M.cases.filter((c) => c.prepare.appearance).length >= 11, "харагдах golden case цөөн");
   for (const s of ["requested", "moved", "overlap"]) {
