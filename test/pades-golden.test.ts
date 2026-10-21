@@ -17,7 +17,7 @@ const hex = (b: Uint8Array) => Buffer.from(b).toString("hex");
 interface Case {
   name: string;
   input: string;
-  prepare: { reason?: string; claimedRole?: string; docId?: string; verifyPage?: boolean; fileName?: string; lang?: "mn" | "en"; appearance?: pades.PadesAppearance };
+  prepare: { reason?: string; claimedRole?: string; docId?: string; verifyPage?: boolean; verifyPagePosition?: "last" | "first"; fileName?: string; lang?: "mn" | "en"; appearance?: pades.PadesAppearance };
   expect: Record<string, unknown> & { error?: string };
 }
 interface Manifest {
@@ -64,6 +64,7 @@ test("pades golden — Go reference-тэй байт-ижил (prepare + complete
       claimedRole: c.prepare.claimedRole,
       docId: c.prepare.docId,
       verifyPage: c.prepare.verifyPage,
+      verifyPagePosition: c.prepare.verifyPagePosition,
       fileName: c.prepare.fileName,
       lang: c.prepare.lang,
       appearance: c.prepare.appearance,
@@ -179,6 +180,7 @@ async function firstPrepared(): Promise<{ c: Case; p: pades.PadesPrepared }> {
     claimedRole: c.prepare.claimedRole,
     docId: c.prepare.docId,
     verifyPage: c.prepare.verifyPage,
+    verifyPagePosition: c.prepare.verifyPagePosition,
     fileName: c.prepare.fileName,
     lang: c.prepare.lang,
     appearance: c.prepare.appearance,

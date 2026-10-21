@@ -300,8 +300,11 @@ export function streamObj(extra: string, data: Uint8Array): Uint8Array {
   return concat([latin1(`<< /Length ${data.length}${extra} >>\nstream\n`), data, latin1("\nendstream")]);
 }
 
-/** base-ийн ард verify хуудсыг incremental update-аар нэмнэ (Catalog өөрчлөгдөхгүй). */
-export function appendVerifyPage(base: Uint8Array, p: PageData): Uint8Array {
+/**
+ * base-д verify хуудсыг incremental update-аар нэмнэ (Catalog өөрчлөгдөхгүй): үндсэн /Pages-ийн /Kids-ийн төгсгөлд, `first`
+ * бол эхэнд (PAGE_SPEC.md §8a).
+ */
+export function appendVerifyPage(base: Uint8Array, p: PageData, first = false): Uint8Array {
   const [reg, bld] = loadFonts();
   const { content, links } = pageContent(p);
   const inc = new Incremental(base);
@@ -340,8 +343,14 @@ export function appendVerifyPage(base: Uint8Array, p: PageData): Uint8Array {
   const kids = pages.key("Kids");
   const kp = kids.ptr;
   pn += " /Kids [";
-  for (let i = 0; i < kids.len(); i++) pn += serialize(kids.index(i), kp.id, 0) + " ";
-  pn += `${pageID} 0 R] /Count ${count + 1} >>`;
+  if (first) {
+    pn += `${pageID} 0 R`;
+    for (let i = 0; i < kids.len(); i++) pn += " " + serialize(kids.index(i), kp.id, 0);
+    pn += `] /Count ${count + 1} >>`;
+  } else {
+    for (let i = 0; i < kids.len(); i++) pn += serialize(kids.index(i), kp.id, 0) + " ";
+    pn += `${pageID} 0 R] /Count ${count + 1} >>`;
+  }
   inc.writeObject(pp.id, pn, pp.gen);
   return inc.finish(rp.id);
 }
