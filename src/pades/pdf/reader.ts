@@ -157,10 +157,12 @@ class Lexer {
     const out: number[] = [];
     for (;;) {
       let c = this.readByte();
-      while (isSpace(c)) c = this.readByte();
+      while (isSpace(c) && !this.eof) c = this.readByte();
+      if (this.eof) throw new PdfError("unterminated hex string");
       if (c === 0x3e) break;
       let c2 = this.readByte();
-      while (isSpace(c2)) c2 = this.readByte();
+      while (isSpace(c2) && !this.eof) c2 = this.readByte();
+      if (this.eof) throw new PdfError("unterminated hex string");
       const x = (unhex(c) << 4) | unhex(c2);
       if (unhex(c) < 0 || unhex(c2) < 0 || x < 0) throw new PdfError("malformed hex string");
       out.push(x);
@@ -173,6 +175,8 @@ class Lexer {
     let depth = 1;
     for (;;) {
       let c = this.readByte();
+      // allowEOF: readByte нь төгсгөлд \n-ийг мөнхөд буцаана — хаагдаагүй мөр давталтыг зогсоохгүй.
+      if (this.eof) throw new PdfError("unterminated literal string");
       if (c === 0x28) {
         depth++;
         out.push(c);
@@ -321,6 +325,8 @@ class Lexer {
       const tok = this.readToken();
       if (isKw(tok, "]")) break;
       if (tok === EOF_TOKEN) throw new PdfError("unterminated array");
+      // readObject нь endobj-ийг буцааж (unread) null өгдөг — массив дотор бол ахихгүй мөнхийн давталт.
+      if (isKw(tok, "endobj")) throw new PdfError("unterminated array");
       this.unreadToken(tok);
       x.push(asObj(this.readObject()));
     }
@@ -714,6 +720,7 @@ export class Reader {
         for (let i = 0; i < n; i++) {
           const id = b.readToken();
           const off = b.readToken();
+          if (id === EOF_TOKEN || off === EOF_TOKEN) break; // /N нь stream-ээс урт — үлдсэн мөр байхгүй
           const idn = id instanceof PInt ? Number(BigInt.asUintN(32, id.v)) : 0;
           if (idn === ptr.id) {
             const o = off instanceof PInt ? Number(off.v) : 0;
