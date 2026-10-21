@@ -1,4 +1,26 @@
 # Changelog
+## 0.30.0 — 2026-10-21
+
+### Tests — pades golden v8 (verify page chain with non-zero object generations)
+
+- **Юу:** golden-ийг Go #40 (`21f8434`, `pades-golden-v8`) руу бэхэлсэн: `input/verify-gen1.pdf` (verify хуудас `6 1 obj`,
+  docId Link `7 1 obj`, URI action `8 2 obj`) ба кейс `verify-gen1`, `page0-verify-gen1`, `page-explicit-verify-gen1`.
+- **Яагаад:** PLACEMENT_SPEC §1a «Object generations» — docId-ийг xref-ийн бодит generation-оор уншина (Swift port 0 гэж
+  таамагладаг байсныг CA репод зассан). TS аль хэдийн зөв — кодын өөрчлөлтгүй.
+- **Хаана:** `scripts/sync-pades-golden.mjs` (`GO_SDK_COMMIT`), `test/fixtures/pades/golden/`, `src/pades/assets/*.ts`
+  (зөвхөн үүсгэсэн толгойн commit).
+- **Шалгасан:** `npm run golden:check`; `test/pades-golden.test.ts` + `test/pades-placement.test.ts` — 36 кейс байт-ижил.
+### Added — pades `prepare` `verifyPagePosition: "last" | "first"` (golden v9)
+
+- **Юу:** `verifyPagePosition: "first"` — баталгаажуулах (QR) хуудас үндсэн `/Pages /Kids`-ийн эхэнд орж баримтын 1-р хуудас
+  болно; анхдагч `"last"` өмнөхтэй байт-ижил; бусад утга `REQUEST_INVALID`. `appearance.page`, `suggestPlacement`,
+  `placement.page` оролтын PDF-ийн хуудсаар (нэмэгдсэн хуудсыг тоолохгүй — SDK дотроо +1 болгож зурна).
+- **Яагаад:** портал/desktop-д «Баталгаажуулалтын хуудсыг эхэнд» сонголт (Go v0.15.0, PAGE_SPEC §8a, PLACEMENT_SPEC §1b).
+- **Хаана:** `src/pades.ts` (`PadesPrepareOptions.verifyPagePosition`), `src/pades/page/page.ts` (`appendVerifyPage(…, first)`),
+  `test/pades-golden.test.ts` (manifest-ийн түлхүүр), `scripts/sync-pades-golden.mjs` → Go `9e76888` (`pades-golden-v9`),
+  `test/fixtures/pades/golden/`, README.
+- **Шалгасан:** `npm run lint`; `npm test` — golden (v9-ийн 8 `vpfirst-*` кейс багтсан) Go-той байт-ижил.
+
 ## 0.29.2 — 2026-10-21
 
 ### Changed
