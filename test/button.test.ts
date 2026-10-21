@@ -66,9 +66,9 @@ test("товч: брэнд лого + текст, aria-haspopup; lang=en", () =>
   assert.ok((logo.querySelector("path")!.getAttribute("d") ?? "").length > 1000);
   assert.equal(btn.querySelector("img"), null, "inline SVG — data URI зураг үгүй");
   assert.equal(btn.getAttribute("aria-label"), "eID-ээр нэвтрэх", "уншигчийн нэр бүтэн, зайгүй");
-  // Лого «e-ID» гэж бичигддэг — харагдах текстэд «eID» давтагдахгүй: [лого]-ээр нэвтрэх.
+  // Лого «e-ID» гэж бичигддэг — харагдах текстэд «eID» давтагдахгүй: [лого] нэвтрэх.
   const visible = () => Array.from(btn.querySelectorAll(".brand > span")).map((n) => n.textContent).join("|");
-  assert.equal(visible(), "-ээр нэвтрэх");
+  assert.equal(visible(), "нэвтрэх");
   assert.equal(btn.querySelector(".brand")!.firstElementChild!.tagName.toLowerCase(), "svg", "лого эхэнд");
   b.setAttribute("lang", "en");
   assert.equal(btn.getAttribute("aria-label"), "Log in with eID");
@@ -82,7 +82,7 @@ test("товч: label атрибут (шууд шинэчлэгдэнэ), анх
   const btn = sr.querySelector("button.trigger")!;
   assert.equal(btn.getAttribute("part"), "button");
   assert.equal(btn.querySelector("svg.logo")!.getAttribute("part"), "icon");
-  assert.equal(btn.querySelector("span[part=label]")!.textContent, "-ээр нэвтрэх");
+  assert.equal(btn.querySelector("span[part=label]")!.textContent, "нэвтрэх");
   assert.equal(btn.getAttribute("aria-label"), "eID-ээр нэвтрэх", "лого + анхдагч текст → бүтэн нэр");
   b.setAttribute("label", "Нэвтрэх");
   assert.equal(btn.textContent, "Нэвтрэх");
@@ -241,7 +241,7 @@ test("desktop: ачаалж байна → QR (svg) + VC + алхмууд → OK
   assert.equal(dlg.getAttribute("aria-labelledby"), "eid-title");
   assert.equal(h2.getAttribute("aria-label"), "eID-ээр нэвтрэх", "нэр бүтэн, зайгүй");
   assert.ok(h2.querySelector(".brand > svg.logo"), "лого гарчиг дотор");
-  assert.equal(h2.querySelector(".brand > span")!.textContent, "-ээр нэвтрэх");
+  assert.equal(h2.querySelector(".brand > span")!.textContent, "нэвтрэх");
   assert.match(text(), /Ачаалж байна/);
   await until(() => !!sr.querySelector(".qr svg path"));
   assert.match(text(), /Баталгаажуулах код/);
