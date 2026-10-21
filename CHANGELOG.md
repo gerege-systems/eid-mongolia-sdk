@@ -1,4 +1,11 @@
 # Changelog
+## 0.29.2 — 2026-10-21
+
+### Changed
+- `<eid-login-button>`: лого «e-ID» өөрөө зураастай тул ард нь «-ээр» гэж дахин зураас тавихаа больсон — товч
+  болон цонхны гарчиг `[лого] нэвтрэх`. Уншигчийн нэр хэвээр («eID-ээр нэвтрэх», aria-label); en хэвээр
+  (`Log in with [лого]`). Хаана: `src/button.ts`. Шалгасан: `npm test`, Chromium screenshot + ariaSnapshot.
+
 ## 0.29.1 — 2026-10-21
 
 ### Fixed
