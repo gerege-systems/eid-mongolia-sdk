@@ -19,6 +19,8 @@ const T = {
   mn: {
     button: "eID-ээр нэвтрэх",
     title: "eID-ээр нэвтрэх",
+    // Лого «e-ID» гэж бичигддэг тул логотой үед «eID»-г давтахгүй: [лого]-ээр нэвтрэх.
+    withLogo: ["", "-ээр нэвтрэх"],
     close: "Хаах",
     loading: "Ачаалж байна",
     qrAlt: "Нэвтрэх QR код — утсан дээрх eID Mongolia аппаар уншуулна",
@@ -58,6 +60,7 @@ const T = {
   en: {
     button: "Log in with eID",
     title: "Log in with eID",
+    withLogo: ["Log in with ", ""],
     close: "Close",
     loading: "Loading",
     qrAlt: "Login QR code — scan it with the eID Mongolia app on your phone",
@@ -219,6 +222,8 @@ h2, p, ol { margin: 0; }
 .btn-outline:hover { background: var(--_eid-bg-muted); }
 .btn-sm { width: auto; min-height: 36px; padding: 0 14px; font-size: 0.8125rem; }
 .trigger { width: auto; }
+.brand { display: inline-flex; align-items: center; gap: 6px; }
+.brand.tight { gap: 2px; }
 .logo { display: block; flex: none; height: 16px; width: auto; aspect-ratio: 3840 / 1372; fill: var(--_eid-logo); }
 .trigger.icon-only .logo { height: 12px; }
 .trigger.icon-only { width: 44px; height: 44px; padding: 0; }
@@ -403,14 +408,29 @@ export class EidLoginButton extends Base {
         console.warn('<eid-login-button>: icon="none" ба текстгүй (variant="icon" эсвэл label="") — анхдагч текстийг харуулав.');
       }
     }
+    // Анхдагч текст + лого → лого «eID»-г орлоно: [лого]-ээр нэвтрэх.
+    const brand = hasIcon && !iconOnly && !label;
     const nodes: Node[] = [];
-    if (hasIcon) nodes.push(logo({ part: "icon" }));
-    if (!iconOnly) nodes.push(el("span", { part: "label" }, text));
+    if (brand) nodes.push(this.brand({ part: "icon" }, { part: "label" }));
+    else {
+      if (hasIcon) nodes.push(logo({ part: "icon" }));
+      if (!iconOnly) nodes.push(el("span", { part: "label" }, text));
+    }
     this.trigger.replaceChildren(...nodes);
     this.trigger.classList.toggle("icon-only", iconOnly);
     const aria = this.getAttribute("aria-label") || (iconOnly ? text : null);
     if (aria) this.trigger.setAttribute("aria-label", aria);
     else this.trigger.removeAttribute("aria-label");
+  }
+
+  /** Лого + i18n-ийн өмнөх/дараах текст. Лого aria-hidden тул уншигчид sr-only «eID» — нэр нь бүтэн «eID-ээр нэвтрэх». */
+  private brand(logoAttrs: Record<string, string> = {}, textAttrs: Record<string, string> = {}): HTMLElement {
+    const [pre, post] = this.t.withLogo;
+    const box = el("span", { class: post && !pre ? "brand tight" : "brand" });
+    if (pre) box.append(el("span", textAttrs, pre));
+    box.append(logo(logoAttrs), el("span", { class: "sr-only" }, "eID"));
+    if (post) box.append(el("span", textAttrs, post));
+    return box;
   }
 
   disconnectedCallback(): void {
@@ -466,7 +486,9 @@ export class EidLoginButton extends Base {
     const head = el("div", { class: "head" });
     const x = el("button", { type: "button", class: "x", "aria-label": this.t.close }, "×");
     x.addEventListener("click", () => this.close());
-    head.append(logo(), el("h2", { id: "eid-title" }, this.t.title), x);
+    const h2 = el("h2", { id: "eid-title" });
+    h2.append(this.brand());
+    head.append(h2, x);
     this.body = el("div");
     this.live = el("p", { class: "sr-only", "aria-live": "polite" });
     dlg.append(head, this.body, this.live);
