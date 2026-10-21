@@ -369,3 +369,66 @@ test("defaultStampPage — skips only the document's own verify pages", () => {
   cases.push(["byte-different URI", page("[4 0 R]"), uri(docA) + "/", 1, 1]);
   for (const [name, doc, u, p, n] of cases) assert.deepEqual(I.defaultStampPage(doc, u), { page: p, n }, name);
 });
+
+// ── suggestPlacement (PLACEMENT_SPEC §6b; Go TestSuggestPlacementErrors) — the public API in dist ──
+
+test("suggestPlacement — checks shared with prepare, in order", async () => {
+  const pades = await import("../dist/pades.js");
+  const rd = (f: string): Uint8Array => new Uint8Array(readFileSync(new URL(f, G)));
+  const table = rd("input/table-bottom.pdf");
+  const enc = rd("input/encrypted.pdf");
+  const a = { x: 340, y: 36, width: 220, height: 64 };
+  const cases: [string, Uint8Array, typeof a & { page?: number; exact?: boolean }, string][] = [
+    ["not-pdf", Buffer.from("hello"), a, "PDF_INVALID"],
+    ["too-large", new Uint8Array(10 << 20), a, "PDF_TOO_LARGE"],
+    ["encrypted", enc, a, "PDF_ENCRYPTED"],
+    // appearance values come before encryption (§6b order)
+    ["encrypted-bad-appearance", enc, { ...a, width: -1 }, "REQUEST_INVALID"],
+    ["page-beyond", table, { ...a, page: 2 }, "REQUEST_INVALID"],
+    ["outside", table, { ...a, x: 400, exact: true }, "REQUEST_INVALID"],
+    ["outside-auto", table, { ...a, x: 400 }, "REQUEST_INVALID"],
+    ["negative", table, { ...a, x: -1 }, "REQUEST_INVALID"],
+    ["zero-size", table, { ...a, x: 1, width: 0 }, "REQUEST_INVALID"],
+    ["exact-not-boolean", table, { ...a, exact: "yes" as unknown as boolean }, "REQUEST_INVALID"],
+  ];
+  for (const [name, doc, ap, code] of cases) {
+    await assert.rejects(
+      () => pades.suggestPlacement(doc, ap),
+      (e: unknown) => e instanceof pades.PadesError && e.code === code,
+      `${name}: ${code}`,
+    );
+  }
+  const sug = await pades.suggestPlacement(table, { ...a, exact: true });
+  assert.deepEqual(
+    { status: sug.status, x: sug.x, y: sug.y, pageCount: sug.pageCount, pages: sug.pages.length },
+    { status: "overlap", x: 340, y: 36, pageCount: 1, pages: 1 },
+  );
+});
+
+test("suggestPlacement — a page with unreadable geometry is {0, 0}; the stamp page must be readable", async () => {
+  const pades = await import("../dist/pades.js");
+  const doc = fxPDF([
+    s("<< /Type /Catalog /Pages 2 0 R >>"),
+    s("<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>"),
+    s("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Rotate 45 >>"),
+    s("<< /Type /Page /Parent 2 0 R /CropBox [10 20 605 862] /MediaBox [0 0 612 892] /Rotate 90 >>"),
+  ]);
+  const a = { x: 36, y: 36, width: 220, height: 64 };
+  const sug = await pades.suggestPlacement(doc, a);
+  assert.deepEqual(sug, {
+    page: 2,
+    x: 36,
+    y: 36,
+    width: 220,
+    height: 64,
+    status: "requested",
+    pageWidth: 842,
+    pageHeight: 595,
+    pageCount: 2,
+    pages: [{ width: 0, height: 0 }, { width: 842, height: 595 }],
+  });
+  await assert.rejects(
+    () => pades.suggestPlacement(doc, { ...a, page: 1 }),
+    (e: unknown) => e instanceof pades.PadesError && e.code === "REQUEST_INVALID",
+  );
+});

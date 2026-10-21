@@ -59,7 +59,7 @@ function docMDPP1(sig: Value): boolean {
 }
 
 /** Сүүлийн revision-ий xref-ийн объект бүрээс /ByteRange ба /Contents-тэй толь + DocMDP P=1. */
-function scanSignatures(doc: Uint8Array): { sigs: SigDict[]; locked: boolean; hasDSS: boolean } {
+export function scanSignatures(doc: Uint8Array): { sigs: SigDict[]; locked: boolean; hasDSS: boolean } {
   const r = new Reader(doc);
   const root = r.trailerValue().key("Root");
   if (root.kind() !== "dict") throw new PdfError("Catalog алга");

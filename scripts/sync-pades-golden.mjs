@@ -16,8 +16,8 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const GO_SDK_REPO = "https://github.com/gerege-systems/eid-mongolia-sdk-go";
-// Go #35 (golden v6: appearance page 0 skips verify pages — PLACEMENT_SPEC §1a).
-export const GO_SDK_COMMIT = "874ae48119d39898f7b0d719b7cc29b6feb51e64";
+// Go #39 (golden v7: appearance.exact + SuggestPlacement — PLACEMENT_SPEC §6a/§6b; v0.14.0).
+export const GO_SDK_COMMIT = "247c9641e7f48a01705a6210301f749b5c5f08cc";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const check = process.argv.includes("--check");
