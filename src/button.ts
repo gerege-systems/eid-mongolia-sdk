@@ -418,17 +418,18 @@ export class EidLoginButton extends Base {
     }
     this.trigger.replaceChildren(...nodes);
     this.trigger.classList.toggle("icon-only", iconOnly);
-    const aria = this.getAttribute("aria-label") || (iconOnly ? text : null);
+    // Лого aria-hidden ба flex item-уудын хооронд accname зай оруулдаг тул нэрийг бүтнээр нь өгнө.
+    const aria = this.getAttribute("aria-label") || (iconOnly || brand ? text : null);
     if (aria) this.trigger.setAttribute("aria-label", aria);
     else this.trigger.removeAttribute("aria-label");
   }
 
-  /** Лого + i18n-ийн өмнөх/дараах текст. Лого aria-hidden тул уншигчид sr-only «eID» — нэр нь бүтэн «eID-ээр нэвтрэх». */
+  /** Лого + i18n-ийн өмнөх/дараах текст. Лого aria-hidden — дуудагч бүтэн нэрийг aria-label-аар өгнө. */
   private brand(logoAttrs: Record<string, string> = {}, textAttrs: Record<string, string> = {}): HTMLElement {
     const [pre, post] = this.t.withLogo;
     const box = el("span", { class: post && !pre ? "brand tight" : "brand" });
     if (pre) box.append(el("span", textAttrs, pre));
-    box.append(logo(logoAttrs), el("span", { class: "sr-only" }, "eID"));
+    box.append(logo(logoAttrs));
     if (post) box.append(el("span", textAttrs, post));
     return box;
   }
@@ -486,7 +487,7 @@ export class EidLoginButton extends Base {
     const head = el("div", { class: "head" });
     const x = el("button", { type: "button", class: "x", "aria-label": this.t.close }, "×");
     x.addEventListener("click", () => this.close());
-    const h2 = el("h2", { id: "eid-title" });
+    const h2 = el("h2", { id: "eid-title", "aria-label": this.t.title });
     h2.append(this.brand());
     head.append(h2, x);
     this.body = el("div");
