@@ -557,7 +557,7 @@ DSS-д), Adobe / EU DSS-д «LTV enabled», баталгаажуулах (QR) х
 
 | Функц | Хаана | Тайлбар |
 |---|---|---|
-| `prepare(pdf, { signerCert, claimedRole?, verifyPage?, fileName?, lang?, docId?, appearance?, … })` | браузер / Node | `{ dtbs, digest, docId, state, placement? }` — сүлжээгүй |
+| `prepare(pdf, { signerCert, claimedRole?, verifyPage?, verifyPagePosition?, fileName?, lang?, docId?, appearance?, … })` | браузер / Node | `{ dtbs, digest, docId, state, placement? }` — сүлжээгүй |
 | `suggestPlacement(pdf, appearance)` | браузер / Node | гарын үсэггүйгээр тэмдгийн байршил + хуудасны хэмжээ (урьдчилан харах, 0.29.0+) — сүлжээгүй |
 | `eid.signPdfDigest({ dtbs, fileName, signer, flow?, onBehalfOf? })` | RP backend | DTBS-д гарын үсгийн session (push эсвэл device-link) |
 | `complete(state, signature)` | браузер / Node | TSA + OCSP/CRL → `{ pdf, cms, docId, outSha256, inSha256, hasPage, pageSha256, … }` |
@@ -672,6 +672,17 @@ const s = await suggestPlacement(pdfBytes, { x: 340, y: 36, width: 220, height: 
 // … иргэн тэмдгийг preview дээр чирнэ → { page, x, y } (pt, зүүн доод эх) …
 const p = await prepare(pdfBytes, { signerCert, verifyPage: true, fileName: "Гэрээ №12.pdf",
   appearance: { page, x, y, width: s.width, height: s.height, exact: true } });
+```
+
+**Баталгаажуулах хуудсыг эхэнд (0.30.0+).** `verifyPagePosition: "first"` — QR хуудас баримтын 1-р хуудас болно (анхдагч
+`"last"` — төгсгөлд, өмнөхтэй байт-ижил; бусад утга `REQUEST_INVALID`). Хуудас нэмэгдэх үед л (гарын үсэггүй баримт,
+`verifyPage: true`) нөлөөтэй. `appearance.page`, `suggestPlacement`, `placement.page` үргэлж **оролтын** PDF-ийн хуудсаар
+тоологдоно — нэмэгдсэн хуудсыг тоолохгүй, тиймээс preview-ийн хуудасны дугаарыг шууд өгнө. Дүрэм: `PAGE_SPEC.md` §8a,
+`PLACEMENT_SPEC.md` §1b.
+
+```ts
+const p = await prepare(pdfBytes, { signerCert, verifyPage: true, verifyPagePosition: "first", fileName: "Гэрээ №12.pdf",
+  appearance: { page: 2, x: 340, y: 36, width: 220, height: 64, exact: true } }); // гаралтын 3-р хуудсан дээр
 ```
 
 ### Зөвхөн Node (backend бүгдийг хийнэ)

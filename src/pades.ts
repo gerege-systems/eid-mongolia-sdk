@@ -118,6 +118,12 @@ export interface PadesPrepareOptions {
   docId?: string;
   /** Баталгаажуулах (QR) хуудас нэмэх — зөвхөн гарын үсэггүй баримтын эхний гарын үсэгт. */
   verifyPage?: boolean;
+  /**
+   * Where the verify page goes when it is added (`verifyPage` on an unsigned document): `"last"` (default) or `"first"`
+   * (it becomes page 1). `appearance.page`, {@link suggestPlacement} and `placement.page` always count the pages of the
+   * input PDF as given — never the added page (PAGE_SPEC.md §8a, PLACEMENT_SPEC.md §1b). Other values → REQUEST_INVALID.
+   */
+  verifyPagePosition?: "last" | "first";
   /** Хуудасны хэл: `mn` (анхдагч) | `en`. */
   lang?: "mn" | "en";
   /** Баримтын нэр — `verifyPage` үед заавал (≤ 120 тэмдэгт). */
@@ -396,6 +402,11 @@ export async function prepare(pdf: Uint8Array | ArrayBuffer, opts: PadesPrepareO
   if (opts.lang !== undefined && (opts.lang as string) !== "" && opts.lang !== "mn" && opts.lang !== "en") {
     throw new PadesError("REQUEST_INVALID", "lang: mn | en");
   }
+  const pos = opts.verifyPagePosition as string | undefined;
+  if (pos !== undefined && pos !== "" && pos !== "last" && pos !== "first") {
+    throw new PadesError("REQUEST_INVALID", "verifyPagePosition: last | first");
+  }
+  const first = pos === "first";
   checkAppearance(opts);
   const now = opts.signingTime ?? new Date();
   if (Number.isNaN(now.getTime())) throw new PadesError("REQUEST_INVALID", "signingTime буруу Date");
@@ -437,7 +448,7 @@ export async function prepare(pdf: Uint8Array | ArrayBuffer, opts: PadesPrepareO
         tsaName: PAGE_TSA_NAME,
         provider: PAGE_PROVIDER,
         lang: opts.lang ?? "",
-      });
+      }, first);
     } catch (e) {
       throw new PadesError("PDF_INVALID", "PDF задарсангүй (хуудас нэмж чадсангүй)", { cause: e });
     }
@@ -447,7 +458,8 @@ export async function prepare(pdf: Uint8Array | ArrayBuffer, opts: PadesPrepareO
   const vis = opts.appearance ? visibleSpec(doc, opts, name, now, docId, pc.revIndex) : undefined;
   let prep: Awaited<ReturnType<typeof prepareSignature>>;
   try {
-    prep = await prepareSignature(base, now, name, opts.reason ?? "", vis);
+    // vis.page counts the input's pages; a verify page added in front shifts them by one in base (PLACEMENT_SPEC §1b).
+    prep = await prepareSignature(base, now, name, opts.reason ?? "", vis && hasPage && first ? { ...vis, page: vis.page + 1 } : vis);
   } catch (e) {
     if (e instanceof AppearanceError) throw new PadesError("REQUEST_INVALID", `appearance: ${e.message}`, { cause: e });
     throw new PadesError("PDF_INVALID", "PDF-д гарын үсгийн revision бичиж чадсангүй", { cause: e });
