@@ -65,9 +65,15 @@ test("товч: брэнд лого + текст, aria-haspopup; lang=en", () =>
   assert.equal(logo.getAttribute("aria-hidden"), "true");
   assert.ok((logo.querySelector("path")!.getAttribute("d") ?? "").length > 1000);
   assert.equal(btn.querySelector("img"), null, "inline SVG — data URI зураг үгүй");
-  assert.equal(btn.textContent, "eID-ээр нэвтрэх");
+  assert.equal(btn.textContent, "eID-ээр нэвтрэх", "уншигчийн нэр бүтэн (sr-only «eID»)");
+  // Лого «e-ID» гэж бичигддэг — харагдах текстэд «eID» давтагдахгүй: [лого]-ээр нэвтрэх.
+  const visible = () => Array.from(btn.querySelectorAll(".brand > span:not(.sr-only)")).map((n) => n.textContent).join("|");
+  assert.equal(visible(), "-ээр нэвтрэх");
+  assert.equal(btn.querySelector(".brand")!.firstElementChild!.tagName.toLowerCase(), "svg", "лого эхэнд");
   b.setAttribute("lang", "en");
   assert.equal(btn.textContent, "Log in with eID");
+  assert.equal(visible(), "Log in with ");
+  assert.equal(btn.querySelector(".brand")!.lastElementChild!.className, "sr-only", "en: лого төгсгөлд");
   assert.ok(b instanceof EidLoginButton);
 });
 
@@ -76,7 +82,7 @@ test("товч: label атрибут (шууд шинэчлэгдэнэ), анх
   const btn = sr.querySelector("button.trigger")!;
   assert.equal(btn.getAttribute("part"), "button");
   assert.equal(btn.querySelector("svg.logo")!.getAttribute("part"), "icon");
-  assert.equal(btn.querySelector("span")!.getAttribute("part"), "label");
+  assert.equal(btn.querySelector("span[part=label]")!.textContent, "-ээр нэвтрэх");
   assert.equal(btn.hasAttribute("aria-label"), false);
   b.setAttribute("label", "Нэвтрэх");
   assert.equal(btn.textContent, "Нэвтрэх");
@@ -230,6 +236,11 @@ test("desktop: ачаалж байна → QR (svg) + VC + алхмууд → OK
   click();
   const dlg = sr.querySelector('[role="dialog"]')!;
   assert.equal(dlg.getAttribute("aria-modal"), "true");
+  const h2 = sr.querySelector("#eid-title")!;
+  assert.equal(dlg.getAttribute("aria-labelledby"), "eid-title");
+  assert.equal(h2.textContent, "eID-ээр нэвтрэх", "нэр бүтэн (sr-only «eID»)");
+  assert.ok(h2.querySelector(".brand > svg.logo"), "лого гарчиг дотор");
+  assert.equal(h2.querySelector(".brand > span:not(.sr-only)")!.textContent, "-ээр нэвтрэх");
   assert.match(text(), /Ачаалж байна/);
   await until(() => !!sr.querySelector(".qr svg path"));
   assert.match(text(), /Баталгаажуулах код/);
