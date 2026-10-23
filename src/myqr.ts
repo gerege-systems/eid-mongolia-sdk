@@ -260,7 +260,8 @@ function verifyInner(jws: string, jwks: Jwks | null | undefined, exp: QrExpect):
   }
   if (!isObj(c)) throw bad("payload JSON объект биш");
   if (c.iss !== (exp.issuer || DEFAULT_QR_ISSUER)) throw bad("iss таарсангүй");
-  if (!exp.audience || c.aud !== exp.audience) throw bad("aud (RP UUID) таарсангүй");
+  // aud = RP UUID (CA жижиг үсгээр бичнэ) — том/жижиг үсэг ялгахгүй.
+  if (!exp.audience || typeof c.aud !== "string" || c.aud.toLowerCase() !== exp.audience.toLowerCase()) throw bad("aud (RP UUID) таарсангүй");
   if (!exp.sessionId || c.sid !== exp.sessionId) throw bad("sid таарсангүй");
   if (!exp.nonce || c.nonce !== exp.nonce) throw bad("nonce таарсангүй");
   if (typeof c.sub !== "string" || !c.sub) throw bad("sub алга");

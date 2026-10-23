@@ -980,7 +980,7 @@ try {
 `sid` = session, `nonce` = таны nonce (өгөөгүй бол SDK-ийн rpChallenge), `iat` ≤ одоо+60 с ба ≥ одоо−10 мин,
 `attrs` ∪ `unavailable` = хүссэн аттрибутууд яг (илүү/дутуу → татгалзана), аттрибут бүрийн төрөл (bool, E.164,
 YYYY-MM-DD, {surname, givenName}). Токен нэг удаагийн, 120 с; хариунд гэрчилгээ, person блок, иргэний дугаар
-(`civil_id` хүсээгүй бол) ирэхгүй. `sub` — энэ RP-д зориулсан тогтмол pairwise id. `qr` тохиргоо (`jwksUrl`, `issuer`, `jwksCacheTtlMs`, `maxAgeMs`) — тест орчинд л. Хадгалсан JWS-ийг
+(`civil_id` хүсээгүй бол) ирэхгүй. `sub` — энэ RP-д зориулсан тогтмол pairwise id. CA-ийн бусад код (`code`): 400 `REQUEST_INVALID` (үл мэдэгдэх талбар ч), 403 `PERMISSION_DENIED` / `RP_REQUIRED`, 429 `RATE_LIMITED`, 503 `QR_UNAVAILABLE` (түр), 410 `QR_SUBJECT_GONE` (ховор). `aud` том/жижиг үсэг ялгахгүй тулгана (CA жижиг үсгээр бичнэ). `qr` тохиргоо (`jwksUrl`, `issuer`, `jwksCacheTtlMs`, `maxAgeMs`) — тест орчинд л. Хадгалсан JWS-ийг
 сүлжээгүй дахин шалгах: `verifyQrPresentation(jws, jwks, expect)`.
 
 ## 4. QR ба ижил төхөөрөмж — device link v3
