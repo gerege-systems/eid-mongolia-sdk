@@ -156,7 +156,13 @@ test("appearance images — оролтын шалгалт (REQUEST_INVALID), а�
     return im;
   };
   const b64 = (b: Uint8Array) => Buffer.from(b).toString("base64");
-  // Go TestAppearanceImageInput-ийн 12 тохиолдол + TS-ийн оролтын хэлбэр (бутархай, base64).
+  // Go fdictAlpha: FDICT + DICTID 1 (хоосон толь) — §6.1 татгалзана.
+  const fdictAlpha = (z: Uint8Array): Uint8Array => {
+    let flg = 0xc0 | 0x20;
+    flg |= (31 - ((z[0]! * 256 + flg) % 31)) % 31;
+    return Buffer.concat([Buffer.of(z[0]!, flg, 0, 0, 0, 1), z.subarray(2)]);
+  };
+  // Go TestAppearanceImageInput-ийн 13 тохиолдол + TS-ийн оролтын хэлбэр (бутархай, base64).
   const bad: Record<string, pades.PdfImage> = {
     "sha256 том үсэг": mod((im) => (im.sha256 = im.sha256.toUpperCase())),
     "sha256 богино": mod((im) => (im.sha256 = im.sha256.slice(0, 63))),
@@ -170,6 +176,7 @@ test("appearance images — оролтын шалгалт (REQUEST_INVALID), а�
     "alpha дутуу байт": mod((im) => (im.alpha = shortAlpha)),
     "alpha ард хог": mod((im) => (im.alpha = b64(Buffer.concat([Buffer.from(im.alpha, "base64"), Buffer.of(0)])))),
     "alpha > 300 KiB": mod((im) => (im.alpha = b64(new Uint8Array((300 << 10) + 1)))),
+    "alpha FDICT 1": mod((im) => (im.alpha = b64(fdictAlpha(Buffer.from(im.alpha, "base64"))))),
     "өргөн бутархай": mod((im) => (im.width = 480.5)),
     "alpha base64 биш": mod((im) => (im.alpha = im.alpha.slice(0, -1) + "*")),
   };
