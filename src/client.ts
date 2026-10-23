@@ -4,6 +4,7 @@
 //                      клиент талын PAdES-ийн DTBS (sign.pdfDigest / signPdfDigest, registerSignature)
 //   client.organization — иргэний төлөөлөх байгууллагууд
 //   client.person    — иргэний PKI самбар (PKI_READ): гэрчилгээ, төхөөрөмж, үйл ажиллагаа, тоо, хүүхдүүд
+//   client.qr        — «Миний QR» (биечлэн шалгах): иргэний QR → хүссэн аттрибутууд (CA-ийн ES256 presentation)
 //   client.token     — USB токены гэрчилгээ олголт (TOKEN_ISSUE) ба токеноор нэвтрэлт (AUTH)
 //   client.share()   — гарын үсэгтэй файлыг имэйлээр дамжуулах (SIGN; `shareInfo()` — discovery-ийн туг, хязгаар)
 //   client.session   — үр дүн poll хийх (long-poll)
@@ -33,6 +34,7 @@ import { SessionApi } from "./session.js";
 import { OrganizationApi } from "./organization.js";
 import { PersonApi } from "./person.js";
 import { TokenApi } from "./token.js";
+import { QrApi, type QrConfig } from "./myqr.js";
 import { shareFile, shareInfo, type ShareInfo, type ShareInput, type ShareResult } from "./share.js";
 import { ResponseValidator, type TrustConfig } from "./validator.js";
 import type { CertificateLevel, RpCredentials } from "./types.js";
@@ -71,6 +73,8 @@ export interface ClientConfig {
   signSessionTtlMs?: number;
   /** Trust anchor (Root CA) — validator-д. Production-д ЗААВАЛ. */
   trust?: TrustConfig;
+  /** «Миний QR»-ийн presentation шалгалт (JWKS URL, issuer, кэш). Анхдагч = prod CA. */
+  qr?: QrConfig;
 }
 
 /** RP-API-ийн албан ёсны хост (2026-09-28-наас бүх RP, /v3-гүй). */
@@ -112,6 +116,8 @@ export class EidClient {
   readonly organization: OrganizationApi;
   readonly person: PersonApi;
   readonly token: TokenApi;
+  /** «Миний QR» (биечлэн шалгах): parse → start → result. */
+  readonly qr: QrApi;
   readonly session: SessionApi;
   readonly validator: ResponseValidator;
   /** `credentials.rpName` — иргэний утсанд харагдах RP нэр. */
@@ -139,6 +145,15 @@ export class EidClient {
     this.validator = new ResponseValidator(cfg.trust ?? {});
     this.token = new TokenApi(http, cfg.credentials, this.validator);
     this.session = new SessionApi(http);
+    this.qr = new QrApi({
+      http,
+      session: this.session,
+      credentials: cfg.credentials,
+      config: cfg.qr,
+      fetchImpl: cfg.fetchImpl,
+      dispatcher: cfg.dispatcher,
+      timeoutMs: cfg.timeoutMs,
+    });
     this.rpName = cfg.credentials.rpName;
     this.http = http;
   }

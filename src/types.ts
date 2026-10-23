@@ -228,8 +228,19 @@ export interface SessionResult {
   person?: PersonBlock | null;
   /** USB токены гэрчилгээ олголтын session-ий `tokenCertificate` блок (`token.issueCertificate`); бусад урсгалд null. */
   tokenCertificate?: TokenCertSessionBlock | null;
+  /**
+   * «Миний QR» session-ий CA-ийн presentation (`qr.result` шалгана): `jws` (ES256) ба `claims` (payload-ийн хуулбар —
+   * ШАЛГААГҮЙ; итгэхдээ `qr.result` / `verifyQrPresentation`-ийн үр дүнг л хэрэглэ). Бусад урсгалд null.
+   */
+  presentation?: SessionPresentation | null;
   /** Серверийн хариуны түүхий JSON (`parseSessionResult`-ийн оролт) — SDK задлаагүй талбарт. */
   raw?: unknown;
+}
+
+/** QR session-ий `presentation` блок. */
+export interface SessionPresentation {
+  jws: string;
+  claims?: Record<string, unknown>;
 }
 
 /**

@@ -7,6 +7,7 @@ import type { Http } from "./http.js";
 import type {
   OrgResult,
   PersonBlock,
+  SessionPresentation,
   SessionResult,
   SignatureAlgorithmParameters,
   TokenCertSessionBlock,
@@ -61,6 +62,7 @@ export function parseSessionResult(raw: unknown): SessionResult {
     onBehalfOf: parseOrg(r.onBehalfOf),
     person: parsePerson(r.person),
     tokenCertificate: parseTokenCert(r.tokenCertificate),
+    presentation: parsePresentation(r.presentation),
     raw,
   };
 }
@@ -76,6 +78,13 @@ function parsePerson(raw: unknown): PersonBlock | null {
   for (const k of PERSON_STRINGS) if (typeof p[k] === "string" && p[k]) out[k] = p[k] as string;
   if (typeof p.geID === "number" && p.geID !== 0) out.geID = p.geID;
   return Object.keys(out).length ? out : null;
+}
+
+/** `presentation` блок («Миний QR»). jws алга бол null. */
+function parsePresentation(raw: unknown): SessionPresentation | null {
+  const p = asRecord(raw);
+  if (typeof p.jws !== "string" || !p.jws) return null;
+  return { jws: p.jws, ...(p.claims && typeof p.claims === "object" ? { claims: p.claims as Record<string, unknown> } : {}) };
 }
 
 /** `tokenCertificate` блок. status алга бол null. */
