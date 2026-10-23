@@ -8,13 +8,16 @@
   Оролтын шалгалт Go-той ижил `REQUEST_INVALID` (хэмжээ, өнгө, alpha ≤ 300 KiB, хатуу zlib — Adler-32, ард байтгүй, яг
   w·h байт; sha256 жижиг hex). `validatePdf` зургийн объектуудыг PDF-ээс уншсан өнгө/хэмжээ/alpha-аар дахин үүсгэж
   байт-түвшинд тулгана. `complete().images` → `registrationFromCompleted` → `POST /pdf/signatures` `images: [{kind, sha256}]`.
-- **Яагаад:** Go SDK #44 (`79e29f7`)-ийн порт — бүх SDK байт-ижил гаралт.
+- **Яагаад:** Go SDK v0.16.0 (#44)-ийн порт — бүх SDK байт-ижил гаралт.
 - **Хаана:** `src/pades/page/appearance.ts`, `src/pades/pdf/signature.ts`, `src/pades/pdf/inflate.ts`
   (`zlibInflateStrict(…, exact)`), `src/pades/validate/appearance.ts`, `src/pades/state.ts`, `src/pades.ts`, `src/sign.ts`,
-  `src/contract.ts` (`images`), `scripts/sync-pades-golden.mjs` → Go `79e29f7` (`pades-golden-v10`),
+  `src/contract.ts` (`images`), `scripts/sync-pades-golden.mjs` → Go v0.16.0 `81402d6` (`pades-golden-v10`),
   `test/fixtures/pades/golden/`, README.
 - **Шалгасан:** `npm test` — golden v10-ийн 7 `img-*` кейс (5 гаралт + 2 `REQUEST_INVALID`) Go-той байт-ижил, v9-ийн бүх
   кейс хэвээр; `validatePdf` 5 `img-*` гаралт дээр Go `ValidatePDF`-тэй ижил тайлан; оролтын 14 алдааны тохиолдол;
   `npm run lint`, `golden:check`, `size:pades` (gzip 138.1 KB ≤ 300).
-- **Үлдсэн:** CA `POST /v3/pdf/signatures` нь `images`-ийг хүлээн авах ба discovery-д нэмэх — тэр хүртэл `test:contract`
-  (`/pdf/signatures`-ийн талбарууд) улаан, зурагтай бүртгэл CA-д 400.
+- **`IMAGE_MISMATCH`** (409) `PdfRegisterErrorCode` / `PDF_REGISTER_ERROR_CODES`-д — CA `images`-ийг одоогийн хадгалсан
+  зурагтай тулгана (CA прод f604ed2b; discovery `registerErrorCodes`).
+- **alpha FDICT** — FLG-ийн FDICT бит тавигдсан alpha (DICTID = 1 ч) `REQUEST_INVALID` (Go v0.16.0-тэй ижил; тест
+  `alpha FDICT 1`).
+- **Үлдсэн:** Adobe гар шалгалт.

@@ -78,7 +78,7 @@ const isIntIn = (v: unknown, lo: number, hi: number): boolean => Number.isIntege
 
 /**
  * Go core.CheckPDFImage — APPEARANCE_SPEC.md §6.1: 1 ≤ w, h ≤ 1600; colour 0–255; 1 ≤ alpha ≤ 300 KiB; alpha is one zlib
- * stream (Go compress/zlib: no preset dictionary other than DICTID 1, valid Adler-32, no trailing bytes) inflating to
+ * stream (no preset dictionary — the FDICT bit is rejected even with DICTID 1, valid Adler-32, no trailing bytes) inflating to
  * exactly w·h bytes. AppearanceError otherwise.
  */
 export function checkPdfImage(im: PdfImageData): void {
@@ -87,6 +87,7 @@ export function checkPdfImage(im: PdfImageData): void {
   if (!Array.isArray(im.color) || im.color.length !== 3) throw bad("өнгө 0…255");
   for (const c of im.color) if (!isIntIn(c, 0, 255)) throw bad("өнгө 0…255");
   if (!(im.alpha instanceof Uint8Array) || im.alpha.length === 0 || im.alpha.length > MAX_IMAGE_ALPHA_BYTES) throw bad("alpha 1 B…300 KiB");
+  if (im.alpha.length >= 2 && im.alpha[1]! & 0x20) throw bad("alpha preset dictionary (FDICT)");
   let n: number;
   try {
     n = zlibInflateStrict(im.alpha, im.w * im.h, true).length;
