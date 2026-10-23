@@ -143,6 +143,69 @@ test("prepare — appearance: байршил/хэмжээ буруу, багта
   await pades.prepare(done.pdf, { ...base, docId: np.prepare.docId as string, verifyPage: false, appearance: ok });
 });
 
+test("appearance images — оролтын шалгалт (REQUEST_INVALID), анхдагч хэмжээ, stampImage claimedRole-гүй (APPEARANCE_SPEC.md §6)", async () => {
+  const pdf = read(CASE.input);
+  type Ap = pades.PadesAppearance;
+  const cases = M.cases as unknown as { name: string; prepare: { appearance?: Ap } }[];
+  const sigImg = cases.find((c) => c.name === "img-signature")!.prepare.appearance!.signatureImage!;
+  const stampImg = cases.find((c) => c.name === "img-signature-stamp")!.prepare.appearance!.stampImage!;
+  const shortAlpha = cases.find((c) => c.name === "img-bad-alpha")!.prepare.appearance!.signatureImage!.alpha;
+  const mod = (f: (im: pades.PdfImage) => void): pades.PdfImage => {
+    const im = { ...sigImg, color: [...sigImg.color] as [number, number, number] };
+    f(im);
+    return im;
+  };
+  const b64 = (b: Uint8Array) => Buffer.from(b).toString("base64");
+  // Go fdictAlpha: FDICT + DICTID 1 (хоосон толь) — §6.1 татгалзана.
+  const fdictAlpha = (z: Uint8Array): Uint8Array => {
+    let flg = 0xc0 | 0x20;
+    flg |= (31 - ((z[0]! * 256 + flg) % 31)) % 31;
+    return Buffer.concat([Buffer.of(z[0]!, flg, 0, 0, 0, 1), z.subarray(2)]);
+  };
+  // Go TestAppearanceImageInput-ийн 13 тохиолдол + TS-ийн оролтын хэлбэр (бутархай, base64).
+  const bad: Record<string, pades.PdfImage> = {
+    "sha256 том үсэг": mod((im) => (im.sha256 = im.sha256.toUpperCase())),
+    "sha256 богино": mod((im) => (im.sha256 = im.sha256.slice(0, 63))),
+    "өнгө 256": mod((im) => (im.color[1] = 256)),
+    "өнгө сөрөг": mod((im) => (im.color[0] = -1)),
+    "өргөн 1601": mod((im) => (im.width = 1601)),
+    "өндөр 0": mod((im) => (im.height = 0)),
+    "alpha хоосон": mod((im) => (im.alpha = "")),
+    "alpha zlib биш": mod((im) => (im.alpha = b64(new TextEncoder().encode("not zlib")))),
+    "alpha илүү байт": mod((im) => im.height--),
+    "alpha дутуу байт": mod((im) => (im.alpha = shortAlpha)),
+    "alpha ард хог": mod((im) => (im.alpha = b64(Buffer.concat([Buffer.from(im.alpha, "base64"), Buffer.of(0)])))),
+    "alpha > 300 KiB": mod((im) => (im.alpha = b64(new Uint8Array((300 << 10) + 1)))),
+    "alpha FDICT 1": mod((im) => (im.alpha = b64(fdictAlpha(Buffer.from(im.alpha, "base64"))))),
+    "өргөн бутархай": mod((im) => (im.width = 480.5)),
+    "alpha base64 биш": mod((im) => (im.alpha = im.alpha.slice(0, -1) + "*")),
+  };
+  for (const [name, im] of Object.entries(bad)) {
+    await assert.rejects(() => pades.suggestPlacement(pdf, { x: 36, y: 36, width: 0, height: 0, signatureImage: im }), code("REQUEST_INVALID"), name);
+    await assert.rejects(() => pades.prepare(pdf, { ...base, appearance: { x: 36, y: 36, width: 0, height: 0, signatureImage: im } }), code("REQUEST_INVALID"), name);
+  }
+  // Анхдагч хэмжээ (§6.3): width = height = 0.
+  const sizes: [Ap, number, number][] = [
+    [{ x: 36, y: 36, width: 0, height: 0 }, 220, 64],
+    [{ x: 36, y: 36, width: 0, height: 0, signatureImage: sigImg }, 220, 110],
+    [{ x: 36, y: 36, width: 0, height: 0, stampImage: stampImg }, 240, 147.5],
+    [{ x: 36, y: 36, width: 0, height: 0, signatureImage: sigImg, stampImage: stampImg }, 240, 147.5],
+    [{ x: 36, y: 36, width: 300, height: 180, stampImage: stampImg }, 300, 180],
+  ];
+  for (const [a, w, h] of sizes) {
+    const s = await pades.suggestPlacement(pdf, a);
+    assert.deepEqual([s.width, s.height], [w, h]);
+  }
+  assert.deepEqual(pades.DEFAULT_ORG_STAMP_SIZE, { width: 240, height: 147.5 });
+  // stampImage зөвхөн claimedRole-той: suggestPlacement шалгахгүй, prepare REQUEST_INVALID.
+  await assert.rejects(() => pades.prepare(pdf, { ...base, appearance: { x: 340, y: 36, width: 0, height: 0, stampImage: stampImg } }), code("REQUEST_INVALID"));
+  // Хэт жижиг тамгатай дүрслэл (§6.3) → REQUEST_INVALID; зураггүй ижил хэмжээ хүлээн авна.
+  await assert.rejects(
+    () => pades.prepare(pdf, { ...base, claimedRole: "Захирал", appearance: { x: 36, y: 36, width: 120, height: 64, stampImage: stampImg } }),
+    code("REQUEST_INVALID"),
+  );
+});
+
 test("complete — хөтөч: http → https зөвхөн allowlist-д, бусдыг татахгүй", async () => {
   const p = await pades.prepare(read(CASE.input), { ...base, fileName: CASE.prepare.fileName as string, lang: "mn" });
   const sig = Buffer.from(CASE.expect.signature!, "hex");

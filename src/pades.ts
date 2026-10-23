@@ -21,7 +21,7 @@ import { LTVError, collectLTVWithWait, timestampToken } from "./pades/ltv.js";
 import { checkStructure } from "./pades/pdf/nesting.js";
 import { CertificateRevokedError } from "./pades/revocation.js";
 import { MAX_INPUT_BYTES } from "./pades/limits.js";
-import { AppearanceError, defaultStampPage, round100, type Visible } from "./pades/page/appearance.js";
+import { AppearanceError, checkPdfImage, defaultStampPage, round100, type PdfImageData, type Visible } from "./pades/page/appearance.js";
 import { appendVerifyPage } from "./pades/page/page.js";
 import { appendDSS } from "./pades/pdf/dss.js";
 import { embedCMS, PlaceholderOverflowError, prepareSignature, signatureContents } from "./pades/pdf/signature.js";
@@ -139,6 +139,9 @@ export interface PadesPrepareOptions {
  * `x, y` нь хүссэн байрлал: тэнд хуудасны агуулга байвал дүрслэл чөлөөт зай руу шилжинэ (PLACEMENT_SPEC.md) — эцсийн
  * байрлал {@link PadesPrepared.placement}-д. `exact: true` бол яг энд зурна (шилжүүлэхгүй, §6a). Урьдчилан харах /
  * координат хөрвүүлэхэд {@link suggestPlacement}.
+ *
+ * `width` ба `height` хоёулаа 0 бол анхдагч хэмжээ (APPEARANCE_SPEC.md §6.3, 0.31.0+): зураггүй 220 × 64, `signatureImage`-тэй
+ * 220 × 110, `stampImage`-тэй (гарын үсэгтэй/үгүй) 240 × 147.5 — {@link DEFAULT_STAMP_SIZE} г.м.
  */
 export interface PadesAppearance {
   /**
@@ -161,6 +164,72 @@ export interface PadesAppearance {
    * false / absent (default) = the rect is only the preferred spot. Not written into the PDF. Since 0.29.0.
    */
   exact?: boolean;
+  /**
+   * The signer's handwritten-signature image (CA: `GET /v3/person/etsi/{etsi}/signature-image`) drawn inside the stamp
+   * (APPEARANCE_SPEC.md §6). Absent = none (byte-identical to the stamp without images). Since 0.31.0.
+   */
+  signatureImage?: PdfImage;
+  /**
+   * The organization's stamp image (CA: `representations[].stampImage`); only with `claimedRole` (onBehalfOf), else
+   * `REQUEST_INVALID` in {@link prepare}. The round stamp overlaps the box top-right and sticks out above it —
+   * `width`/`height` are the whole widget rect (APPEARANCE_SPEC.md §6.3). Since 0.31.0.
+   */
+  stampImage?: PdfImage;
+}
+
+/**
+ * A "PDF image" as the CA serves it (Go `pades.PDFImage`, APPEARANCE_SPEC.md §6.1): one ink colour + an 8-bit alpha
+ * channel. The SDK writes `alpha` into the PDF verbatim (/SMask, /FlateDecode) — nothing is compressed at runtime, so
+ * every SDK writes the same bytes. Not a PNG.
+ */
+export interface PdfImage {
+  /** px, 1…1600. */
+  width: number;
+  /** px, 1…1600. */
+  height: number;
+  /** Ink colour `[r, g, b]`, 0…255. */
+  color: [number, number, number];
+  /**
+   * Standard base64 of a zlib stream (RFC 1950, no preset dictionary, nothing after the Adler-32) inflating to exactly
+   * `width·height` bytes, rows top-down, no PNG filter bytes; ≤ 300 KiB decoded.
+   */
+  alpha: string;
+  /**
+   * Lowercase hex SHA-256 of the PNG the CA stores; not written into the PDF — carried to the registration
+   * ({@link PadesCompleted.images} → `registrationFromCompleted` → `images`).
+   */
+  sha256: string;
+}
+
+/** One image drawn in a signature's stamp, as registered with the CA (`POST /pdf/signatures` `images`, APPEARANCE_SPEC §6.6). */
+export interface PadesImageRef {
+  kind: "signature" | "stamp";
+  sha256: string;
+}
+
+/**
+ * Default stamp sizes (pt) when `appearance.width` and `height` are both 0 (APPEARANCE_SPEC.md §6.3): without images, with
+ * a signature image, and with a stamp image (with or without a signature image; the height includes the stamp's overflow).
+ */
+export const DEFAULT_STAMP_SIZE = { width: 220, height: 64 } as const;
+export const DEFAULT_SIGNATURE_STAMP_SIZE = { width: 220, height: 110 } as const;
+export const DEFAULT_ORG_STAMP_SIZE = { width: 240, height: 147.5 } as const;
+
+/** Go appearanceSize — width/height, or the default for the images when both are 0. */
+function appearanceSize(a: PadesAppearance): { width: number; height: number } {
+  if (a.width !== 0 || a.height !== 0) return { width: a.width, height: a.height };
+  if (a.stampImage) return DEFAULT_ORG_STAMP_SIZE;
+  if (a.signatureImage) return DEFAULT_SIGNATURE_STAMP_SIZE;
+  return DEFAULT_STAMP_SIZE;
+}
+
+const SHA256_HEX_RE = /^[0-9a-f]{64}$/;
+const BASE64_STD_RE = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
+
+/** PdfImage → page/appearance PdfImageData (alpha base64 → bytes); undefined when absent. */
+function imageData(im: PdfImage | undefined): PdfImageData | undefined {
+  if (im === undefined) return undefined;
+  return { w: im.width, h: im.height, color: im.color, alpha: fromB64(im.alpha) };
 }
 
 export interface PadesPrepared {
@@ -284,6 +353,11 @@ export interface PadesCompleted {
    * тулгана.
    */
   claimedRole: string;
+  /**
+   * The images drawn in this signature's stamp (`appearance.signatureImage`, then `stampImage`) as `{kind, sha256}`;
+   * `registrationFromCompleted` sends them as `images` (APPEARANCE_SPEC.md §6.6). Absent without images. Since 0.31.0.
+   */
+  images?: PadesImageRef[];
 }
 
 const MAX_OUTPUT_BYTES = 10 << 20;
@@ -408,6 +482,9 @@ export async function prepare(pdf: Uint8Array | ArrayBuffer, opts: PadesPrepareO
   }
   const first = pos === "first";
   checkAppearance(opts);
+  if (opts.appearance?.stampImage && !opts.claimedRole) {
+    throw new PadesError("REQUEST_INVALID", "appearance: stampImage зөвхөн claimedRole (onBehalfOf)-той");
+  }
   const now = opts.signingTime ?? new Date();
   if (Number.isNaN(now.getTime())) throw new PadesError("REQUEST_INVALID", "signingTime буруу Date");
   // Go: секундээс доош хэсэг /M-д орохгүй (формат секундээр).
@@ -484,6 +561,7 @@ export async function prepare(pdf: Uint8Array | ArrayBuffer, opts: PadesPrepareO
     hasPage,
     pageSha256: pageHex,
     claimedRole: role,
+    images: prepImages(opts.appearance),
     preparedSha256: toHex(await sha256(prep.pdf)),
     pdf: prep.pdf,
   });
@@ -509,6 +587,27 @@ function checkAppearance(o: Pick<PadesPrepareOptions, "appearance" | "claimedRol
   if (a.exact !== undefined && typeof a.exact !== "boolean") throw bad("exact: boolean");
   const role = o.claimedRole ?? "";
   if (role !== "" && /[\p{Cc}\p{Cf}\p{Cs}]/u.test(role)) throw bad("claimedRole-д удирдах тэмдэгт");
+  // APPEARANCE_SPEC.md §6.1 (golden v10) — before the PDF is parsed, in suggestPlacement too.
+  for (const [name, im] of [["signatureImage", a.signatureImage], ["stampImage", a.stampImage]] as const) {
+    if (im === undefined) continue;
+    if (im === null || typeof im !== "object") throw bad(`${name}: объект`);
+    if (typeof im.sha256 !== "string" || !SHA256_HEX_RE.test(im.sha256)) throw bad(`${name}.sha256: жижиг hex SHA-256`);
+    if (typeof im.alpha !== "string" || !BASE64_STD_RE.test(im.alpha)) throw bad(`${name}.alpha: стандарт base64`);
+    try {
+      checkPdfImage(imageData(im)!);
+    } catch (e) {
+      if (e instanceof AppearanceError) throw bad(`${name}: ${e.message.replace(/^зураг: /, "")}`);
+      throw e;
+    }
+  }
+}
+
+/** Go prepare: Completed.Images — signatureImage, then stampImage (those given); undefined without images. */
+function prepImages(a: PadesAppearance | undefined): PadesImageRef[] | undefined {
+  const out: PadesImageRef[] = [];
+  if (a?.signatureImage) out.push({ kind: "signature", sha256: a.signatureImage.sha256 });
+  if (a?.stampImage) out.push({ kind: "stamp", sha256: a.stampImage.sha256 });
+  return out.length ? out : undefined;
 }
 
 /** Go visibleSpec: хуудас (0 → verify биш сүүлийн — PLACEMENT_SPEC §1a), h100, хэл, огноо (+08), verify URL. */
@@ -526,12 +625,15 @@ function visibleSpec(doc: Uint8Array, o: PadesPrepareOptions, name: string, now:
   if (page > n) throw new PadesError("REQUEST_INVALID", `appearance: page ${page} > хуудасны тоо ${n}`);
   const z = new Date(now.getTime() + 8 * 3600_000);
   const p2 = (v: number): string => String(v).padStart(2, "0");
+  const size = appearanceSize(a);
   return {
     page,
     x: round100(a.x),
     y: round100(a.y),
-    w: round100(a.width),
-    h: round100(a.height),
+    w: round100(size.width),
+    h: round100(size.height),
+    sig: imageData(a.signatureImage),
+    stamp: imageData(a.stampImage),
     name: goTrim(name),
     role: o.claimedRole ?? "",
     lang: a.lang || o.lang || "mn",
@@ -579,8 +681,9 @@ export async function suggestPlacement(pdf: Uint8Array, appearance: PadesAppeara
     const id = docIdFromPage(doc);
     if (id !== "") verifyUri = VERIFY_URL_PREFIX + id;
   }
-  const w = round100(appearance.width);
-  const h = round100(appearance.height);
+  const size = appearanceSize(appearance);
+  const w = round100(size.width);
+  const h = round100(size.height);
   let s: ReturnType<typeof suggestVisible>;
   try {
     s = suggestVisible(doc, verifyUri, appearance.page ?? 0, round100(appearance.x), round100(appearance.y), w, h, appearance.exact === true);
@@ -763,5 +866,6 @@ export async function complete(state: Uint8Array | ArrayBuffer, signature: Uint8
     priorRevisionSha256: priorRev,
     signerCert: cert.raw,
     claimedRole: st.claimedRole,
+    ...(st.images?.length ? { images: st.images.map((x) => ({ ...x })) } : {}),
   };
 }

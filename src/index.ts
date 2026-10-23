@@ -16,6 +16,7 @@ export {
   type RegisterSignatureResult,
   type CompletedForRegistration,
   type PriorSignature,
+  type PdfSignatureImage,
   registrationFromCompleted,
   buildRegisterBody,
 } from "./sign.js";
