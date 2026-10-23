@@ -181,6 +181,8 @@ export type {
   OrgResult,
   Representation,
   RepresentationsResponse,
+  EidImage,
+  PdfImage,
   PersonBlock,
   TokenCertStatus,
   TokenCertSessionBlock,
