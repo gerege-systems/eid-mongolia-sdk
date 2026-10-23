@@ -145,6 +145,13 @@ test("pades golden — Go reference-тэй байт-ижил (prepare + complete
     assert.deepEqual(r.priorRevisionSha256, prior, `${c.name}: priorRevisionSha256`);
     assert.equal(r.inSha256, e.inputSha256);
     assert.equal(r.docId, e.docId);
+    // APPEARANCE_SPEC.md §6.6 (golden v10): images → complete().images (signature, then stamp); none → absent.
+    const ap = c.prepare.appearance;
+    const imgs = [
+      ...(ap?.signatureImage ? [{ kind: "signature", sha256: ap.signatureImage.sha256 }] : []),
+      ...(ap?.stampImage ? [{ kind: "stamp", sha256: ap.stampImage.sha256 }] : []),
+    ];
+    assert.deepEqual(r.images, imgs.length ? imgs : undefined, `${c.name}: images`);
     outputs.set(c.name, r.pdf);
     n++;
   }
@@ -162,6 +169,10 @@ test("pades golden — Go reference-тэй байт-ижил (prepare + complete
   }
   assert.ok(n >= 16, "golden case цөөн");
   assert.ok(M.cases.filter((c) => c.prepare.appearance).length >= 11, "харагдах golden case цөөн");
+  // Golden v10: image cases (APPEARANCE_SPEC.md §6).
+  for (const name of ["img-signature", "img-signature-stamp", "img-stamp-only", "img-rotated90", "img-second", "img-bad-alpha", "img-stamp-no-role"]) {
+    assert.ok(M.cases.some((c) => c.name === name), `golden v10: ${name} алга`);
+  }
   for (const s of ["requested", "moved", "overlap"]) {
     assert.ok(M.cases.some((c) => (c.expect.placement as { status?: string } | undefined)?.status === s), `golden-д placement ${s} алга`);
   }

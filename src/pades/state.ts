@@ -18,6 +18,8 @@ export interface PrepState {
   hasPage: boolean;
   pageSha256: string;
   claimedRole: string;
+  /** Харагдах дүрслэлд шигтгэсэн зургийн PNG sha256 (Go prepState.Images → Completed.images → бүртгэл); байхгүй = зураггүй. */
+  images?: { kind: "signature" | "stamp"; sha256: string }[];
   preparedSha256: string;
   pdf: Uint8Array;
 }
@@ -35,6 +37,7 @@ export function encodeState(s: PrepState): Uint8Array {
   };
   if (s.pageSha256) head.pageSha256 = s.pageSha256;
   if (s.claimedRole) head.claimedRole = s.claimedRole;
+  if (s.images?.length) head.images = s.images.map((x) => ({ kind: x.kind, sha256: x.sha256 }));
   head.preparedSha256 = s.preparedSha256;
   const h = enc.encode(JSON.stringify(head));
   const len = new Uint8Array(4);
@@ -61,6 +64,7 @@ export async function decodeState(b: Uint8Array): Promise<PrepState> {
     hasPage: j.hasPage === true,
     pageSha256: str("pageSha256"),
     claimedRole: str("claimedRole"),
+    images: stateImages(j.images),
     preparedSha256: str("preparedSha256"),
     pdf,
   };
@@ -69,4 +73,16 @@ export async function decodeState(b: Uint8Array): Promise<PrepState> {
     throw new Error("state дутуу");
   }
   return s;
+}
+
+/** state-ийн `images` (Go []eid.PDFSignatureImage): `{kind: signature|stamp, sha256}` бүр; өөр хэлбэр бол алдаа. */
+function stateImages(v: unknown): PrepState["images"] {
+  if (v === undefined || v === null) return undefined;
+  if (!Array.isArray(v)) throw new Error("state images буруу");
+  const out = v.map((x: unknown) => {
+    const o = x as Record<string, unknown> | null;
+    if (!o || (o.kind !== "signature" && o.kind !== "stamp") || typeof o.sha256 !== "string") throw new Error("state images буруу");
+    return { kind: o.kind as "signature" | "stamp", sha256: o.sha256 };
+  });
+  return out.length ? out : undefined;
 }

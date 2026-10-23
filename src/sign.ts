@@ -143,6 +143,19 @@ export interface RegisterSignatureInput {
   onBehalfOf?: string;
   /** Заавал биш (`PNOMN-…`): ирвэл CMS-ийн зурагчийн SERIALNUMBER-тэй тэнцүү (эс бөгөөс 409 `SIGNER_MISMATCH`). */
   signerEtsi?: string;
+  /**
+   * `complete().images` (0.31.0+) — харагдах дүрслэлд шигтгэсэн зураг бүрийн `{kind, sha256}` (pades APPEARANCE_SPEC.md
+   * §6.6): CA зурагчийн/байгууллагын хадгалсан PNG-тэй тулгана. Зураггүй бол илгээхгүй.
+   */
+  images?: PdfSignatureImage[];
+}
+
+/** {@link RegisterSignatureInput.images}-ийн нэг мөр (Go `eid.PDFSignatureImage`). */
+export interface PdfSignatureImage {
+  /** `signature` — иргэний гарын үсгийн зураг; `stamp` — байгууллагын тамганы зураг. */
+  kind: "signature" | "stamp";
+  /** CA-ийн хадгалсан PNG-ийн SHA-256 (64 жижиг hex). */
+  sha256: string;
 }
 
 /** Өмнөх нэг гарын үсгийн хоёр түлхүүр ({@link RegisterSignatureInput.priorSignatures}). */
@@ -168,6 +181,8 @@ export interface CompletedForRegistration {
   priorRevisionSha256?: string[];
   /** `complete().claimedRole` (0.27.0+) — хоосон биш бол `onBehalfOf` заавал. */
   claimedRole?: string;
+  /** `complete().images` (0.31.0+) — байвал `images` болж илгээгдэнэ. */
+  images?: PdfSignatureImage[];
 }
 
 /**
@@ -214,6 +229,7 @@ export function registrationFromCompleted(
   }
   if (extra.onBehalfOf) out.onBehalfOf = extra.onBehalfOf;
   if (extra.signerEtsi) out.signerEtsi = extra.signerEtsi;
+  if (done.images?.length) out.images = done.images.map((x) => ({ kind: x.kind, sha256: x.sha256 }));
   return out;
 }
 
@@ -300,6 +316,12 @@ export function buildRegisterBody(input: RegisterSignatureInput): Record<string,
   if (priorRev.length) body.priorRevisionSha256 = priorRev;
   if (input.onBehalfOf?.trim()) body.onBehalfOf = input.onBehalfOf.trim();
   if (input.signerEtsi?.trim()) body.signerEtsi = input.signerEtsi.trim();
+  if (input.images?.length) {
+    body.images = input.images.map((x, i) => {
+      if (x?.kind !== "signature" && x?.kind !== "stamp") fail(`images[${i}].kind: signature | stamp`);
+      return { kind: x.kind, sha256: hex(`images[${i}].sha256`, x.sha256) };
+    });
+  }
   for (const k of Object.keys(body)) if (!(PDF_SIGNATURE_REGISTER_FIELDS as readonly string[]).includes(k)) fail(`дотоод: үл мэдэгдэх талбар ${k}`);
   return body;
 }

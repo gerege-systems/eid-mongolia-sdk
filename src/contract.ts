@@ -44,7 +44,8 @@ export const RP_ROUTES_UNDISCOVERED: Readonly<Record<string, RpRoute>> = {};
 
 /**
  * `POST /pdf/signatures`-ийн биеийн талбарууд — CA `server/internal/dto/pdf.go` `PDFSignatureRegisterRequest`-ийн JSON
- * tag (CA main d948fdd4, !355). CA `DisallowUnknownFields` тул SDK зөвхөн эдгээрийг илгээнэ. Live discovery-ийн
+ * tag (CA main d948fdd4, !355; `images` — APPEARANCE_SPEC §6.6, Go SDK #44, CA талд нэмэгдэж буй). CA `DisallowUnknownFields`
+ * тул SDK зөвхөн эдгээрийг илгээнэ. Live discovery-ийн
  * `endpoints.pdf.signatures` тайлбартай гэрээний тест тулгана.
  */
 export const PDF_SIGNATURE_REGISTER_FIELDS = [
@@ -62,6 +63,7 @@ export const PDF_SIGNATURE_REGISTER_FIELDS = [
   "priorRevisionSha256",
   "onBehalfOf",
   "signerEtsi",
+  "images",
 ] as const;
 
 /**
