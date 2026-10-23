@@ -34,16 +34,15 @@ export const RP_ROUTES = {
   tokenAuthChallenge: { method: "POST", path: "/token/auth/challenge" },
   tokenAuthVerify: { method: "POST", path: "/token/auth/verify" },
   share: { method: "POST", path: "/share" },
+  /** «Миний QR» (CA гэрээ v1, 2026-10-23). */
+  authQr: { method: "POST", path: "/authentication/qr" },
 } as const satisfies Record<string, RpRoute>;
 
 /**
  * CA-ийн гэрээнд (код + docs) байгаа ч live `/.well-known/eid`-д хараахан жагсаагдаагүй замууд. Гэрээний тест эдгээрийг
  * WARN болгоно (fail биш); discovery-д нэмэгдмэгц {@link RP_ROUTES} руу шилжүүлнэ.
  */
-export const RP_ROUTES_UNDISCOVERED = {
-  /** «Миний QR» (CA гэрээ v1, 2026-10-23). */
-  authQr: { method: "POST", path: "/authentication/qr" },
-} as const satisfies Record<string, RpRoute>;
+export const RP_ROUTES_UNDISCOVERED: Readonly<Record<string, RpRoute>> = {};
 
 /**
  * `POST /pdf/signatures`-ийн биеийн талбарууд — CA `server/internal/dto/pdf.go` `PDFSignatureRegisterRequest`-ийн JSON

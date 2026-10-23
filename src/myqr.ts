@@ -5,7 +5,7 @@
 // (testdata/qr_vectors.json — гурван SDK-д ижил).
 
 import { createPublicKey, verify as cryptoVerify, type KeyObject } from "node:crypto";
-import { RP_ROUTES_UNDISCOVERED, routePath } from "./contract.js";
+import { RP_ROUTES, routePath } from "./contract.js";
 import { randomChallenge } from "./crypto.js";
 import { EidError, SessionFailedError } from "./errors.js";
 import type { Http } from "./http.js";
@@ -357,7 +357,7 @@ export class QrApi {
       signatureProtocolParameters: { rpChallenge },
       ...(nonce ? { nonce } : {}),
     };
-    const r = (await this.d.http.post(routePath(RP_ROUTES_UNDISCOVERED.authQr), body)) as Record<string, unknown>;
+    const r = (await this.d.http.post(routePath(RP_ROUTES.authQr), body)) as Record<string, unknown>;
     const sessionId = typeof r.sessionID === "string" ? r.sessionID : "";
     if (!sessionId) throw new EidError("POST /authentication/qr: sessionID алга");
     const vcRaw = r.vc;

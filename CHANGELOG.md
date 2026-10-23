@@ -1,4 +1,23 @@
 # Changelog
+## 0.33.0 — 2026-10-23
+
+### Added — «Миний QR» (биечлэн шалгах): `eid.qr.parse / start / result`
+
+- **Юу:** `parseQr` (`EIDMN-QR1:<token>` эсвэл токен), `eid.qr.start` → `POST /authentication/qr` (`qr`, `attributes`,
+  ACSP_V2 rpChallenge 32 байт, `nonce`?) → `QrSession{sessionId, vc, nonce, attributes, expiresAt?}` (JSON-оор хадгална),
+  `eid.qr.result` → long-poll + CA-ийн presentation JWS (ES256) шалгалт: JWKS (`qr.jwksUrl`, анхдагч
+  `https://ca.eidmongolia.mn/.well-known/eid-jwks.json`, 1 ц кэш, танихгүй kid → ≥30 с-ийн зайтай дахин татна, RP secret
+  илгээхгүй), iss / aud (RP UUID) / sid / nonce / iat (+60 с, −10 мин) / exp, attrs ∪ unavailable = хүссэн яг, аттрибут
+  бүрийн төрөл → `QrPresentation{sub, attrs (typed), unavailable}`. `verifyQrPresentation` (сүлжээгүй), `eid.qr.verify`.
+  Алдаа: `QrError` (`QR_FORMAT_INVALID`, `QR_ATTRIBUTES_INVALID`, `QR_PRESENTATION_INVALID`, `QR_JWKS_UNAVAILABLE`),
+  404 → `QrTokenInvalidError` (`ApiError`, `code === "QR_TOKEN_INVALID"`), татгалзал `SessionFailedError`.
+  `SessionResult.presentation`. `RP_ROUTES.authQr` (live discovery-д бий, CA !419).
+- **Яагаад:** CA гэрээ «Миний QR» v1 (2026-10-23) — RP SDK тал.
+- **Хаана:** `src/myqr.ts`, `src/client.ts`, `src/session.ts`, `src/types.ts`, `src/errors.ts`, `src/http.ts`,
+  `src/contract.ts`, `src/index.ts`, `test/myqr.test.ts`, `test/fixtures/qr_vectors.json` (Go / .NET-д ижил), README §3h.
+- **Шалгасан:** `npm test` (296 pass), `npm run lint`; vector 11 parse + 30 verify Go/TS/.NET гурвуулаа давсан; stub CA:
+  body, nonce=rpChallenge, JWKS кэш + kid rotation, 404, USER_REFUSED, aud/attr/nonce зөрөх, TIMEOUT, JWKS алга/http.
+
 ## 0.32.0 — 2026-10-23
 
 ### Added — `person.signatureImage()`, `Representation.stampImage` (RP-API зураг)
