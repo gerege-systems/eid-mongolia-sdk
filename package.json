@@ -1,6 +1,6 @@
 {
   "name": "@gerege-systems/eid-mongolia-sdk",
-  "version": "0.32.0",
+  "version": "0.33.0",
   "description": "e-ID Mongolia Relying Party SDK — иргэнээр утсаар нь нэвтрэлт ба хууль ёсны цахим гарын үсэг (RP-API v3, Smart-ID нийцтэй).",
   "license": "MIT",
   "type": "module",
@@ -49,7 +49,7 @@
   },
   "scripts": {
     "build": "tsup src/index.ts src/browser.ts src/pades.ts src/validate.ts --format esm,cjs --dts --clean && tsup src/button.ts --format esm,cjs --dts --tsconfig tsconfig.button.json && tsup src/convert.ts --format esm --dts --tsconfig tsconfig.button.json",
-    "test": "npm run build && node --test --experimental-strip-types test/sdk.test.ts test/portal-gaps.test.ts test/chain.test.ts test/qr.test.ts test/login.test.ts test/button.test.ts test/sign-gaps.test.ts test/session-start.test.ts test/pades-session.test.ts test/pades-golden.test.ts test/pades-placement.test.ts test/pades-unit.test.ts test/convert.test.ts test/share.test.ts test/validate-golden.test.ts test/validate-revisions.test.ts test/validate-env.test.ts test/pades-revocation.test.ts test/pades-encrypt.test.ts test/pades-objstm.test.ts test/validate-fuzz.test.ts test/pades-lexer-loop.test.ts",
+    "test": "npm run build && node --test --experimental-strip-types test/sdk.test.ts test/portal-gaps.test.ts test/chain.test.ts test/qr.test.ts test/myqr.test.ts test/login.test.ts test/button.test.ts test/sign-gaps.test.ts test/session-start.test.ts test/pades-session.test.ts test/pades-golden.test.ts test/pades-placement.test.ts test/pades-unit.test.ts test/convert.test.ts test/share.test.ts test/validate-golden.test.ts test/validate-revisions.test.ts test/validate-env.test.ts test/pades-revocation.test.ts test/pades-encrypt.test.ts test/pades-objstm.test.ts test/validate-fuzz.test.ts test/pades-lexer-loop.test.ts",
     "test:contract": "npm run build && node --experimental-strip-types test/contract.test.ts",
     "lint": "tsc --noEmit && tsc --noEmit -p tsconfig.button.json",
     "golden:check": "node scripts/sync-pades-golden.mjs --check",

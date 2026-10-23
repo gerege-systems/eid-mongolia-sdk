@@ -94,6 +94,31 @@ export {
   verifyPrehashedSignature,
   userChallengeOf,
 } from "./validator.js";
+export {
+  QrApi,
+  QrError,
+  parseQr,
+  verifyQrPresentation,
+  QR_ATTRIBUTES,
+  QR_PREFIX,
+  QR_ERROR_CODES,
+  DEFAULT_QR_ISSUER,
+  DEFAULT_QR_JWKS_URL,
+  DEFAULT_QR_JWKS_CACHE_TTL_MS,
+  DEFAULT_QR_MAX_AGE_MS,
+  QR_CLOCK_SKEW_MS,
+  type QrAttribute,
+  type QrErrorCode,
+  type QrConfig,
+  type QrStartInput,
+  type QrSession,
+  type QrFullName,
+  type QrAttrs,
+  type QrPresentation,
+  type QrExpect,
+  type Jwk,
+  type Jwks,
+} from "./myqr.js";
 export { ocspRevocationChecker, type OcspCheckerOptions } from "./ocsp.js";
 export { parseSubject, type CertSubject } from "./subject.js";
 export {
@@ -146,6 +171,7 @@ export {
   NoSigningCertificateError,
   CertChoiceInvalidError,
   RequestInvalidError,
+  QrTokenInvalidError,
   NetworkError,
   SessionFailedError,
   ValidationError,
@@ -177,6 +203,7 @@ export type {
   DeviceLinkSession,
   SignContext,
   SessionResult,
+  SessionPresentation,
   RpCredentials,
   OrgResult,
   Representation,

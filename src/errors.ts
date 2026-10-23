@@ -107,6 +107,12 @@ export class CertChoiceInvalidError extends ApiError {}
 export class RequestInvalidError extends ApiError {}
 
 /**
+ * 404 `QR_TOKEN_INVALID` («Миний QR», `qr.start`) — токен танигдахгүй, 120 с-ийн хугацаа дууссан эсвэл аль хэдийн
+ * ашиглагдсан. Иргэнээс шинэ QR гаргуулж дахин скан хийнэ.
+ */
+export class QrTokenInvalidError extends ApiError {}
+
+/**
  * CA-ийн түр (давтаж болох) алдааны кодууд — `ApiError.code`. RATE_LIMITED (429 `/pdf/signatures`, `/token/auth/*`),
  * STATE_UNAVAILABLE (503 session start, токен, бүртгэл; Retry-After 5), ISSUANCE_PENDING (503 токены үр дүн, 5).
  * TSA_UNAVAILABLE / LTV_UNAVAILABLE нь CA-ийн биш — клиент талын `PadesError.code` (`/pades`, өөрийн `retryable`).

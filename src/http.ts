@@ -8,6 +8,7 @@ import {
   NoSigningCertificateError,
   CertChoiceInvalidError,
   RequestInvalidError,
+  QrTokenInvalidError,
   NetworkError,
   ResponseTooLargeError,
   maskPath,
@@ -131,7 +132,9 @@ export class Http {
           ? CertChoiceInvalidError
           : code === "REQUEST_INVALID"
             ? RequestInvalidError
-            : ApiError;
+            : code === "QR_TOKEN_INVALID"
+              ? QrTokenInvalidError
+              : ApiError;
     throw new Typed(res.status, text, code, { headers, retryAfterMs });
   }
 }
