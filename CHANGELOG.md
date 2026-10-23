@@ -1,4 +1,18 @@
 # Changelog
+## 0.34.0 — 2026-10-23
+
+### Added — «Миний QR»: нэг удаагийн шалгалт `check`; `result`-ийн хүлээлт дуусахад `QR_PENDING`
+
+- **Юу:** `eid.qr.check(session, { serverPollMs? })` → `{ state: "RUNNING" } | { state: "COMPLETE", presentation }` — нэг `GET /session/{id}` (анхдагч 1 с), COMPLETE+OK бол JWS/JWKS-ээр шалгасан presentation;
+  татгалзсан / CA-ийн TIMEOUT бол SessionFailed. **Зан төлөвийн өөрчлөлт:** `result`-ийн өөрийн хүлээх хугацаа дуусахад
+  (CA-ийн session идэвхтэй хэвээр) өмнө нь SessionFailed `TIMEOUT` байсан бол одоо `QrError` `QR_PENDING` — CA-ийн жинхэнэ `TIMEOUT`-оос
+  ялгагдана.
+- **Яагаад:** demo-ийн кассын хуудас polling хийхэд «иргэн хараахан зөвшөөрөөгүй» ба CA-ийн TIMEOUT ялгагдахгүй байсан
+  (demo `session.poll` + `qr.verify`-ээр тойрсон) — SDK gap.
+- **Хаана:** QR модуль, тест, README. Release 0.34.0.
+- **Шалгасан:** stub CA: RUNNING → `check` RUNNING; COMPLETE → presentation; endResult TIMEOUT → SessionFailed (`result`, `check`);
+  RUNNING + хүлээлт дууссан → `QR_PENDING`. Бүх тест, lint/format.
+
 ## 0.33.0 — 2026-10-23
 
 ### Added — «Миний QR» (биечлэн шалгах): `eid.qr.parse / start / result`

@@ -116,6 +116,7 @@ export {
   type QrAttrs,
   type QrPresentation,
   type QrExpect,
+  type QrCheck,
   type Jwk,
   type Jwks,
 } from "./myqr.js";
