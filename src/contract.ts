@@ -27,6 +27,7 @@ export const RP_ROUTES = {
   personActivity: { method: "GET", path: "/rp/activity/etsi/{personEtsi}" },
   personSummary: { method: "GET", path: "/person/summary/etsi/{personEtsi}" },
   personChildren: { method: "GET", path: "/person/children/etsi/{personEtsi}" },
+  personSignatureImage: { method: "GET", path: "/person/etsi/{personEtsi}/signature-image" },
   tokenCertificate: { method: "POST", path: "/token/certificate" },
   tokenCertificateResult: { method: "GET", path: "/token/certificate/{sessionID}" },
   pdfSignatures: { method: "POST", path: "/pdf/signatures" },

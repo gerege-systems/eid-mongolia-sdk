@@ -684,7 +684,17 @@ const p = await prepare(pdfBytes, { signerCert, verifyPage: true, fileName: "Г�
 `width·height` байт, `sha256` жижиг hex) бол `REQUEST_INVALID`. Зургийн sha256 `complete().images` →
 `registrationFromCompleted` → `images` болж CA-д очно. Дүрэм: `APPEARANCE_SPEC.md` §6, `PLACEMENT_SPEC.md` §6c.
 
+Зургийг RP backend-ээс (0.32.0+): `eid.person.signatureImage(personEtsi)` → `GET /person/etsi/{personEtsi}/signature-image`
+(**SIGN** эрх + иргэн сүүлийн 24 цагт нэвтэрсэн; зураг хадгалаагүй бол `null`, 403 → `ForbiddenError`) →
+`EidImage { png, sha256, width, height, updatedAt, pdfImage }`; тамга — `organization.getRepresentations()`-ийн
+`representations[].stampImage` (`stampImageSet` — бий эсэх; зураг зөвхөн SIGN эрхтэй RP-д). `pdfImage`-ийг хэвээр дамжуулна:
+
 ```ts
+// backend
+const sig = await eid.person.signatureImage(signerEtsi);                 // EidImage | null
+const rep = (await eid.organization.getRepresentations(signerEtsi)).representations.find((r) => r.orgEtsi === orgEtsi);
+const signatureImage = sig?.pdfImage, stampImage = rep?.stampImage?.pdfImage;
+// клиент (/pades)
 const p = await prepare(pdfBytes, { signerCert, claimedRole, verifyPage: true, fileName: "Гэрээ №12.pdf",
   appearance: { x: 340, y: 36, width: 0, height: 0, signatureImage, stampImage } }); // 240 × 147.5
 ```

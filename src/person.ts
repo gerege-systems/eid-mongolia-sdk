@@ -4,6 +4,8 @@
 
 import { RP_ROUTES, routePath } from "./contract.js";
 import type { Http } from "./http.js";
+import { ApiError } from "./errors.js";
+import type { EidImage } from "./types.js";
 
 /** Токенд холбогдсон байгууллага. */
 export interface TokenOrganization {
@@ -205,5 +207,19 @@ export class PersonApi {
   /** Асран хамгаалж буй хүүхдүүд (зөвхөн унших). */
   children(personEtsi: string): Promise<PersonChildren> {
     return this.get<PersonChildren>(routePath(RP_ROUTES.personChildren, personEtsi));
+  }
+
+  /**
+   * GET /person/etsi/{personEtsi}/signature-image — иргэний гарын үсгийн зураг (харагдах гарын үсэгт:
+   * `appearance.signatureImage = img.pdfImage`). PKI_READ биш, **SIGN** эрх; иргэн сүүлийн 24 цагт танай RP-ээр
+   * нэвтэрсэн байх ёстой (эс бөгөөс `ForbiddenError`). Иргэн зураг хадгалаагүй (404) бол `null`.
+   */
+  async signatureImage(personEtsi: string): Promise<EidImage | null> {
+    try {
+      return rec(await this.http.get(routePath(RP_ROUTES.personSignatureImage, personEtsi))) as unknown as EidImage;
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 404) return null;
+      throw e;
+    }
   }
 }

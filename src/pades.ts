@@ -12,6 +12,7 @@
 // Бүрэн шалгагч (validator) энд БАЙХГҮЙ — тэр нь Go backend SDK-д. Prepare нь PRECHECKS.md-ийн «хөнгөн» шалгуурыг л хийнэ.
 
 import { EidError } from "./errors.js";
+import type { PdfImage } from "./types.js";
 import { EID_ISSUERS, INTERMEDIATES, NATIONAL_ROOT } from "./pades/assets/chain.js";
 import { fromB64, toHex } from "./pades/bytes.js";
 import { assembleCMS, signedAttributes, CLAIMED_ROLE_MAX_RUNES } from "./pades/cms.js";
@@ -178,28 +179,10 @@ export interface PadesAppearance {
 }
 
 /**
- * A "PDF image" as the CA serves it (Go `pades.PDFImage`, APPEARANCE_SPEC.md §6.1): one ink colour + an 8-bit alpha
- * channel. The SDK writes `alpha` into the PDF verbatim (/SMask, /FlateDecode) — nothing is compressed at runtime, so
- * every SDK writes the same bytes. Not a PNG.
+ * A "PDF image" as the CA serves it — the RP-API `pdfImage` ({@link EidImage.pdfImage} from `person.signatureImage()`,
+ * `Representation.stampImage`), passed to `appearance.signatureImage` / `stampImage` unchanged.
  */
-export interface PdfImage {
-  /** px, 1…1600. */
-  width: number;
-  /** px, 1…1600. */
-  height: number;
-  /** Ink colour `[r, g, b]`, 0…255. */
-  color: [number, number, number];
-  /**
-   * Standard base64 of a zlib stream (RFC 1950, no preset dictionary, nothing after the Adler-32) inflating to exactly
-   * `width·height` bytes, rows top-down, no PNG filter bytes; ≤ 300 KiB decoded.
-   */
-  alpha: string;
-  /**
-   * Lowercase hex SHA-256 of the PNG the CA stores; not written into the PDF — carried to the registration
-   * ({@link PadesCompleted.images} → `registrationFromCompleted` → `images`).
-   */
-  sha256: string;
-}
+export type { PdfImage } from "./types.js";
 
 /** One image drawn in a signature's stamp, as registered with the CA (`POST /pdf/signatures` `images`, APPEARANCE_SPEC §6.6). */
 export interface PadesImageRef {
