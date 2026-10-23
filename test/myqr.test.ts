@@ -176,9 +176,24 @@ test("result: USER_REFUSED, aud/attr/nonce зөрөх, TIMEOUT", async () => {
   await assert.rejects(eid.qr.result(s, o), invalid);
   st.mutate = null;
   await assert.rejects(eid.qr.result({ ...s, nonce: "replayed" }, o), invalid);
+  st.end = "TIMEOUT";
+  await assert.rejects(eid.qr.result(s, o), (e: unknown) => e instanceof SessionFailedError && e.endResult === "TIMEOUT");
+  await assert.rejects(eid.qr.check(s), (e: unknown) => e instanceof SessionFailedError && e.endResult === "TIMEOUT");
+  st.end = "OK";
   st.state = "RUNNING";
   await assert.rejects(eid.qr.result(s, { maxWaitMs: 1000, serverPollMs: 1000 }), (e: unknown) =>
-    e instanceof SessionFailedError && e.endResult === "TIMEOUT");
+    e instanceof QrError && e.code === "QR_PENDING");
+});
+
+test("check: RUNNING → COMPLETE (нэг poll)", async () => {
+  const { st, eid } = stub();
+  const s = await eid.qr.start({ qr: TOK, attributes: ["age_over_18", "phone"] });
+  st.state = "RUNNING";
+  assert.deepEqual(await eid.qr.check(s), { state: "RUNNING" });
+  st.state = "COMPLETE";
+  const c = await eid.qr.check(s);
+  assert.equal(c.state, "COMPLETE");
+  assert.deepEqual(c.state === "COMPLETE" && c.presentation.attrs, { age_over_18: true });
 });
 
 test("JWKS татагдахгүй / http → QR_JWKS_UNAVAILABLE", async () => {

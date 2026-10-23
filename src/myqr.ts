@@ -10,7 +10,7 @@ import { randomChallenge } from "./crypto.js";
 import { EidError, SessionFailedError } from "./errors.js";
 import type { Http } from "./http.js";
 import type { SessionApi } from "./session.js";
-import { parseExpiresAt, type RpCredentials } from "./types.js";
+import { parseExpiresAt, type RpCredentials, type SessionResult } from "./types.js";
 
 /** Аттрибутын каталог (CA гэрээ v1, 2026-10-23). */
 export const QR_ATTRIBUTES = ["age_over_18", "age_over_21", "full_name", "phone", "birth_date", "civil_id"] as const;
@@ -37,6 +37,8 @@ const MAX_JWKS = 64 << 10;
  * - `QR_ATTRIBUTES_INVALID` — аттрибут хоосон / каталогид алга / давхардсан (клиент талын, CA руу явахгүй)
  * - `QR_PRESENTATION_INVALID` — JWS шалгалт унасан — хариунд ИТГЭХГҮЙ
  * - `QR_JWKS_UNAVAILABLE` — CA-ийн JWKS татагдсангүй (түр; дахин оролдож болно)
+ * - `QR_PENDING` — `qr.result`-ийн хүлээх хугацаа (`maxWaitMs`) дууссан ч иргэн хараахан хариулаагүй (CA-ийн session
+ *   идэвхтэй хэвээр) — дахин `result` / `check` дуудаж болно. CA-ийн жинхэнэ хугацаа дуусалт = SessionFailedError TIMEOUT.
  */
 export const QR_ERROR_CODES = [
   "QR_FORMAT_INVALID",
@@ -44,6 +46,7 @@ export const QR_ERROR_CODES = [
   "QR_ATTRIBUTES_INVALID",
   "QR_PRESENTATION_INVALID",
   "QR_JWKS_UNAVAILABLE",
+  "QR_PENDING",
 ] as const;
 export type QrErrorCode = (typeof QR_ERROR_CODES)[number];
 
@@ -135,6 +138,9 @@ export interface QrPresentation {
   /** Түүхий compact JWS (аудитад хадгалж болно). */
   jws: string;
 }
+
+/** `qr.check`-ийн хариу: иргэн хараахан хариулаагүй, эсвэл шалгагдсан presentation. */
+export type QrCheck = { state: "RUNNING" } | { state: "COMPLETE"; presentation: QrPresentation };
 
 export interface QrExpect {
   issuer?: string;
@@ -374,7 +380,23 @@ export class QrApi {
   async result(session: QrSession, opts?: { maxWaitMs?: number; serverPollMs?: number }): Promise<QrPresentation> {
     if (!session?.sessionId) throw new EidError("qr.result: QrSession шаардлагатай");
     const r = await this.d.session.waitForResult(session.sessionId, { expiresAt: session.expiresAt, ...opts });
-    if (r.state !== "COMPLETE") throw new SessionFailedError("TIMEOUT");
+    if (r.state !== "COMPLETE") throw new QrError("QR_PENDING", "иргэн хараахан хариулаагүй");
+    return this.finish(r, session);
+  }
+
+  /**
+   * Нэг удаагийн шалгалт (polling UI-д): `GET /session/{id}` (`serverPollMs` хүртэл, анхдагч 1000 мс) — иргэн хараахан
+   * хариулаагүй бол `{ state: "RUNNING" }`, зөвшөөрсөн бол JWS/JWKS-ээр шалгасан `{ state: "COMPLETE", presentation }`.
+   * Татгалзсан / CA-ийн хугацаа дууссан бол SessionFailedError; бусад алдаа {@link result}-тэй ижил.
+   */
+  async check(session: QrSession, opts?: { serverPollMs?: number }): Promise<QrCheck> {
+    if (!session?.sessionId) throw new EidError("qr.check: QrSession шаардлагатай");
+    const r = await this.d.session.poll(session.sessionId, opts?.serverPollMs ?? 1_000);
+    if (r.state !== "COMPLETE") return { state: "RUNNING" };
+    return { state: "COMPLETE", presentation: await this.finish(r, session) };
+  }
+
+  private finish(r: SessionResult, session: QrSession): Promise<QrPresentation> {
     if (r.endResult !== "OK") throw new SessionFailedError(r.endResult ?? "UNKNOWN");
     const jws = r.presentation?.jws;
     if (!jws) throw bad("хариунд presentation алга");
