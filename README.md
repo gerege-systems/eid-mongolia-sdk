@@ -151,7 +151,7 @@ app.use("/auth/eid", express.json(), async (req, res) => {
 | Атрибут (`mount…` сонголт) | Утга | Анхдагч |
 |---|---|---|
 | `start-url` (`startUrl`), `status-url` (`statusUrl`) | backend endpoint | — (заавал) |
-| `lang` | `mn` \| `en` | `mn` |
+| `lang` | `mn` \| `en` \| `ru` \| `zh` \| `fr` \| `es` \| `ar` (eID аппын хэлнүүд; `zh-CN` г.м. → үндсэн хэл; бусад → `mn`). `ar` → цонх `dir="rtl"` | `mn` |
 | `mode` | `auto` (утас → Web2App, бусад → QR цонх) \| `qr` \| `app` | `auto` |
 | `theme` | `auto` \| `light` \| `dark` | `auto` |
 | `success-url` (`successUrl`) | backend redirect өгөөгүй үед шилжих URL | — |

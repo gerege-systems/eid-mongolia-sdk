@@ -13,10 +13,17 @@ import { isMobileUserAgent } from "./devicelink.js";
 import { EID_LOGO_PATH, EID_LOGO_TRANSFORM, EID_LOGO_VIEWBOX } from "./logo.js";
 import { encodeQr, qrSvgPath } from "./qr.js";
 
-type Lang = "mn" | "en";
+/** eID аппын хэлнүүд (Монгол + НҮБ-ын 6 албан ёсны хэл); бусад утга → mn. */
+export const EID_LOGIN_LANGS = ["mn", "en", "ru", "zh", "fr", "es", "ar"] as const;
+type Lang = (typeof EID_LOGIN_LANGS)[number];
 
-const T = {
-  mn: {
+/** `lang` атрибутыг (ж: "ru", "zh-CN", "AR") дэмжигдэх хэл болгоно; үл мэдэгдэх → mn. */
+export function resolveEidLang(lang: string | null | undefined): Lang {
+  const primary = (lang ?? "").trim().toLowerCase().split(/[-_]/)[0] as Lang;
+  return EID_LOGIN_LANGS.includes(primary) ? primary : "mn";
+}
+
+const MN = {
     button: "eID-ээр нэвтрэх",
     title: "eID-ээр нэвтрэх",
     // Лого «e-ID» гэж бичигддэг тул логотой үед «eID»-г давтахгүй, зураасгүй: [лого] нэвтрэх.
@@ -56,7 +63,13 @@ const T = {
     sent: (vc: string) => `Мэдэгдэл илгээлээ. Утсан дээрх код ${vc.split("").join(" ")}`,
     minutes: (n: number) => `${n} минут үлдлээ`,
     busy: (n: number) => `Систем завгүй — ${n} сек дараа дахин оролдоно уу`,
-  },
+};
+
+type Texts = typeof MN;
+
+// Орчуулга нь eID аппын (eid-mongolia-mobile Strings*) нэр томьёог дагана.
+const T: Record<Lang, Texts> = {
+  mn: MN,
   en: {
     button: "Log in with eID",
     title: "Log in with eID",
@@ -97,7 +110,207 @@ const T = {
     minutes: (n: number) => `${n} minute${n === 1 ? "" : "s"} left`,
     busy: (n: number) => `Service busy — try again in ${n} s`,
   },
-} as const;
+  ru: {
+    button: "Войти через eID",
+    title: "Войти через eID",
+    withLogo: ["Войти через ", ""],
+    close: "Закрыть",
+    loading: "Загрузка",
+    qrAlt: "QR-код для входа — отсканируйте его приложением eID Mongolia на телефоне",
+    steps: ["Откройте приложение eID Mongolia на телефоне", "Отсканируйте QR-код", "Введите PIN1"],
+    vcLabel: "Код подтверждения",
+    or: "или",
+    usePush: "Войти по регистрационному номеру",
+    idLabel: "Регистрационный номер",
+    idHint: "На ваш телефон придёт уведомление. Можно указать и 12-значный гражданский номер.",
+    idEmpty: "Введите регистрационный номер",
+    idLatin: "Буквы вводите кириллицей: УБ12345678",
+    idBad: "Регистрационный номер — 2 буквы и 8 цифр: УБ12345678",
+    push: "Отправить уведомление",
+    pushing: "Отправка",
+    rateLimited: "Слишком много попыток. Подождите немного и повторите",
+    pushFailed: "Не удалось отправить уведомление. Повторите попытку",
+    waitText: "Если код на телефоне совпадает, введите PIN1. Если нет — отклоните запрос.",
+    waiting: "Ожидание",
+    back: "Назад",
+    left: "Запрос истекает через:",
+    stale: "QR-код устарел",
+    refresh: "Обновить",
+    offline: "Соединение потеряно. Проверьте подключение к интернету — идёт переподключение.",
+    expiredTitle: "Срок входа истёк",
+    refusedTitle: "Вход отклонён",
+    failedTitle: "Не удалось войти",
+    failedText: "Проверка не пройдена. Повторите попытку.",
+    unavailable: "Не удалось подключиться к сервису eID. Повторите попытку чуть позже.",
+    callbackTitle: "Продолжите в браузере телефона",
+    callbackText: "Проверка пройдена. Вход продолжится в окне браузера, которое открыло приложение.",
+    retry: "Повторить",
+    success: "Вход выполнен",
+    sent: (vc: string) => `Уведомление отправлено. Код на телефоне ${vc.split("").join(" ")}`,
+    minutes: (n: number) => `Осталось времени: ${n} мин`,
+    busy: (n: number) => `Сервис занят — повторите через ${n} с`,
+  },
+  zh: {
+    button: "使用 eID 登录",
+    title: "使用 eID 登录",
+    withLogo: ["使用", "登录"],
+    close: "关闭",
+    loading: "加载中",
+    qrAlt: "登录二维码 — 请用手机上的 eID Mongolia 应用扫描",
+    steps: ["在手机上打开 eID Mongolia 应用", "扫描二维码", "输入 PIN1"],
+    vcLabel: "验证码",
+    or: "或",
+    usePush: "使用登记号登录",
+    idLabel: "登记号",
+    idHint: "通知将发送到您的手机。也可使用 12 位公民号码。",
+    idEmpty: "请输入登记号",
+    idLatin: "字母请使用西里尔字母：УБ12345678",
+    idBad: "登记号由 2 个字母和 8 位数字组成：УБ12345678",
+    push: "发送通知",
+    pushing: "发送中",
+    rateLimited: "尝试次数过多。请稍候再试",
+    pushFailed: "无法发送通知。请重试",
+    waitText: "如果手机上的验证码一致，请输入 PIN1；如不一致，请拒绝。",
+    waiting: "等待中",
+    back: "返回",
+    left: "请求剩余时间：",
+    stale: "二维码已过期",
+    refresh: "刷新",
+    offline: "连接已断开。请检查网络连接 — 正在重新连接。",
+    expiredTitle: "登录已过期",
+    refusedTitle: "登录已被拒绝",
+    failedTitle: "登录失败",
+    failedText: "验证失败。请重试。",
+    unavailable: "无法连接 eID 服务。请稍后再试。",
+    callbackTitle: "请在手机浏览器中继续",
+    callbackText: "验证成功。登录将在应用打开的浏览器窗口中继续。",
+    retry: "重试",
+    success: "登录成功",
+    sent: (vc: string) => `通知已发送。手机上的验证码 ${vc.split("").join(" ")}`,
+    minutes: (n: number) => `剩余 ${n} 分钟`,
+    busy: (n: number) => `服务繁忙 — 请在 ${n} 秒后重试`,
+  },
+  fr: {
+    button: "Se connecter avec eID",
+    title: "Se connecter avec eID",
+    withLogo: ["Se connecter avec ", ""],
+    close: "Fermer",
+    loading: "Chargement",
+    qrAlt: "Code QR de connexion — scannez-le avec l'application eID Mongolia sur votre téléphone",
+    steps: ["Ouvrez l'application eID Mongolia sur votre téléphone", "Scannez le code QR", "Saisissez votre PIN1"],
+    vcLabel: "Code de vérification",
+    or: "ou",
+    usePush: "Se connecter avec le numéro national d'identité",
+    idLabel: "Numéro national d'identité",
+    idHint: "Une notification sera envoyée sur votre téléphone. Le numéro civil à 12 chiffres est aussi accepté.",
+    idEmpty: "Saisissez votre numéro national d'identité",
+    idLatin: "Utilisez des lettres cyrilliques : УБ12345678",
+    idBad: "Le numéro comporte 2 lettres et 8 chiffres : УБ12345678",
+    push: "Envoyer la notification",
+    pushing: "Envoi",
+    rateLimited: "Trop de tentatives. Patientez un moment puis réessayez",
+    pushFailed: "Impossible d'envoyer la notification. Réessayez",
+    waitText: "Si le code sur votre téléphone est identique, saisissez le PIN1. Sinon, refusez.",
+    waiting: "En attente",
+    back: "Retour",
+    left: "La demande expire dans :",
+    stale: "Code QR expiré",
+    refresh: "Actualiser",
+    offline: "Connexion perdue. Vérifiez votre connexion Internet — reconnexion en cours.",
+    expiredTitle: "Connexion expirée",
+    refusedTitle: "Connexion refusée",
+    failedTitle: "Échec de la connexion",
+    failedText: "La vérification a échoué. Réessayez.",
+    unavailable: "Impossible de joindre le service eID. Réessayez dans un instant.",
+    callbackTitle: "Continuez dans le navigateur du téléphone",
+    callbackText: "Vérification réussie. La connexion se poursuit dans la fenêtre du navigateur ouverte par l'application.",
+    retry: "Réessayer",
+    success: "Connecté",
+    sent: (vc: string) => `Notification envoyée. Code sur votre téléphone ${vc.split("").join(" ")}`,
+    minutes: (n: number) => (n > 1 ? `${n} minutes restantes` : `${n} minute restante`),
+    busy: (n: number) => `Service occupé — réessayez dans ${n} s`,
+  },
+  es: {
+    button: "Iniciar sesión con eID",
+    title: "Iniciar sesión con eID",
+    withLogo: ["Iniciar sesión con ", ""],
+    close: "Cerrar",
+    loading: "Cargando",
+    qrAlt: "Código QR de inicio de sesión: escanéelo con la aplicación eID Mongolia de su teléfono",
+    steps: ["Abra la aplicación eID Mongolia en su teléfono", "Escanee el código QR", "Introduzca su PIN1"],
+    vcLabel: "Código de verificación",
+    or: "o",
+    usePush: "Iniciar sesión con el documento nacional de identidad",
+    idLabel: "Documento nacional de identidad",
+    idHint: "Se enviará una notificación a su teléfono. También sirve el número civil de 12 dígitos.",
+    idEmpty: "Introduzca su documento nacional de identidad",
+    idLatin: "Escriba las letras en cirílico: УБ12345678",
+    idBad: "El número tiene 2 letras y 8 dígitos: УБ12345678",
+    push: "Enviar notificación",
+    pushing: "Enviando",
+    rateLimited: "Demasiados intentos. Espere un momento e inténtelo de nuevo",
+    pushFailed: "No se pudo enviar la notificación. Inténtelo de nuevo",
+    waitText: "Si el código de su teléfono coincide, introduzca el PIN1. Si no, rechace la solicitud.",
+    waiting: "Esperando",
+    back: "Atrás",
+    left: "La solicitud caduca en:",
+    stale: "Código QR caducado",
+    refresh: "Actualizar",
+    offline: "Conexión perdida. Compruebe su conexión a Internet; reconectando.",
+    expiredTitle: "Inicio de sesión caducado",
+    refusedTitle: "Inicio de sesión rechazado",
+    failedTitle: "No se pudo iniciar sesión",
+    failedText: "La verificación ha fallado. Inténtelo de nuevo.",
+    unavailable: "No se pudo conectar con el servicio eID. Inténtelo de nuevo en breve.",
+    callbackTitle: "Continúe en el navegador del teléfono",
+    callbackText: "Verificación correcta. El inicio de sesión continúa en la ventana del navegador que abrió la aplicación.",
+    retry: "Reintentar",
+    success: "Sesión iniciada",
+    sent: (vc: string) => `Notificación enviada. Código en su teléfono ${vc.split("").join(" ")}`,
+    minutes: (n: number) => (n === 1 ? "Queda 1 minuto" : `Quedan ${n} minutos`),
+    busy: (n: number) => `Servicio ocupado: inténtelo de nuevo en ${n} s`,
+  },
+  ar: {
+    button: "تسجيل الدخول عبر eID",
+    title: "تسجيل الدخول عبر eID",
+    withLogo: ["تسجيل الدخول عبر ", ""],
+    close: "إغلاق",
+    loading: "جارٍ التحميل",
+    qrAlt: "رمز QR لتسجيل الدخول — امسحه بتطبيق eID Mongolia على هاتفك",
+    steps: ["افتح تطبيق eID Mongolia على هاتفك", "امسح رمز QR", "أدخل PIN1"],
+    vcLabel: "رمز التحقق",
+    or: "أو",
+    usePush: "تسجيل الدخول برقم الهوية الوطنية",
+    idLabel: "رقم الهوية الوطنية",
+    idHint: "سيصل إشعار إلى هاتفك. يمكن أيضًا استخدام الرقم المدني المكوّن من 12 رقمًا.",
+    idEmpty: "أدخل رقم الهوية الوطنية",
+    idLatin: "اكتب الحروف بالأبجدية السيريلية: УБ12345678",
+    idBad: "رقم الهوية يتكوّن من حرفين و8 أرقام: УБ12345678",
+    push: "إرسال إشعار",
+    pushing: "جارٍ الإرسال",
+    rateLimited: "محاولات كثيرة جدًا. انتظر قليلًا ثم أعد المحاولة",
+    pushFailed: "تعذّر إرسال الإشعار. أعد المحاولة",
+    waitText: "إذا تطابق الرمز على هاتفك فأدخل PIN1، وإلا فارفض الطلب.",
+    waiting: "في الانتظار",
+    back: "رجوع",
+    left: "تنتهي صلاحية الطلب خلال:",
+    stale: "انتهت صلاحية رمز QR",
+    refresh: "تحديث",
+    offline: "انقطع الاتصال. تحقّق من اتصالك بالإنترنت — جارٍ إعادة الاتصال.",
+    expiredTitle: "انتهت مهلة تسجيل الدخول",
+    refusedTitle: "تم رفض تسجيل الدخول",
+    failedTitle: "تعذّر تسجيل الدخول",
+    failedText: "فشل التحقق. أعد المحاولة.",
+    unavailable: "تعذّر الاتصال بخدمة eID. أعد المحاولة بعد قليل.",
+    callbackTitle: "تابع في متصفح الهاتف",
+    callbackText: "تم التحقق بنجاح. يتابع تسجيل الدخول في نافذة المتصفح التي فتحها التطبيق.",
+    retry: "إعادة المحاولة",
+    success: "تم تسجيل الدخول",
+    sent: (vc: string) => `تم إرسال الإشعار. الرمز على هاتفك ${vc.split("").join(" ")}`,
+    minutes: (n: number) => `الوقت المتبقي: ${n} دقيقة`,
+    busy: (n: number) => `الخدمة مشغولة — أعد المحاولة بعد ${n} ث`,
+  },
+};
 
 /** Backend-ийн status хариу. */
 export interface EidLoginStatus {
@@ -338,7 +551,7 @@ function chevron(): SVGSVGElement {
 
 const Base: typeof HTMLElement = typeof HTMLElement === "undefined" ? (class {} as unknown as typeof HTMLElement) : HTMLElement;
 
-/** `<eid-login-button>` — атрибут: start-url, status-url, lang (mn|en), mode (auto|qr|app), theme (auto|light|dark), success-url,
+/** `<eid-login-button>` — атрибут: start-url, status-url, lang (mn|en|ru|zh|fr|es|ar; бусад → mn), mode (auto|qr|app), theme (auto|light|dark), success-url,
  *  label (товчны текст), icon (eid|none), variant (default|icon), aria-label. */
 export class EidLoginButton extends Base {
   static readonly observedAttributes = ["lang", "theme", "label", "icon", "variant", "aria-label"];
@@ -364,8 +577,15 @@ export class EidLoginButton extends Base {
   private readonly onScheme = () => this.applyTheme();
   private warned = false;
 
-  private get t() {
-    return T[this.getAttribute("lang") === "en" ? "en" : "mn"];
+  private get uiLang(): Lang {
+    return resolveEidLang(this.getAttribute("lang"));
+  }
+  private get t(): Texts {
+    return T[this.uiLang];
+  }
+  /** Shadow доторх бичлэгийн чиглэл: ar → rtl, бусад → ltr (хуудсын dir-ээс үл хамаарна). */
+  private get uiDir(): "rtl" | "ltr" {
+    return this.uiLang === "ar" ? "rtl" : "ltr";
   }
   private attr(name: string, def = ""): string {
     return this.getAttribute(name) ?? def;
@@ -417,6 +637,7 @@ export class EidLoginButton extends Base {
     }
     this.trigger.replaceChildren(...nodes);
     this.trigger.classList.toggle("icon-only", iconOnly);
+    this.trigger.setAttribute("dir", this.uiDir);
     // Лого aria-hidden ба flex item-уудын хооронд accname зай оруулдаг тул нэрийг бүтнээр нь өгнө.
     const aria = this.getAttribute("aria-label") || (iconOnly || brand ? text : null);
     if (aria) this.trigger.setAttribute("aria-label", aria);
@@ -470,7 +691,7 @@ export class EidLoginButton extends Base {
       // Хэрэглэгчийн tap-аас шууд (await-гүй) навигаци — iOS Universal Link-д заавал.
       const u = new URL(this.attr("start-url"), location.href);
       u.searchParams.set("mode", "web2app");
-      u.searchParams.set("lang", this.attr("lang") === "en" ? "en" : "mn");
+      u.searchParams.set("lang", this.uiLang);
       this.navigate(u.toString());
       return;
     }
@@ -482,7 +703,7 @@ export class EidLoginButton extends Base {
     const gen = ++this.gen;
     this.lastFocus = (this.getRootNode() as Document | ShadowRoot).activeElement ?? document.activeElement;
     const bd = el("div", { class: "backdrop", part: "backdrop" });
-    const dlg = el("div", { class: "dialog", role: "dialog", "aria-modal": "true", "aria-labelledby": "eid-title", part: "dialog" });
+    const dlg = el("div", { class: "dialog", role: "dialog", "aria-modal": "true", "aria-labelledby": "eid-title", part: "dialog", dir: this.uiDir, lang: this.uiLang });
     const head = el("div", { class: "head" });
     const x = el("button", { type: "button", class: "x", "aria-label": this.t.close }, "×");
     x.addEventListener("click", () => this.close());
@@ -561,7 +782,7 @@ export class EidLoginButton extends Base {
         credentials: "same-origin",
         cache: "no-store",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...body, lang: this.attr("lang") === "en" ? "en" : "mn" }),
+        body: JSON.stringify({ ...body, lang: this.uiLang }),
       });
     } catch {
       if (gen === this.gen && body.mode === "qr") void startErrorOf(null).then((d) => this.end("unavailable", d));
@@ -683,7 +904,7 @@ export class EidLoginButton extends Base {
     const field = el("div", { class: "field" });
     const input = el("input", {
       id: "eid-id", name: "idCode", type: "text", autocapitalize: "characters", autocomplete: "off", autocorrect: "off",
-      spellcheck: "false", maxlength: "14", placeholder: "УБ12345678", "aria-describedby": "eid-id-hint eid-id-err",
+      spellcheck: "false", maxlength: "14", placeholder: "УБ12345678", "aria-describedby": "eid-id-hint eid-id-err", dir: "ltr",
     });
     const err = el("p", { class: "err", id: "eid-id-err", hidden: "" });
     field.append(el("label", { for: "eid-id" }, t.idLabel), input, el("p", { class: "hint", id: "eid-id-hint" }, t.idHint), err);

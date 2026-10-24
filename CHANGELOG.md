@@ -1,4 +1,17 @@
 # Changelog
+## 0.36.0 — 2026-10-24
+
+### Added
+- `<eid-login-button>` / `mountEidLoginButton`: `lang` нь eID аппын 7 хэлийг дэмжинэ — `mn`, `en`, `ru`, `zh`, `fr`, `es`,
+  `ar` (өмнө нь зөвхөн mn/en, бусад нь mn). Цонхны бүх мөр (QR алхам, регистрийн дугаарын алхам, алдаа, товч) орчуулагдсан,
+  нэр томьёо нь аппын (eid-mongolia-mobile `Strings*`) орчуулгыг дагана. `ar` → товч ба цонх `dir="rtl"` (регистрийн
+  дугаарын оролт `ltr`); бусад хэлэнд `dir="ltr"`. `zh-CN`, `en_GB` г.м. үндсэн хэлээр; үл мэдэгдэх утга → `mn`.
+  Start хүсэлт / Web2App URL-д хэвийн болгосон хэл (`lang=ru` г.м.) очно — backend (`createEidLogin`, Go `eidlogin`)
+  өмнөх шигээ `en` → `eng`, бусад → `mon`. Шинэ export: `EID_LOGIN_LANGS`, `resolveEidLang`.
+- Товчны CSS (shadow `<style>`) өөрчлөгдөөгүй; mn/en текст өөрчлөгдөөгүй.
+- PAdES-ийн `lang` (харагдах тамга / баталгаажуулах хуудас) mn/en хэвээр — golden вектор, фонтын дэд олонлогт хамаарна.
+- Шалгасан: `npm run lint`, `npm test` (7 хэл, rtl, хэл хэвийн болголт, start/Web2App-ийн lang).
+
 ## 0.35.0 — 2026-10-24
 
 ### Removed (BREAKING) — гарын үсгийн зураг / байгууллагын тамганы зураг

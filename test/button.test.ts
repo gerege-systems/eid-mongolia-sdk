@@ -27,7 +27,7 @@ globalThis.fetch = (async (url: string, init?: RequestInit) => {
   return new Response(JSON.stringify(s), { status: 200, headers: { "Content-Type": "application/json" } });
 }) as typeof fetch;
 
-const { EidLoginButton, mountEidLoginButton, resolveEidTheme } = await import("../dist/button.js");
+const { EidLoginButton, mountEidLoginButton, resolveEidTheme, resolveEidLang, EID_LOGIN_LANGS } = await import("../dist/button.js");
 
 const QR = "https://ca.eidmongolia.mn/dl?deviceLinkType=QR&elapsedSeconds=0&sessionToken=t&sessionType=auth&version=1.0&lang=mon&authCode=x";
 const tick = (ms = 0) => new Promise((r) => setTimeout(r, ms));
@@ -488,4 +488,51 @@ test("Esc цонхыг хааж, poll зогсоно; Tab focus цонхонд �
   const n = requests.length;
   await tick(1200);
   assert.equal(requests.length, n, "хаасны дараа poll үгүй");
+});
+
+test("lang: eID аппын 7 хэл; zh-CN → zh, үл мэдэгдэх → mn", () => {
+  assert.deepEqual([...EID_LOGIN_LANGS], ["mn", "en", "ru", "zh", "fr", "es", "ar"]);
+  assert.equal(resolveEidLang("zh-CN"), "zh");
+  assert.equal(resolveEidLang("AR"), "ar");
+  assert.equal(resolveEidLang("en_GB"), "en");
+  assert.equal(resolveEidLang("de"), "mn");
+  assert.equal(resolveEidLang(""), "mn");
+  assert.equal(resolveEidLang(null), "mn");
+  const names: Record<string, string> = {
+    mn: "eID-ээр нэвтрэх", en: "Log in with eID", ru: "Войти через eID", zh: "使用 eID 登录",
+    fr: "Se connecter avec eID", es: "Iniciar sesión con eID", ar: "تسجيل الدخول عبر eID",
+  };
+  const { sr, b } = make();
+  const btn = sr.querySelector("button.trigger")!;
+  for (const [lang, name] of Object.entries(names)) {
+    b.setAttribute("lang", lang);
+    assert.equal(btn.getAttribute("aria-label"), name, lang);
+    assert.equal(btn.getAttribute("dir"), lang === "ar" ? "rtl" : "ltr", lang);
+  }
+  b.setAttribute("lang", "de");
+  assert.equal(btn.getAttribute("aria-label"), names.mn, "үл мэдэгдэх → mn");
+});
+
+test("lang=ar: цонх dir=rtl, араб текст; регистрийн оролт ltr; start-д lang=ar", async () => {
+  startReplies = [{ status: 200, body: { mode: "qr", qr: QR, vc: "12345", expiresIn: 120 } }];
+  const { sr, click, b, text } = make({ lang: "ar" });
+  click();
+  const dlg = sr.querySelector('[role="dialog"]')!;
+  assert.equal(dlg.getAttribute("dir"), "rtl");
+  assert.equal(dlg.getAttribute("lang"), "ar");
+  await until(() => !!sr.querySelector(".qr svg path"));
+  assert.match(text(), /رمز التحقق/);
+  assert.match(text(), /أدخل PIN1/);
+  assert.equal(sr.querySelector("#eid-id")!.getAttribute("dir"), "ltr");
+  assert.deepEqual(requests[0]!.body, { mode: "qr", lang: "ar" });
+  b.close();
+});
+
+test("lang=ru: утсан дээр Web2App-д lang=ru; zh-CN → lang=zh", () => {
+  let m = make({ lang: "ru" }, true);
+  m.click();
+  assert.deepEqual(m.navs, ["https://bank.example.mn/auth/eid/start?mode=web2app&lang=ru"]);
+  m = make({ lang: "zh-CN" } as Record<string, string>, true);
+  m.click();
+  assert.deepEqual(m.navs, ["https://bank.example.mn/auth/eid/start?mode=web2app&lang=zh"]);
 });
