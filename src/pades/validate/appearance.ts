@@ -1,10 +1,10 @@
 // Харагдах гарын үсгийн own-signer хэлбэр (APPEARANCE_SPEC.md §5 Validator) — Go SDK pades/internal/validate/appearance.go-ийн
-// порт. PAdES бичигчийн харагдах widget, /AP /N form XObject ба түүний 2 фонтыг (11 объект + зураг бүрд 2 — §6.5) гарын үсгийн өөрийн өгөгдлөөс
+// порт. PAdES бичигчийн харагдах widget, /AP /N form XObject ба түүний 2 фонтыг (11 объект) гарын үсгийн өөрийн өгөгдлөөс
 // (/Name, /M, claimedRole, revIndex, docID) SDK-ийн бичигчийн кодоор (../page/appearance.ts — Go core-той байт-ижил)
 // ДАХИН ҮҮСГЭЖ, задалсан объект бүрийг бүтцээр (pdfEqual: толь + stream-ийн түүхий байт) тулгана.
 
 import { latin1 } from "../bytes.js";
-import { MAX_IMAGE_SIDE, appearanceObjects, round100, visibleWidget, type PdfImageData } from "../page/appearance.js";
+import { appearanceObjects, round100, visibleWidget } from "../page/appearance.js";
 import { PReal, PRef, PdfObjError, PStr, PStream, PdfParser, dget, isArr, isDict, isInt, pdfEqual, type PDict, type PVal } from "./pdfobj.js";
 import { errNotSignatureOnly, ownDate, pdfTextString, type Classifier } from "./revisions.js";
 
@@ -50,7 +50,7 @@ export function ownVisible(c: Classifier, d: PDict, widget: number): void {
   const m = ms.v;
   if (!ownDate(m) || m.slice(16) !== "+08'00'") throw fail();
   const date = `${m.slice(2, 6)}-${m.slice(6, 8)}-${m.slice(8, 10)} ${m.slice(10, 12)}:${m.slice(12, 14)} (+08)`;
-  const { ids, sig, stamp } = apIDs(c, nr);
+  const ids = apIDs(c, nr);
   const form = c.fin.get(ids[0]!);
   if (!(form instanceof PStream)) throw fail();
   let head = "";
@@ -62,9 +62,7 @@ export function ownVisible(c: Classifier, d: PDict, widget: number): void {
   for (const lang of ["mn", "en"]) {
     let bodies: (string | Uint8Array)[];
     try {
-      // Зураг (APPEARANCE_SPEC.md §6.5): PDF-ээс уншсан өнгө/хэмжээ/alpha-аар дахин үүсгэнэ — appearanceObjects нь
-      // alpha-г checkPdfImage-ээр шалгана; объект бүр (толь, content stream-ийн байрлал) байт-ижил байх ёстой.
-      bodies = appearanceObjects({ w, h, rotate: rot, name, role: meta.role, lang, date, url, sig, stamp }, ids);
+      bodies = appearanceObjects({ w, h, rotate: rot, name, role: meta.role, lang, date, url }, ids);
     } catch {
       throw fail();
     }
@@ -84,11 +82,8 @@ export function ownVisible(c: Classifier, d: PDict, widget: number): void {
   throw fail();
 }
 
-/**
- * /AP /N-ээс объектын дугаарууд (appearanceObjects-ийн дарааллаар: form, F1 ×5, F2 ×5, дараа нь /Resources /XObject-ийн
- * /Sig, /Stamp тус бүрд base, /SMask) ба зургууд (PDF-ээс уншсан; undefined = байхгүй); бүгд шинэ, үе 0, давхардалгүй.
- */
-function apIDs(c: Classifier, n: PRef): { ids: number[]; sig?: PdfImageData; stamp?: PdfImageData } {
+/** /AP /N-ээс 11 объектын дугаар (appearanceObjects-ийн дарааллаар); бүгд шинэ, үе 0, давхардалгүй. */
+function apIDs(c: Classifier, n: PRef): number[] {
   const fail = errNotSignatureOnly;
   const refs: PRef[] = [n];
   const get = (r: PRef): PDict => {
@@ -117,23 +112,6 @@ function apIDs(c: Classifier, n: PRef): { ids: number[]; sig?: PdfImageData; sta
     if (!(ff instanceof PRef)) throw fail();
     refs.push(t0, cid, fd, ff, tu);
   }
-  // Зураг: /XObject /Sig, /Stamp → base (1×1, 3 байт өнгө) → /SMask (W×H, alpha-ийн түүхий zlib). Толины бусад
-  // түлхүүр/утгыг дахин үүсгэсэн объекттой тулгаж шалгана (sameObject).
-  let sig: PdfImageData | undefined;
-  let stamp: PdfImageData | undefined;
-  if (isDict(res) && res.has("XObject")) {
-    const xo = dget(res, "XObject");
-    if (!isDict(xo)) throw fail();
-    for (const key of ["Sig", "Stamp"]) {
-      if (!xo.has(key)) continue;
-      const br = dget(xo, key);
-      if (!(br instanceof PRef)) throw fail();
-      const { im, mr } = apImage(c, br);
-      refs.push(br, mr);
-      if (key === "Sig") sig = im;
-      else stamp = im;
-    }
-  }
   const seen = new Set<number>();
   const ids: number[] = [];
   for (const r of refs) {
@@ -141,26 +119,7 @@ function apIDs(c: Classifier, n: PRef): { ids: number[]; sig?: PdfImageData; sta
     seen.add(r.num);
     ids.push(r.num);
   }
-  return { ids, sig, stamp };
-}
-
-/**
- * Зургийн base XObject (br) ба түүний /SMask-аас PdfImageData: өнгө = base stream-ийн 3 байт, w/h = mask-ийн /Width
- * /Height (бүхэл), alpha = mask stream-ийн түүхий байт. Хэлбэрийн бусад шалгалт — дахин үүсгэж тулгах.
- */
-function apImage(c: Classifier, br: PRef): { im: PdfImageData; mr: PRef } {
-  const fail = errNotSignatureOnly;
-  const base = c.fin.deref(br);
-  if (!(base instanceof PStream) || base.data.length !== 3) throw fail();
-  const mr = dget(base.dict, "SMask");
-  if (!(mr instanceof PRef)) throw fail();
-  const mask = c.fin.deref(mr);
-  if (!(mask instanceof PStream)) throw fail();
-  const w = dget(mask.dict, "Width");
-  const h = dget(mask.dict, "Height");
-  const side = BigInt(MAX_IMAGE_SIDE);
-  if (!isInt(w) || !isInt(h) || w < 1n || h < 1n || w > side || h > side) throw fail();
-  return { im: { w: Number(w), h: Number(h), color: [base.data[0]!, base.data[1]!, base.data[2]!], alpha: mask.data }, mr };
+  return ids;
 }
 
 const isSpaceByte = (x: number): boolean => x === 9 || x === 10 || x === 11 || x === 12 || x === 13 || x === 32;

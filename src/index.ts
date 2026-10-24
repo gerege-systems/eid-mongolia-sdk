@@ -16,7 +16,6 @@ export {
   type RegisterSignatureResult,
   type CompletedForRegistration,
   type PriorSignature,
-  type PdfSignatureImage,
   registrationFromCompleted,
   buildRegisterBody,
 } from "./sign.js";
@@ -209,8 +208,6 @@ export type {
   OrgResult,
   Representation,
   RepresentationsResponse,
-  EidImage,
-  PdfImage,
   PersonBlock,
   TokenCertStatus,
   TokenCertSessionBlock,

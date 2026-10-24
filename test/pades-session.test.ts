@@ -108,7 +108,6 @@ const CA_DTO_TAGS = {
   docID: "required", revIndex: "required", medium: "required", sessionID: "omitempty", cms: "required", fileName: "required",
   inSha256: "required", pageSha256: "omitempty", sigRevSha256: "required", outSha256: "required",
   priorCmsSha256: "omitempty", priorRevisionSha256: "omitempty", onBehalfOf: "omitempty", signerEtsi: "omitempty",
-  images: "omitempty", // APPEARANCE_SPEC §6.6 (Go SDK #44) — CA талд нэмэгдэж буй
 } as const;
 
 test("registerSignature — бие нь CA DTO-ийн JSON tag-тай яг таарна (hasPage үгүй)", () => {
@@ -118,7 +117,6 @@ test("registerSignature — бие нь CA DTO-ийн JSON tag-тай яг та�
     docID: "11111111-1111-4111-8111-111111111111", revIndex: 3, medium: "phone", sessionID: "s", cms: new Uint8Array([0x30, 0]),
     fileName: "a.pdf", inSha256: sha("i"), pageSha256: sha("p"), sigRevSha256: sha("r"), outSha256: sha("o"),
     priorCmsSha256: [sha("c")], priorRevisionSha256: [sha("v")], onBehalfOf: "NTRMN-1", signerEtsi: "PNOMN-1",
-    images: [{ kind: "signature", sha256: sha("s") }, { kind: "stamp", sha256: sha("t") }],
   });
   assert.deepEqual(Object.keys(full), Object.keys(CA_DTO_TAGS), "талбар бүр, DTO-ийн дарааллаар");
   const min = buildRegisterBody({ docID: "11111111-1111-4111-8111-111111111111", revIndex: 1, cms: "MAA=", fileName: "a.pdf",
@@ -153,16 +151,6 @@ test("registrationFromCompleted — complete()-ийн үр дүнгээс", () =
   const role = { ...done, claimedRole: "Гүйцэтгэх захирал" };
   assert.throws(() => registrationFromCompleted(role, { fileName: "a.pdf", sessionID: "s1" }), /onBehalfOf/);
   assert.equal(registrationFromCompleted(role, { fileName: "a.pdf", sessionID: "s1", onBehalfOf: "NTRMN-1" }).onBehalfOf, "NTRMN-1");
-  // APPEARANCE_SPEC §6.6: complete().images → `images` (signature, then stamp); none → no field (Go omitempty).
-  const images = [{ kind: "signature" as const, sha256: sha("s") }, { kind: "stamp" as const, sha256: sha("t") }];
-  const withImg = buildRegisterBody(registrationFromCompleted({ ...role, images }, { fileName: "a.pdf", sessionID: "s1", onBehalfOf: "NTRMN-1" }));
-  assert.deepEqual(withImg.images, images);
-  assert.deepEqual(Object.keys(withImg).slice(-2), ["onBehalfOf", "images"]);
-  assert.equal("images" in buildRegisterBody(inp), false);
-  assert.equal("images" in buildRegisterBody(registrationFromCompleted({ ...done, images: [] }, { fileName: "a.pdf", sessionID: "s1" })), false);
-  const badImg = (x: unknown) => () => buildRegisterBody({ ...inp, images: [x as (typeof images)[0]] });
-  assert.throws(badImg({ kind: "logo", sha256: sha("s") }), ValidationError);
-  assert.throws(badImg({ kind: "stamp", sha256: "abc" }), ValidationError);
 });
 
 test("registerSignature — POST /pdf/signatures бие ба хариу; алдааны код", async () => {
@@ -212,7 +200,7 @@ test("PDF_REGISTER_ERROR_CODES — CA pades_register.go-ийн кодууд, д�
   const want: PdfRegisterErrorCode[] = ["REQUEST_INVALID", "REQUEST_TOO_LARGE", "CMS_INVALID", "SIGNATURE_INVALID",
     "TIMESTAMP_INVALID", "SIGNER_MISMATCH", "SIGNER_CERT_INVALID", "TOKEN_CERT_INVALID", "TOKEN_ORG_MISMATCH",
     "SESSION_MISMATCH", "SESSION_NOT_COMPLETE", "SESSION_FAILED", "CLAIMED_ROLE_MISMATCH", "REPRESENTATION_REVOKED",
-    "DOC_ID_CONFLICT", "REGISTRY_CONFLICT", "DOC_NOT_FOUND", "PRIOR_MISMATCH", "IMAGE_MISMATCH", "RATE_LIMITED", "STATE_UNAVAILABLE"];
+    "DOC_ID_CONFLICT", "REGISTRY_CONFLICT", "DOC_NOT_FOUND", "PRIOR_MISMATCH", "RATE_LIMITED", "STATE_UNAVAILABLE"];
   assert.deepEqual([...PDF_REGISTER_ERROR_CODES], want);
   assert.equal(new Set(PDF_REGISTER_ERROR_CODES).size, PDF_REGISTER_ERROR_CODES.length);
   const docID = "11111111-1111-4111-8111-111111111111";
