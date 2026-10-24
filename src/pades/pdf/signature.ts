@@ -6,7 +6,7 @@ import { fromHex, latin1, toHex } from "../bytes.js";
 import { Incremental } from "./incremental.js";
 import { PdfError, Value } from "./reader.js";
 import { escapeName, hexString, serialize } from "./serialize.js";
-import { AppearanceError, appearanceObjectCount, appearanceObjects, nthPage, pageGeometry, visibleRect, visibleWidget, type Visible } from "../page/appearance.js";
+import { AppearanceError, appearanceObjects, nthPage, pageGeometry, visibleRect, visibleWidget, type Visible } from "../page/appearance.js";
 import { placeOnPage, type PlaceStatus } from "../page/occupancy.js";
 
 /** CMS-ийн дээд хэмжээ (хэмжсэн 14 KiB) × 2 — /Contents-ийн binary багтаамж. */
@@ -60,8 +60,7 @@ export async function prepareSignature(base: Uint8Array, signingTime: Date, sign
   const sigID = inc.reserve();
   const fieldID = inc.reserve();
   const catID = inc.reserve();
-  // Харагдах: form, F1 ×5, F2 ×5, зураг бүрд 2 (APPEARANCE_SPEC.md §6.2).
-  const apIDs = vis ? Array.from({ length: appearanceObjectCount(vis) }, () => inc.reserve()) : [];
+  const apIDs = vis ? Array.from({ length: 11 }, () => inc.reserve()) : [];
 
   let sig = `<<\n /Type /Sig\n /Filter /Adobe.PPKLite\n /SubFilter /${SUB_FILTER}\n /ByteRange `;
   const brAt = sig.length;
@@ -100,10 +99,7 @@ export async function prepareSignature(base: Uint8Array, signingTime: Date, sign
       placement = placeOnPage(page, box, rot, vis.x, vis.y, vis.w, vis.h, vis.exact === true);
       if (placement.x !== vis.x || placement.y !== vis.y) rect = visibleRect(box, rot, placement.x, placement.y, vis.w, vis.h);
     }
-    const bodies = appearanceObjects(
-      { w: vis.w, h: vis.h, rotate: rot, name: vis.name, role: vis.role, lang: vis.lang, date: vis.date, url: vis.url, sig: vis.sig, stamp: vis.stamp },
-      apIDs,
-    );
+    const bodies = appearanceObjects({ w: vis.w, h: vis.h, rotate: rot, name: vis.name, role: vis.role, lang: vis.lang, date: vis.date, url: vis.url }, apIDs);
     inc.writeObject(fieldID, visibleWidget(fieldName, rect, page.ptr.id, page.ptr.gen, sigID, apIDs[0]!));
     bodies.forEach((b, i) => inc.writeObject(apIDs[i]!, b));
   }

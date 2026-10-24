@@ -313,57 +313,6 @@ export interface Representation {
   validFrom: string;
   /** ISO 8601; байхгүй = хугацаагүй. */
   validTo?: string;
-  /** Байгууллагад тамганы зураг хадгалсан эсэх (хуучин CA-д байхгүй). */
-  stampImageSet?: boolean;
-  /**
-   * Тамганы зураг — зөвхөн SIGN эрхтэй RP-д, зураг байвал. PDF-д: `appearance.stampImage = stampImage.pdfImage`
-   * (`claimedRole`-той).
-   */
-  stampImage?: EidImage;
-}
-
-/**
- * CA-ийн хадгалсан ил тод PNG — иргэний гарын үсгийн зураг (`person.signatureImage()`) эсвэл байгууллагын тамга
- * (`Representation.stampImage`); CA docs/SIGNATURE_IMAGES.md.
- */
-export interface EidImage {
-  /** base64 ил тод PNG. */
-  png: string;
-  /** PNG-ийн sha256, жижиг hex. */
-  sha256: string;
-  width: number;
-  height: number;
-  /** RFC 3339 (UTC). */
-  updatedAt?: string;
-  /**
-   * Харагдах гарын үсэгт шигтгэх «PDF зураг» — `appearance.signatureImage` / `stampImage`-д хэвээр өгнө; CA PNG-ийг
-   * хөрвүүлж чадаагүй (олон өнгө, alpha > 300 KiB) бол байхгүй.
-   */
-  pdfImage?: PdfImage;
-}
-
-/**
- * A "PDF image" as the CA serves it (Go `pades.PDFImage`, APPEARANCE_SPEC.md §6.1): one ink colour + an 8-bit alpha
- * channel. The SDK writes `alpha` into the PDF verbatim (/SMask, /FlateDecode) — nothing is compressed at runtime, so
- * every SDK writes the same bytes. Not a PNG.
- */
-export interface PdfImage {
-  /** px, 1…1600. */
-  width: number;
-  /** px, 1…1600. */
-  height: number;
-  /** Ink colour `[r, g, b]`, 0…255. */
-  color: [number, number, number];
-  /**
-   * Standard base64 of a zlib stream (RFC 1950, no preset dictionary, nothing after the Adler-32) inflating to exactly
-   * `width·height` bytes, rows top-down, no PNG filter bytes; ≤ 300 KiB decoded.
-   */
-  alpha: string;
-  /**
-   * Lowercase hex SHA-256 of the PNG the CA stores; not written into the PDF — carried to the registration
-   * (`PadesCompleted.images` → `registrationFromCompleted` → `images`).
-   */
-  sha256: string;
 }
 
 /** GET /organization/representations/etsi/{personEtsi} хариу. */

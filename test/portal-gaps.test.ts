@@ -633,31 +633,3 @@ test("rightTypeLabel / sourceLabel — representations ба session onBehalfOf; 
   const old = parseSessionResult({ ...base, onBehalfOf: { orgEtsi: "NTRMN-1", role: "ceo", rightType: "ADMIN" } });
   assert.ok(!("rightTypeLabel" in (old.onBehalfOf ?? {})));
 });
-
-// ── Зураг (CA docs/SIGNATURE_IMAGES.md) ──
-
-const SHA = "ab0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcd";
-const IMG = {
-  png: "iVBORw==", sha256: SHA, width: 480, height: 144, updatedAt: "2026-10-23T05:00:00Z",
-  pdfImage: { width: 480, height: 144, color: [18, 32, 110], alpha: "eJwDAAAAAAE=", sha256: SHA },
-};
-
-test("person.signatureImage — 200 хэлбэр, 404 → null, 403 → ForbiddenError", async () => {
-  const ok = client({ body: IMG });
-  const img = await ok.eid.person.signatureImage("PNOMN-12345678");
-  assert.deepEqual(img, IMG);
-  assert.equal(`${ok.calls[0]!.method} ${ok.calls[0]!.url}`, "GET https://rp.eidmongolia.mn/person/etsi/PNOMN-12345678/signature-image");
-  assert.equal(await client({ status: 404, body: { error: "зураг алга", code: "NOT_FOUND" } }).eid.person.signatureImage("PNOMN-1"), null);
-  await assert.rejects(client({ status: 403, body: { error: "RP-д SIGN эрх алга" } }).eid.person.signatureImage("PNOMN-1"), ForbiddenError);
-  await assert.rejects(client({ status: 500, body: { error: "x" } }).eid.person.signatureImage("PNOMN-1"), ApiError);
-});
-
-test("organization.getRepresentations — stampImageSet, stampImage.pdfImage", async () => {
-  const { eid } = client({ body: { personEtsi: "PNOMN-1", representations: [
-    { orgEtsi: "NTRMN-1", stampImageSet: true, stampImage: IMG }, { orgEtsi: "NTRMN-2", stampImageSet: false }] } });
-  const [a, b] = (await eid.organization.getRepresentations("PNOMN-1")).representations;
-  assert.equal(a!.stampImageSet, true);
-  assert.deepEqual(a!.stampImage?.pdfImage, IMG.pdfImage);
-  assert.equal(b!.stampImageSet, false);
-  assert.equal(b!.stampImage, undefined);
-});

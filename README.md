@@ -674,31 +674,6 @@ const p = await prepare(pdfBytes, { signerCert, verifyPage: true, fileName: "Г�
   appearance: { page, x, y, width: s.width, height: s.height, exact: true } });
 ```
 
-**Гарын үсэг ба байгууллагын тамганы зураг (0.31.0+).** `appearance.signatureImage` (иргэний гарын үсгийн зураг) ба
-`appearance.stampImage` (байгууллагын тамга — зөвхөн `claimedRole`/onBehalfOf-той, эс бөгөөс `REQUEST_INVALID`) —
-`PdfImage { width, height, color: [r, g, b], alpha: "<base64 zlib>", sha256 }`, CA-ийн өгөх «PDF зураг» (PNG биш; SDK
-`alpha`-г байтаар нь /SMask болгон бичнэ, шахалт хийхгүй — бүх SDK байт-ижил). Зураг дүрслэлийн ДОТОР (дээд зурвас; тамга
-баруун дээд буланд хайрцгийг давж) зурагдана — тусдаа annotation биш тул өмнөх гарын үсэг «өөрчлөгдөөгүй» хэвээр.
-`width`, `height` хоёулаа 0 бол анхдагч хэмжээ: 220×64 / гарын үсэгтэй 220×110 / тамгатай 240×147.5 (`suggestPlacement`-д ч —
-ижил `appearance`-ийг өг). Зургийн оролт буруу (хэмжээ 1…1600 px, өнгө 0…255, alpha ≤ 300 KiB, нэг zlib stream яг
-`width·height` байт, `sha256` жижиг hex) бол `REQUEST_INVALID`. Зургийн sha256 `complete().images` →
-`registrationFromCompleted` → `images` болж CA-д очно. Дүрэм: `APPEARANCE_SPEC.md` §6, `PLACEMENT_SPEC.md` §6c.
-
-Зургийг RP backend-ээс (0.32.0+): `eid.person.signatureImage(personEtsi)` → `GET /person/etsi/{personEtsi}/signature-image`
-(**SIGN** эрх + иргэн сүүлийн 24 цагт нэвтэрсэн; зураг хадгалаагүй бол `null`, 403 → `ForbiddenError`) →
-`EidImage { png, sha256, width, height, updatedAt, pdfImage }`; тамга — `organization.getRepresentations()`-ийн
-`representations[].stampImage` (`stampImageSet` — бий эсэх; зураг зөвхөн SIGN эрхтэй RP-д). `pdfImage`-ийг хэвээр дамжуулна:
-
-```ts
-// backend
-const sig = await eid.person.signatureImage(signerEtsi);                 // EidImage | null
-const rep = (await eid.organization.getRepresentations(signerEtsi)).representations.find((r) => r.orgEtsi === orgEtsi);
-const signatureImage = sig?.pdfImage, stampImage = rep?.stampImage?.pdfImage;
-// клиент (/pades)
-const p = await prepare(pdfBytes, { signerCert, claimedRole, verifyPage: true, fileName: "Гэрээ №12.pdf",
-  appearance: { x: 340, y: 36, width: 0, height: 0, signatureImage, stampImage } }); // 240 × 147.5
-```
-
 **Баталгаажуулах хуудсыг эхэнд (0.30.0+).** `verifyPagePosition: "first"` — QR хуудас баримтын 1-р хуудас болно (анхдагч
 `"last"` — төгсгөлд, өмнөхтэй байт-ижил; бусад утга `REQUEST_INVALID`). Хуудас нэмэгдэх үед л (гарын үсэггүй баримт,
 `verifyPage: true`) нөлөөтэй. `appearance.page`, `suggestPlacement`, `placement.page` үргэлж **оролтын** PDF-ийн хуудсаар
@@ -1154,8 +1129,8 @@ npm run test:convert-e2e   # /convert жинхэнэ LibreOffice Chromium-д (BR
 
 `/pades`-ийн conformance fixture (golden: оролт, тестийн PKI-ийн гэрчилгээ, TSA/OCSP/CRL-ийн тогтмол хариу, хүлээгдэх
 sha256) ба фонт/гинжийн asset-ийг Go reference-ээс `node scripts/sync-pades-golden.mjs` хуулна (`GO_SDK_COMMIT` —
-Go `pades-golden-v10` — зургийн кейсүүд `img-*`; v7-оос `placement/` scanner vectors-той, page 0 verify хуудас алгасна,
-`exact` + `expect.suggestion`); CI `--check`-ээр бэхэлсэн commit-тэй тулгана. Профайл:
+tag `pades-golden-vN`, одоо v7 — `placement/` scanner vectors-той, page 0 verify хуудас алгасна, `exact` +
+`expect.suggestion`); CI `--check`-ээр бэхэлсэн commit-тэй тулгана. Профайл:
 Go репогийн `pades/PROFILE.md`, `PAGE_SPEC.md`, `PRECHECKS.md`, `WIRE.md`, `APPEARANCE_SPEC.md`, `PLACEMENT_SPEC.md`.
 
 ### Гэрээний шалгалт

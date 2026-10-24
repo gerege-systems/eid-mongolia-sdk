@@ -1,4 +1,18 @@
 # Changelog
+## 0.35.0 — 2026-10-24
+
+### Removed (BREAKING) — гарын үсгийн зураг / байгууллагын тамганы зураг
+
+- **Юу:** 0.31.0–0.32.0-д нэмэгдсэн зургийн функц бүрэн хасагдав: `/pades`-ийн `appearance.signatureImage` /
+  `stampImage`, `PdfImage`, `Completed.images` (бүртгэлийн `images`, 409 `IMAGE_MISMATCH` код), alpha/zlib FDICT
+  шалгалт, зурагтай байрлал (220×110 / 240×147.5); RP-API-ийн `person.signatureImage()`, `Representation.stampImage` /
+  `stampImageSet`. Харагдах тамга өмнөх QR тамга руу буцна — `prepare` / `complete`-ийн гаралт 0.30.1-тэй байт-ижил.
+  Эдгээр талбар/функц ашиглаж буй код TypeScript-ээр compile хийгдэхгүй — устгана уу. «Миний QR» (`qr.*`) хэвээр.
+- **Яагаад:** зургийн функцийг бүх системээс (CA, портал, апп, SDK) бүрэн хасах шийдвэр (2026-10-24).
+- **Хаана:** #61, #63-ийг revert; golden v10 → `pades-golden-v9` (зурагтай 5 кейс хасагдсан).
+- **Шалгасан:** `src/pades*`, `test/fixtures/pades` нь 0.30.1 (golden v9)-тэй `git diff` хоосон; `npm run golden:check`
+  (Go reference v9 commit-тэй байт-ижил), `npm test`, lint.
+
 ## 0.34.0 — 2026-10-23
 
 ### Added — «Миний QR»: нэг удаагийн шалгалт `check`; `result`-ийн хүлээлт дуусахад `QR_PENDING`
