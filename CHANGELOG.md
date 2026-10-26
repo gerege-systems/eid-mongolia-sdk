@@ -20,8 +20,8 @@
   `src/client.ts`, `src/session.ts`, `src/types.ts`, `test/myqr.test.ts`, README §3h.
 - **Шалгасан:** `npm run lint`, `npm test` (300; openssl тест PKI-аар гэрээний §7-ийн 39 verify кейс + нэмэлт, mock RP-API:
   start body/nonce 22 тэмдэгт, 400/403/404/409 код, USER_REFUSED, RUNNING/QR_PENDING, 410 → QR_PRESENTATION_GONE),
-  `scripts/test-compat.mjs`, `golden:check`. CA-ийн `myqr_vectors.json` ирмэгц `test/fixtures`-д хуулж
-  `MYQR_VECTORS_SHA256`-ийг бэхэлнэ (одоогоор тест алгасагдана).
+  `scripts/test-compat.mjs`, `golden:check`. CA-ийн `myqr_vectors.json` (902e0b4e) `test/fixtures`-д,
+  SHA-256 `MYQR_VECTORS_SHA256`-д бэхлэгдсэн — бүх кейс давсан.
 
 ## 0.36.0 — 2026-10-24
 
