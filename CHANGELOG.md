@@ -1,4 +1,28 @@
 # Changelog
+## 0.37.0 — 2026-10-26
+
+### Changed (BREAKING) — «Миний QR»: иргэний PIN2 гарын үсэгтэй «Миний мэдээлэл» (CA гэрээ myqr-2026-10-26)
+
+- **Юу:** `eid.qr` бүрэн солигдсон (хуучин API хэрэглэгчгүй байсан тул нийцлийн давхарга үгүй). `qr.start({ qr, nonce?,
+  relyingPartyName? })` → `POST /authentication/qr` `{qr, relyingPartyUUID, relyingPartyName, nonce}` → `{ sessionId, nonce }`
+  (nonce өгөөгүй бол base64url(16 байт); VC алга). `qr.result` / `qr.check` (`{ complete: false } | { complete: true, result }`)
+  presentation-ийг `verifyQrPresentation(jws, expect, trust)`-аар шалгана: иргэний PS256 JWS (`typ` `eidmn-myqr+jwt`, `x5c`
+  [SIGN гэрчилгээ, олгогч CA]) — гинж (`TrustConfig`, анхдагч National Root + 04 issuer allowlist), QUALIFIED + contentCommitment,
+  цуцлалт (`trust.revocation`, алга бол SDK-ийн OCSP, hard-fail), гарын үсэг, claim, өгөгдлийн хязгаар (гэрээний §6.1, 13
+  алхам). Үр дүн `QrPresentation`: `data` (апп дээр хадгалсан түлхүүр/утга verbatim), `source`, `photo` (JPEG), `signer`
+  (гэрчилгээнээс ETSI, нэр), `signedAt`, `sha256` (= CA аудитын `qrsha`). Алдаа `QrError` (`QR_JWS_MALFORMED` …
+  `QR_DATA_INVALID`, `QR_PRESENTATION_GONE` — `GET /session` 410, `QR_PENDING`); CA-ийн код `ApiError.code`-оор дамжина.
+  `parseQr` → `{ token, qr }`, зөвхөн `EIDMN-QR1:<token>`. Хасагдсан: аттрибутын каталог (`QR_ATTRIBUTES`), CA-ийн ES256 /
+  JWKS шалгалт (`QrConfig.jwksUrl` г.м.), `SessionPresentation.claims`. RP-д зөвхөн `QR_PRESENT` эрх.
+- **Яагаад:** эзэмшигчийн шийдвэр (2026-10-26) — RP иргэний «Миний мэдээлэл»-ийг иргэний өөрийн QUALIFIED гарын үсэгтэйгээр
+  авна; CA өгөгдөл хадгалахгүй, хувилбар (v1/v2) салгахгүй.
+- **Хаана:** `src/myqr.ts` (дахин бичсэн), `src/validator.ts` (`verifyQrSigner` @internal; цагийг дамжуулдаг болсон),
+  `src/client.ts`, `src/session.ts`, `src/types.ts`, `test/myqr.test.ts`, README §3h.
+- **Шалгасан:** `npm run lint`, `npm test` (300; openssl тест PKI-аар гэрээний §7-ийн 39 verify кейс + нэмэлт, mock RP-API:
+  start body/nonce 22 тэмдэгт, 400/403/404/409 код, USER_REFUSED, RUNNING/QR_PENDING, 410 → QR_PRESENTATION_GONE),
+  `scripts/test-compat.mjs`, `golden:check`. CA-ийн `myqr_vectors.json` ирмэгц `test/fixtures`-д хуулж
+  `MYQR_VECTORS_SHA256`-ийг бэхэлнэ (одоогоор тест алгасагдана).
+
 ## 0.36.0 — 2026-10-24
 
 ### Added
