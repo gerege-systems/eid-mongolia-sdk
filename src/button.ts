@@ -10,7 +10,7 @@
 // Дизайн: `--eid-*` CSS хувьсагчаар дарж болно (README-ийн хүснэгт).
 
 import { isMobileUserAgent } from "./devicelink.js";
-import { EID_LOGO_PATH, EID_LOGO_TRANSFORM, EID_LOGO_VIEWBOX } from "./logo.js";
+import { EID_LOGO_SHAPES, EID_LOGO_VIEWBOX } from "./logo.js";
 import { encodeQr, qrSvgPath } from "./qr.js";
 
 /** eID аппын хэлнүүд (Монгол + НҮБ-ын 6 албан ёсны хэл); бусад утга → mn. */
@@ -26,8 +26,6 @@ export function resolveEidLang(lang: string | null | undefined): Lang {
 const MN = {
     button: "eID-ээр нэвтрэх",
     title: "eID-ээр нэвтрэх",
-    // Лого «e-ID» гэж бичигддэг тул логотой үед «eID»-г давтахгүй, зураасгүй: [лого] нэвтрэх.
-    withLogo: ["", "нэвтрэх"],
     close: "Хаах",
     loading: "Ачаалж байна",
     qrAlt: "Нэвтрэх QR код — утсан дээрх eID Mongolia аппаар уншуулна",
@@ -73,7 +71,6 @@ const T: Record<Lang, Texts> = {
   en: {
     button: "Log in with eID",
     title: "Log in with eID",
-    withLogo: ["Log in with ", ""],
     close: "Close",
     loading: "Loading",
     qrAlt: "Login QR code — scan it with the eID Mongolia app on your phone",
@@ -113,7 +110,6 @@ const T: Record<Lang, Texts> = {
   ru: {
     button: "Войти через eID",
     title: "Войти через eID",
-    withLogo: ["Войти через ", ""],
     close: "Закрыть",
     loading: "Загрузка",
     qrAlt: "QR-код для входа — отсканируйте его приложением eID Mongolia на телефоне",
@@ -153,7 +149,6 @@ const T: Record<Lang, Texts> = {
   zh: {
     button: "使用 eID 登录",
     title: "使用 eID 登录",
-    withLogo: ["使用", "登录"],
     close: "关闭",
     loading: "加载中",
     qrAlt: "登录二维码 — 请用手机上的 eID Mongolia 应用扫描",
@@ -193,7 +188,6 @@ const T: Record<Lang, Texts> = {
   fr: {
     button: "Se connecter avec eID",
     title: "Se connecter avec eID",
-    withLogo: ["Se connecter avec ", ""],
     close: "Fermer",
     loading: "Chargement",
     qrAlt: "Code QR de connexion — scannez-le avec l'application eID Mongolia sur votre téléphone",
@@ -233,7 +227,6 @@ const T: Record<Lang, Texts> = {
   es: {
     button: "Iniciar sesión con eID",
     title: "Iniciar sesión con eID",
-    withLogo: ["Iniciar sesión con ", ""],
     close: "Cerrar",
     loading: "Cargando",
     qrAlt: "Código QR de inicio de sesión: escanéelo con la aplicación eID Mongolia de su teléfono",
@@ -273,7 +266,6 @@ const T: Record<Lang, Texts> = {
   ar: {
     button: "تسجيل الدخول عبر eID",
     title: "تسجيل الدخول عبر eID",
-    withLogo: ["تسجيل الدخول عبر ", ""],
     close: "إغلاق",
     loading: "جارٍ التحميل",
     qrAlt: "رمز QR لتسجيل الدخول — امسحه بتطبيق eID Mongolia على هاتفك",
@@ -392,7 +384,6 @@ const EID_COLOR_TOKENS: ReadonlyArray<readonly [string, string, string]> = [
   ["border", "hsl(214 32% 91%)", "hsl(217 33% 17%)"],
   ["border-strong", "hsl(213 27% 84%)", "hsl(215 25% 27%)"],
   ["accent", "oklch(0.534 0.2 259)", "oklch(0.64 0.15 259)"],
-  ["logo", "#1430FD", "#fff"],
   ["accent-fg", "#fff", "hsl(229 50% 6%)"],
   ["accent-subtle", "oklch(0.97 0.03 259)", "oklch(0.24 0.06 259)"],
   ["accent-subtle-fg", "oklch(0.474 0.19 259)", "oklch(0.82 0.1 259)"],
@@ -417,6 +408,8 @@ button, input { font-family: inherit; }
 // <style>-д идэвхжинэ: `--eid-<нэр>-dark` → `--eid-<нэр>` → dark анхдагч.
 const DARK_CSS = `:host { color-scheme: dark;
   ${darkVars} }
+.logo .m-a { fill: #fff; }
+.logo .m-l { stroke: #0A1631; }
 `;
 
 const CSS_REST = `
@@ -435,9 +428,10 @@ h2, p, ol { margin: 0; }
 .btn-outline:hover { background: var(--_eid-bg-muted); }
 .btn-sm { width: auto; min-height: 36px; padding: 0 14px; font-size: 0.8125rem; }
 .trigger { width: auto; }
-.brand { display: inline-flex; align-items: center; gap: 6px; }
-.logo { display: block; flex: none; height: 16px; width: auto; aspect-ratio: 3840 / 1372; fill: var(--_eid-logo); }
-.trigger.icon-only .logo { height: 12px; }
+.logo { display: block; flex: none; width: 20px; height: 20px; }
+.logo .m-a { fill: #0A1631; }
+.logo .m-l { stroke: #fff; }
+.trigger.icon-only .logo { width: 24px; height: 24px; }
 .trigger.icon-only { width: 44px; height: 44px; padding: 0; }
 .backdrop { position: fixed; inset: 0; z-index: 2147483000; background: hsl(222 47% 11% / 0.5); display: flex; align-items: center;
   justify-content: center; padding: 16px; overflow-y: auto; }
@@ -445,7 +439,7 @@ h2, p, ol { margin: 0; }
   color: var(--_eid-fg); border: 1px solid var(--_eid-border); border-radius: var(--_eid-radius-lg); padding: 24px; font-size: 0.875rem; line-height: 1.5rem; }
 @media (max-width: 639px) { .dialog { padding: 16px; } }
 .head { display: flex; align-items: center; gap: 8px; margin-bottom: 16px; }
-.head .logo { height: 20px; }
+.head .logo { width: 24px; height: 24px; }
 .head h2 { flex: 1; font-size: 1.125rem; line-height: 1.75rem; font-weight: 600; }
 .x { width: 36px; height: 36px; border: 0; border-radius: var(--_eid-radius); background: transparent; color: var(--_eid-fg-muted); cursor: pointer; font-size: 1.25rem; line-height: 1; }
 .x:hover { background: var(--_eid-bg-muted); color: var(--_eid-fg); }
@@ -523,17 +517,18 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, attrs: Record<string,
   return e;
 }
 
-/** «e-ID» wordmark — inline SVG, өнгө `--_eid-logo` (light брэнд цэнхэр, dark цагаан). */
+/** eID emblem — inline SVG; theme-ийн өнгө нь `.m-a` / `.m-l` class-аар shadow CSS-ээс (light / DARK_CSS). */
 function logo(attrs: Record<string, string> = {}): SVGSVGElement {
   const NS = "http://www.w3.org/2000/svg";
   const svg = document.createElementNS(NS, "svg");
   for (const [k, v] of Object.entries({ class: "logo", viewBox: EID_LOGO_VIEWBOX, "aria-hidden": "true", focusable: "false", ...attrs })) {
     svg.setAttribute(k, v);
   }
-  const path = document.createElementNS(NS, "path");
-  path.setAttribute("transform", EID_LOGO_TRANSFORM);
-  path.setAttribute("d", EID_LOGO_PATH);
-  svg.append(path);
+  for (const [tag, a] of EID_LOGO_SHAPES) {
+    const node = document.createElementNS(NS, tag);
+    for (const [k, v] of Object.entries(a)) node.setAttribute(k, v);
+    svg.append(node);
+  }
   return svg;
 }
 
@@ -627,31 +622,17 @@ export class EidLoginButton extends Base {
         console.warn('<eid-login-button>: icon="none" ба текстгүй (variant="icon" эсвэл label="") — анхдагч текстийг харуулав.');
       }
     }
-    // Анхдагч текст + лого → лого «eID»-г орлоно: [лого] нэвтрэх.
-    const brand = hasIcon && !iconOnly && !label;
+    // Emblem-д үсэг алга тул текст үргэлж бүтэн: [emblem] eID-ээр нэвтрэх.
     const nodes: Node[] = [];
-    if (brand) nodes.push(this.brand({ part: "icon" }, { part: "label" }));
-    else {
-      if (hasIcon) nodes.push(logo({ part: "icon" }));
-      if (!iconOnly) nodes.push(el("span", { part: "label" }, text));
-    }
+    if (hasIcon) nodes.push(logo({ part: "icon" }));
+    if (!iconOnly) nodes.push(el("span", { part: "label" }, text));
     this.trigger.replaceChildren(...nodes);
     this.trigger.classList.toggle("icon-only", iconOnly);
     this.trigger.setAttribute("dir", this.uiDir);
-    // Лого aria-hidden ба flex item-уудын хооронд accname зай оруулдаг тул нэрийг бүтнээр нь өгнө.
-    const aria = this.getAttribute("aria-label") || (iconOnly || brand ? text : null);
+    // Зөвхөн-лого үед (лого aria-hidden) нэрийг aria-label-аар өгнө.
+    const aria = this.getAttribute("aria-label") || (iconOnly ? text : null);
     if (aria) this.trigger.setAttribute("aria-label", aria);
     else this.trigger.removeAttribute("aria-label");
-  }
-
-  /** Лого + i18n-ийн өмнөх/дараах текст. Лого aria-hidden — дуудагч бүтэн нэрийг aria-label-аар өгнө. */
-  private brand(logoAttrs: Record<string, string> = {}, textAttrs: Record<string, string> = {}): HTMLElement {
-    const [pre, post] = this.t.withLogo;
-    const box = el("span", { class: "brand" });
-    if (pre) box.append(el("span", textAttrs, pre));
-    box.append(logo(logoAttrs));
-    if (post) box.append(el("span", textAttrs, post));
-    return box;
   }
 
   disconnectedCallback(): void {
@@ -707,9 +688,8 @@ export class EidLoginButton extends Base {
     const head = el("div", { class: "head" });
     const x = el("button", { type: "button", class: "x", "aria-label": this.t.close }, "×");
     x.addEventListener("click", () => this.close());
-    const h2 = el("h2", { id: "eid-title", "aria-label": this.t.title });
-    h2.append(this.brand());
-    head.append(h2, x);
+    const h2 = el("h2", { id: "eid-title" }, this.t.title);
+    head.append(logo(), h2, x);
     this.body = el("div");
     this.live = el("p", { class: "sr-only", "aria-live": "polite" });
     dlg.append(head, this.body, this.live);
