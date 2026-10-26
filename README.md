@@ -155,7 +155,7 @@ app.use("/auth/eid", express.json(), async (req, res) => {
 | `mode` | `auto` (утас → Web2App, бусад → QR цонх) \| `qr` \| `app` | `auto` |
 | `theme` | `auto` \| `light` \| `dark` | `auto` |
 | `success-url` (`successUrl`) | backend redirect өгөөгүй үед шилжих URL | — |
-| `label` | товчны текст; `""` → зөвхөн лого | i18n: «eID-ээр нэвтрэх» / «Log in with eID» |
+| `label` | товчны текст; `""` → зөвхөн лого | i18n: «e-ID-ээр нэвтрэх» / «Log in with e-ID» |
 | `icon` | `eid` (eID emblem, inline SVG дөрвөлжин — товчинд 20px, зөвхөн-лого үед 24px, цонхны толгойд 24px; light / dark хувилбар theme-ийг дагана) \| `none` (логогүй) | `eid` |
 | `variant` | `default` (лого + текст) \| `icon` (зөвхөн лого, 44×44) | `default` |
 | `aria-label` | товчны хүртээмжийн нэр (дэлгэц уншигч) | зөвхөн-лого үед `label` эсвэл i18n текст |

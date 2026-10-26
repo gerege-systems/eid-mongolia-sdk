@@ -71,10 +71,10 @@ test("товч: emblem + бүтэн текст, aria-haspopup; lang=en", () => {
   assert.equal(btn.querySelector("img"), null, "inline SVG — data URI зураг үгүй");
   assert.equal(btn.firstElementChild!.tagName.toLowerCase(), "svg", "лого эхэнд");
   // Emblem-д үсэг алга — текст бүтэн харагдана, aria-label шаардлагагүй.
-  assert.equal(btn.textContent, "eID-ээр нэвтрэх");
+  assert.equal(btn.textContent, "e-ID-ээр нэвтрэх");
   assert.equal(btn.hasAttribute("aria-label"), false);
   b.setAttribute("lang", "en");
-  assert.equal(btn.textContent, "Log in with eID");
+  assert.equal(btn.textContent, "Log in with e-ID");
   assert.ok(b instanceof EidLoginButton);
 });
 
@@ -99,7 +99,7 @@ test("товч: label атрибут (шууд шинэчлэгдэнэ), анх
   const btn = sr.querySelector("button.trigger")!;
   assert.equal(btn.getAttribute("part"), "button");
   assert.equal(btn.querySelector("svg.logo")!.getAttribute("part"), "icon");
-  assert.equal(btn.querySelector("span[part=label]")!.textContent, "eID-ээр нэвтрэх");
+  assert.equal(btn.querySelector("span[part=label]")!.textContent, "e-ID-ээр нэвтрэх");
   assert.equal(btn.hasAttribute("aria-label"), false, "харагдах текст бүтэн → aria-label үгүй");
   b.setAttribute("label", "Нэвтрэх");
   assert.equal(btn.textContent, "Нэвтрэх");
@@ -107,7 +107,7 @@ test("товч: label атрибут (шууд шинэчлэгдэнэ), анх
   b.setAttribute("lang", "en");
   assert.equal(btn.textContent, "Нэвтрэх", "label нь lang-аас давуу");
   b.removeAttribute("label");
-  assert.equal(btn.textContent, "Log in with eID");
+  assert.equal(btn.textContent, "Log in with e-ID");
   const m = make({ label: "Sign in" } as Record<string, string>);
   assert.equal(m.sr.querySelector("button.trigger")!.textContent, "Sign in");
 });
@@ -116,7 +116,7 @@ test("товч: icon=none → лого үгүй; icon=eid буцаана", () =>
   const { sr, b } = make({ icon: "none" } as Record<string, string>);
   const btn = sr.querySelector("button.trigger")!;
   assert.equal(btn.querySelector("svg[part=icon]"), null);
-  assert.equal(btn.textContent, "eID-ээр нэвтрэх");
+  assert.equal(btn.textContent, "e-ID-ээр нэвтрэх");
   b.setAttribute("icon", "eid");
   assert.ok(btn.querySelector("svg[part=icon]"));
 });
@@ -127,9 +127,9 @@ test("товч: variant=icon / label=\"\" → зөвхөн лого, дөрвө�
   assert.equal(btn.querySelector("span"), null);
   assert.ok(btn.querySelector("svg[part=icon]"));
   assert.ok(btn.classList.contains("icon-only"));
-  assert.equal(btn.getAttribute("aria-label"), "eID-ээр нэвтрэх");
+  assert.equal(btn.getAttribute("aria-label"), "e-ID-ээр нэвтрэх");
   b.setAttribute("lang", "en");
-  assert.equal(btn.getAttribute("aria-label"), "Log in with eID");
+  assert.equal(btn.getAttribute("aria-label"), "Log in with e-ID");
   b.setAttribute("label", "Sign in");
   assert.equal(btn.getAttribute("aria-label"), "Sign in");
   b.setAttribute("aria-label", "Нэвтрэх (eID)");
@@ -141,7 +141,7 @@ test("товч: variant=icon / label=\"\" → зөвхөн лого, дөрвө�
   assert.equal(btn.classList.contains("icon-only"), false);
   b.setAttribute("label", "");
   assert.equal(btn.querySelector("span"), null);
-  assert.equal(btn.getAttribute("aria-label"), "Log in with eID");
+  assert.equal(btn.getAttribute("aria-label"), "Log in with e-ID");
   const css = [...sr.querySelectorAll("style")].map((x) => x.textContent ?? "").join("\n");
   assert.match(css, /\.trigger\.icon-only \{ width: 44px; height: 44px; padding: 0; \}/);
 });
@@ -154,11 +154,11 @@ test("товч: icon=none + текстгүй → анхдагч текст (хо
     const { sr, b } = make({ icon: "none", label: "" } as Record<string, string>);
     const btn = sr.querySelector("button.trigger")!;
     assert.equal(btn.querySelector("svg[part=icon]"), null);
-    assert.equal(btn.textContent, "eID-ээр нэвтрэх");
+    assert.equal(btn.textContent, "e-ID-ээр нэвтрэх");
     assert.equal(btn.classList.contains("icon-only"), false);
     b.setAttribute("variant", "icon");
     b.setAttribute("lang", "en");
-    assert.equal(btn.textContent, "Log in with eID");
+    assert.equal(btn.textContent, "Log in with e-ID");
     assert.equal(warns.length, 1);
   } finally {
     console.warn = orig;
@@ -256,7 +256,7 @@ test("desktop: ачаалж байна → QR (svg) + VC + алхмууд → OK
   assert.equal(dlg.getAttribute("aria-modal"), "true");
   const h2 = sr.querySelector("#eid-title")!;
   assert.equal(dlg.getAttribute("aria-labelledby"), "eid-title");
-  assert.equal(h2.textContent, "eID-ээр нэвтрэх", "нэр бүтэн");
+  assert.equal(h2.textContent, "e-ID-ээр нэвтрэх", "нэр бүтэн");
   assert.ok(sr.querySelector(".head > svg.logo[aria-hidden=true]"), "emblem цонхны толгойд");
   assert.match(text(), /Ачаалж байна/);
   await until(() => !!sr.querySelector(".qr svg path"));
@@ -515,8 +515,8 @@ test("lang: eID аппын 7 хэл; zh-CN → zh, үл мэдэгдэх → mn"
   assert.equal(resolveEidLang(""), "mn");
   assert.equal(resolveEidLang(null), "mn");
   const names: Record<string, string> = {
-    mn: "eID-ээр нэвтрэх", en: "Log in with eID", ru: "Войти через eID", zh: "使用 eID 登录",
-    fr: "Se connecter avec eID", es: "Iniciar sesión con eID", ar: "تسجيل الدخول عبر eID",
+    mn: "e-ID-ээр нэвтрэх", en: "Log in with e-ID", ru: "Войти через e-ID", zh: "使用 e-ID 登录",
+    fr: "Se connecter avec e-ID", es: "Iniciar sesión con e-ID", ar: "تسجيل الدخول عبر e-ID",
   };
   const { sr, b } = make();
   const btn = sr.querySelector("button.trigger")!;

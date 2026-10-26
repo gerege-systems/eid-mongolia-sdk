@@ -24,8 +24,8 @@ export function resolveEidLang(lang: string | null | undefined): Lang {
 }
 
 const MN = {
-    button: "eID-ээр нэвтрэх",
-    title: "eID-ээр нэвтрэх",
+    button: "e-ID-ээр нэвтрэх",
+    title: "e-ID-ээр нэвтрэх",
     close: "Хаах",
     loading: "Ачаалж байна",
     qrAlt: "Нэвтрэх QR код — утсан дээрх eID Mongolia аппаар уншуулна",
@@ -53,7 +53,7 @@ const MN = {
     refusedTitle: "Нэвтрэлтээс татгалзсан",
     failedTitle: "Нэвтэрч чадсангүй",
     failedText: "Баталгаажуулалт амжилтгүй боллоо. Дахин оролдоно уу.",
-    unavailable: "eID үйлчилгээнд холбогдож чадсангүй. Түр хүлээгээд дахин оролдоно уу.",
+    unavailable: "e-ID үйлчилгээнд холбогдож чадсангүй. Түр хүлээгээд дахин оролдоно уу.",
     callbackTitle: "Утсан дээрх хөтчөөр үргэлжилнэ",
     callbackText: "Баталгаажуулалт амжилттай. Аппаас нээгдсэн хөтчийн цонхонд нэвтрэлт үргэлжилнэ.",
     retry: "Дахин оролдох",
@@ -69,8 +69,8 @@ type Texts = typeof MN;
 const T: Record<Lang, Texts> = {
   mn: MN,
   en: {
-    button: "Log in with eID",
-    title: "Log in with eID",
+    button: "Log in with e-ID",
+    title: "Log in with e-ID",
     close: "Close",
     loading: "Loading",
     qrAlt: "Login QR code — scan it with the eID Mongolia app on your phone",
@@ -98,7 +98,7 @@ const T: Record<Lang, Texts> = {
     refusedTitle: "Login declined",
     failedTitle: "Login failed",
     failedText: "Verification failed. Please try again.",
-    unavailable: "Could not reach the eID service. Please try again shortly.",
+    unavailable: "Could not reach the e-ID service. Please try again shortly.",
     callbackTitle: "Continue in your phone's browser",
     callbackText: "Verified. Login continues in the browser window the app opened.",
     retry: "Try again",
@@ -108,8 +108,8 @@ const T: Record<Lang, Texts> = {
     busy: (n: number) => `Service busy — try again in ${n} s`,
   },
   ru: {
-    button: "Войти через eID",
-    title: "Войти через eID",
+    button: "Войти через e-ID",
+    title: "Войти через e-ID",
     close: "Закрыть",
     loading: "Загрузка",
     qrAlt: "QR-код для входа — отсканируйте его приложением eID Mongolia на телефоне",
@@ -137,7 +137,7 @@ const T: Record<Lang, Texts> = {
     refusedTitle: "Вход отклонён",
     failedTitle: "Не удалось войти",
     failedText: "Проверка не пройдена. Повторите попытку.",
-    unavailable: "Не удалось подключиться к сервису eID. Повторите попытку чуть позже.",
+    unavailable: "Не удалось подключиться к сервису e-ID. Повторите попытку чуть позже.",
     callbackTitle: "Продолжите в браузере телефона",
     callbackText: "Проверка пройдена. Вход продолжится в окне браузера, которое открыло приложение.",
     retry: "Повторить",
@@ -147,8 +147,8 @@ const T: Record<Lang, Texts> = {
     busy: (n: number) => `Сервис занят — повторите через ${n} с`,
   },
   zh: {
-    button: "使用 eID 登录",
-    title: "使用 eID 登录",
+    button: "使用 e-ID 登录",
+    title: "使用 e-ID 登录",
     close: "关闭",
     loading: "加载中",
     qrAlt: "登录二维码 — 请用手机上的 eID Mongolia 应用扫描",
@@ -176,7 +176,7 @@ const T: Record<Lang, Texts> = {
     refusedTitle: "登录已被拒绝",
     failedTitle: "登录失败",
     failedText: "验证失败。请重试。",
-    unavailable: "无法连接 eID 服务。请稍后再试。",
+    unavailable: "无法连接 e-ID 服务。请稍后再试。",
     callbackTitle: "请在手机浏览器中继续",
     callbackText: "验证成功。登录将在应用打开的浏览器窗口中继续。",
     retry: "重试",
@@ -186,8 +186,8 @@ const T: Record<Lang, Texts> = {
     busy: (n: number) => `服务繁忙 — 请在 ${n} 秒后重试`,
   },
   fr: {
-    button: "Se connecter avec eID",
-    title: "Se connecter avec eID",
+    button: "Se connecter avec e-ID",
+    title: "Se connecter avec e-ID",
     close: "Fermer",
     loading: "Chargement",
     qrAlt: "Code QR de connexion — scannez-le avec l'application eID Mongolia sur votre téléphone",
@@ -215,7 +215,7 @@ const T: Record<Lang, Texts> = {
     refusedTitle: "Connexion refusée",
     failedTitle: "Échec de la connexion",
     failedText: "La vérification a échoué. Réessayez.",
-    unavailable: "Impossible de joindre le service eID. Réessayez dans un instant.",
+    unavailable: "Impossible de joindre le service e-ID. Réessayez dans un instant.",
     callbackTitle: "Continuez dans le navigateur du téléphone",
     callbackText: "Vérification réussie. La connexion se poursuit dans la fenêtre du navigateur ouverte par l'application.",
     retry: "Réessayer",
@@ -225,8 +225,8 @@ const T: Record<Lang, Texts> = {
     busy: (n: number) => `Service occupé — réessayez dans ${n} s`,
   },
   es: {
-    button: "Iniciar sesión con eID",
-    title: "Iniciar sesión con eID",
+    button: "Iniciar sesión con e-ID",
+    title: "Iniciar sesión con e-ID",
     close: "Cerrar",
     loading: "Cargando",
     qrAlt: "Código QR de inicio de sesión: escanéelo con la aplicación eID Mongolia de su teléfono",
@@ -254,7 +254,7 @@ const T: Record<Lang, Texts> = {
     refusedTitle: "Inicio de sesión rechazado",
     failedTitle: "No se pudo iniciar sesión",
     failedText: "La verificación ha fallado. Inténtelo de nuevo.",
-    unavailable: "No se pudo conectar con el servicio eID. Inténtelo de nuevo en breve.",
+    unavailable: "No se pudo conectar con el servicio e-ID. Inténtelo de nuevo en breve.",
     callbackTitle: "Continúe en el navegador del teléfono",
     callbackText: "Verificación correcta. El inicio de sesión continúa en la ventana del navegador que abrió la aplicación.",
     retry: "Reintentar",
@@ -264,8 +264,8 @@ const T: Record<Lang, Texts> = {
     busy: (n: number) => `Servicio ocupado: inténtelo de nuevo en ${n} s`,
   },
   ar: {
-    button: "تسجيل الدخول عبر eID",
-    title: "تسجيل الدخول عبر eID",
+    button: "تسجيل الدخول عبر e-ID",
+    title: "تسجيل الدخول عبر e-ID",
     close: "إغلاق",
     loading: "جارٍ التحميل",
     qrAlt: "رمز QR لتسجيل الدخول — امسحه بتطبيق eID Mongolia على هاتفك",
@@ -293,7 +293,7 @@ const T: Record<Lang, Texts> = {
     refusedTitle: "تم رفض تسجيل الدخول",
     failedTitle: "تعذّر تسجيل الدخول",
     failedText: "فشل التحقق. أعد المحاولة.",
-    unavailable: "تعذّر الاتصال بخدمة eID. أعد المحاولة بعد قليل.",
+    unavailable: "تعذّر الاتصال بخدمة e-ID. أعد المحاولة بعد قليل.",
     callbackTitle: "تابع في متصفح الهاتف",
     callbackText: "تم التحقق بنجاح. يتابع تسجيل الدخول في نافذة المتصفح التي فتحها التطبيق.",
     retry: "إعادة المحاولة",
@@ -361,7 +361,7 @@ export interface EidLoginButtonOptions {
   theme?: "auto" | "light" | "dark";
   /** Амжилтын дараа (backend redirect өгөөгүй бол) шилжих URL. */
   successUrl?: string;
-  /** Товчны текст (анхдагч: i18n «eID-ээр нэвтрэх» / «Log in with eID»). `""` → зөвхөн лого (`variant: "icon"`-той ижил). */
+  /** Товчны текст (анхдагч: i18n «e-ID-ээр нэвтрэх» / «Log in with e-ID»). `""` → зөвхөн лого (`variant: "icon"`-той ижил). */
   label?: string;
   /** eid (анхдагч — eID лого) | none (логогүй). */
   icon?: "eid" | "none";
@@ -622,7 +622,7 @@ export class EidLoginButton extends Base {
         console.warn('<eid-login-button>: icon="none" ба текстгүй (variant="icon" эсвэл label="") — анхдагч текстийг харуулав.');
       }
     }
-    // Emblem-д үсэг алга тул текст үргэлж бүтэн: [emblem] eID-ээр нэвтрэх.
+    // Emblem-д үсэг алга тул текст үргэлж бүтэн: [emblem] e-ID-ээр нэвтрэх.
     const nodes: Node[] = [];
     if (hasIcon) nodes.push(logo({ part: "icon" }));
     if (!iconOnly) nodes.push(el("span", { part: "label" }, text));
