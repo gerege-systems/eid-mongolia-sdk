@@ -1,4 +1,24 @@
 # Changelog
+## 0.38.0 — 2026-10-27
+
+### Changed — `<eid-login-button>`: «e-ID» wordmark → eID emblem
+
+- **Юу:** товч ба QR цонхны толгойн лого нь шинэ eID emblem (дөрвөлжин; developer-eidmongolia-mn
+  `site/brand/eid-mark.svg` / `eid-mark-dark.svg`) — inline SVG, гадны файл/сүлжээ/inline style үгүй. Light theme-д
+  light хувилбар (зүүн тал #0A1631, цагираг цагаан), dark-д dark хувилбар (зүүн тал цагаан, цагираг #0A1631) — theme-ийн
+  сонголтыг (auto/light/dark) өмнөх шигээ дагана. Хэмжээ: товчинд 20px, `variant="icon"` (44×44)-д 24px, цонхны толгойд
+  24px. Emblem-д үсэг алга тул текст үргэлж бүтэн харагдана («eID-ээр нэвтрэх» / "Log in with eID"; өмнө нь
+  «[лого] нэвтрэх»); иймд анхдагч тексттэй товчинд `aria-label` тавихаа больсон (харагдах текст = нэр), зөвхөн-лого үед
+  хэвээр. `part="icon"`, `icon="eid|none"`, `variant` API өөрчлөгдөөгүй.
+- **Deprecated:** `--eid-logo` / `--eid-logo-dark` — emblem-ийн өнгө брэндээр тогтмол; утга өгсөн ч алдаа үгүй,
+  үл хэрэгжинэ (дараагийн major-т README-ээс хасна).
+- **Яагаад:** 2026-10-26-нд eidmongolia.mn ба developer.eidmongolia.mn брэндийг emblem болгосон; портал
+  `::part(icon)` дээр PNG дэвсгэрээр нөхөж байсан ч QR цонхны толгойд хуучин wordmark үлдсэн.
+- **Хаана:** `src/logo.ts` (emblem shape), `src/button.ts` (`logo()`, `.logo` CSS, DARK_CSS, i18n `withLogo` хасагдсан),
+  `test/button.test.ts`, README (`icon`, `--eid-logo` мөр).
+- **Шалгасан:** `npm run lint`, `npm test`, `golden:check`, `scripts/test-compat.mjs`; Playwright (chromium) дээр товч
+  (default / icon / en) ба цонхны толгой light + dark дэлгэцийн зураг.
+
 ## 0.37.0 — 2026-10-26
 
 ### Changed (BREAKING) — «Миний QR»: иргэний PIN2 гарын үсэгтэй «Миний мэдээлэл» (CA гэрээ myqr-2026-10-26)
