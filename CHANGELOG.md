@@ -1,4 +1,16 @@
 # Changelog
+## 0.38.1 — 2026-10-27
+
+### Changed — `<eid-login-button>`: хэрэглэгчид харагдах «eID» → «e-ID»
+
+- **Юу:** товч ба цонхны гарчиг (`button`, `title` — анхдагч `aria-label`/харагдах нэр), холболтын алдаа (`unavailable`)
+  7 хэлэнд «e-ID»: «e-ID-ээр нэвтрэх», "Log in with e-ID", «Войти через e-ID», «使用 e-ID 登录», «Se connecter avec
+  e-ID», «Iniciar sesión con e-ID», «تسجيل الدخول عبر e-ID». Аппын нэр «eID Mongolia» (утсан дээрх аппын нэр —
+  iOS `CFBundleDisplayName`) QR алхам / `qrAlt`-д хэвээр. Код, идентификатор, API, PAdES-ийн бичвэр (golden) хөндөөгүй.
+- **Яагаад:** 2026-10-26-нд eidmongolia.mn брэндийн нэрийг «e-ID» болгосон (портал !219); товч «eID» гэж хэвээр байв.
+- **Хаана:** `src/button.ts`, `test/button.test.ts`, README.
+- **Шалгасан:** `npm run lint`, `npm test`.
+
 ## 0.38.0 — 2026-10-27
 
 ### Changed — `<eid-login-button>`: «e-ID» wordmark → eID emblem
