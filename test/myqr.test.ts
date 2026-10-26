@@ -31,7 +31,7 @@ import {
  * хуулсны дараа бэхэлнэ (гэрээний §5.5).
  * TODO: CA-ийн vector commit ирмэгц `shasum -a 256 test/fixtures/myqr_vectors.json`-ийн утгаар солих.
  */
-const MYQR_VECTORS_SHA256 = "TODO-pin-sha256-of-ca-myqr_vectors.json";
+const MYQR_VECTORS_SHA256 = "7620ad6a14bd337cd8ccb94d2d27e8f82189f5ac3ec6ece9542f8f2922b92eab";
 const VECTORS_FILE = new URL("./fixtures/myqr_vectors.json", import.meta.url);
 
 const CONTRACT = "myqr-2026-10-26";
