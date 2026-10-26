@@ -437,6 +437,23 @@ export class ResponseValidator {
     this.verifyCertificate(leaf, "ACSP_V2");
   }
 
+  /**
+   * «Миний QR» (`verifyQrPresentation`)-ийн гарын үсэгтний гэрчилгээ, цаг `nowMs` ± `skewMs`: CA биш, хугацаа,
+   * зориулалт (sign — contentCommitment, `checkKeyUsage`-ээс үл хамааран), trust anchor хүртэлх гинж (anchor ЗААВАЛ),
+   * issuer allowlist, түвшин (qcStatements, `requiredLevel`). Шууд issuer-ийг (revocation-д) буцаана.
+   * @internal
+   */
+  verifyQrSigner(leaf: X509Certificate, nowMs: number, skewMs: number): X509Certificate | undefined {
+    if (isCa(leaf)) throw new ValidationError("Гарын үсэгтний гэрчилгээ CA байна");
+    if (this.anchors.length === 0) throw new ValidationError("Trust anchor тохируулаагүй");
+    this.checkValidity(leaf, nowMs, skewMs);
+    if (!(keyUsageBits(leaf) & 0x40)) throw new ValidationError("Гарын үсгийн гэрчилгээнд KeyUsage nonRepudiation (contentCommitment) алга");
+    this.verifyChain(leaf, EKU_EMAIL_PROTECTION, nowMs);
+    this.checkIssuer(leaf);
+    this.checkLevel(certificateLevelOf(leaf, "RAW_DIGEST_SIGNATURE"));
+    return this.findIssuer(leaf);
+  }
+
   /** Зориулалт (protocol), гинж, issuer — хугацаа/түвшнийг дуудагч шалгасан. */
   private verifyCertificate(leaf: X509Certificate, protocol: string): void {
     this.checkPurpose(leaf, protocol);
@@ -482,12 +499,11 @@ export class ResponseValidator {
     }
   }
 
-  private checkValidity(cert: X509Certificate): void {
-    const now = Date.now();
+  private checkValidity(cert: X509Certificate, now: number = Date.now(), skew: number = this.skew): void {
     const from = Date.parse(cert.validFrom);
     const to = Date.parse(cert.validTo);
-    if (!Number.isNaN(from) && now + this.skew < from) throw new ValidationError("Гэрчилгээ хүчинтэй болоогүй байна");
-    if (!Number.isNaN(to) && now - this.skew > to) throw new ValidationError("Гэрчилгээний хугацаа дууссан");
+    if (!Number.isNaN(from) && now + skew < from) throw new ValidationError("Гэрчилгээ хүчинтэй болоогүй байна");
+    if (!Number.isNaN(to) && now - skew > to) throw new ValidationError("Гэрчилгээний хугацаа дууссан");
   }
 
   private checkLevel(level: string): void {
@@ -506,8 +522,8 @@ export class ResponseValidator {
    * fail-closed (CA-ийн бодит гинж 01–04-т алга). Цаг = now, leaf-ийн хүчинтэй хугацаанд хавчсан (`clockSkewMs`-ийн
    * хүрээнд; leaf-ийн хугацааг checkValidity шалгасан). certificatePolicies шалгахгүй (Go-той ижил).
    */
-  private verifyChain(leaf: X509Certificate, usage: string): void {
-    const now = Math.min(Math.max(Date.now(), Date.parse(leaf.validFrom)), Date.parse(leaf.validTo));
+  private verifyChain(leaf: X509Certificate, usage: string, at: number = Date.now()): void {
+    const now = Math.min(Math.max(at, Date.parse(leaf.validFrom)), Date.parse(leaf.validTo));
     const leafReason = criticalReason(leaf) ?? ekuReason(leaf, usage);
     if (leafReason) throw new ValidationError(`Гэрчилгээний гинж хүчингүй: ${leafReason}`);
     let reason: string | undefined;

@@ -84,7 +84,7 @@ function parsePerson(raw: unknown): PersonBlock | null {
 function parsePresentation(raw: unknown): SessionPresentation | null {
   const p = asRecord(raw);
   if (typeof p.jws !== "string" || !p.jws) return null;
-  return { jws: p.jws, ...(p.claims && typeof p.claims === "object" ? { claims: p.claims as Record<string, unknown> } : {}) };
+  return { jws: p.jws };
 }
 
 /** `tokenCertificate` блок. status алга бол null. */

@@ -4,7 +4,7 @@
 //                      клиент талын PAdES-ийн DTBS (sign.pdfDigest / signPdfDigest, registerSignature)
 //   client.organization — иргэний төлөөлөх байгууллагууд
 //   client.person    — иргэний PKI самбар (PKI_READ): гэрчилгээ, төхөөрөмж, үйл ажиллагаа, тоо, хүүхдүүд
-//   client.qr        — «Миний QR» (биечлэн шалгах): иргэний QR → хүссэн аттрибутууд (CA-ийн ES256 presentation)
+//   client.qr        — «Миний QR» (биечлэн шалгах): иргэний QR → «Миний мэдээлэл» (иргэний PIN2 PS256 JWS, x5c)
 //   client.token     — USB токены гэрчилгээ олголт (TOKEN_ISSUE) ба токеноор нэвтрэлт (AUTH)
 //   client.share()   — гарын үсэгтэй файлыг имэйлээр дамжуулах (SIGN; `shareInfo()` — discovery-ийн туг, хязгаар)
 //   client.session   — үр дүн poll хийх (long-poll)
@@ -73,7 +73,7 @@ export interface ClientConfig {
   signSessionTtlMs?: number;
   /** Trust anchor (Root CA) — validator-д. Production-д ЗААВАЛ. */
   trust?: TrustConfig;
-  /** «Миний QR»-ийн presentation шалгалт (JWKS URL, issuer, кэш). Анхдагч = prod CA. */
+  /** «Миний QR»-ийн presentation шалгалт (хүлээгдэх `issuer`). Анхдагч = prod CA. */
   qr?: QrConfig;
 }
 
@@ -116,7 +116,7 @@ export class EidClient {
   readonly organization: OrganizationApi;
   readonly person: PersonApi;
   readonly token: TokenApi;
-  /** «Миний QR» (биечлэн шалгах): parse → start → result. */
+  /** «Миний QR» (биечлэн шалгах): parse → start → result / check. */
   readonly qr: QrApi;
   readonly session: SessionApi;
   readonly validator: ResponseValidator;
@@ -149,10 +149,8 @@ export class EidClient {
       http,
       session: this.session,
       credentials: cfg.credentials,
-      config: cfg.qr,
-      fetchImpl: cfg.fetchImpl,
-      dispatcher: cfg.dispatcher,
-      timeoutMs: cfg.timeoutMs,
+      trust: cfg.trust,
+      issuer: cfg.qr?.issuer,
     });
     this.rpName = cfg.credentials.rpName;
     this.http = http;

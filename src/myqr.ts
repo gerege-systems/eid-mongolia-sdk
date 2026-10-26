@@ -1,51 +1,64 @@
-// «Миний QR» (биечлэн шалгах): иргэн апп дээрээ нэг удаагийн QR (120 с) харуулна → RP скан хийж `qr.start`-аар хүссэн
-// аттрибутаа CA-аас асууна → иргэн утсан дээрээ PIN1-ээр зөвшөөрнө → `qr.result` нь CA-ийн ES256 гарын үсэгтэй
-// presentation (JWS)-ийг JWKS-ээр шалгаж ЗӨВХӨН хүссэн аттрибутуудыг буцаана. Гэрчилгээ, person блок ирэхгүй.
-// RP-д AUTH + QR_PRESENT + аттрибут бүрд QR_ATTR:<нэр> эрх хэрэгтэй. Go / .NET SDK-тэй ижил дүрэм
-// (testdata/qr_vectors.json — гурван SDK-д ижил).
+// «Миний QR» (биечлэн шалгах, CA гэрээ myqr-2026-10-26): иргэн апп дээрээ `EIDMN-QR1:<token>` (120 с, нэг удаагийн)
+// харуулна → RP скан хийж `qr.start`-аар `POST /authentication/qr` → иргэн утсан дээрээ PIN2-оор (QUALIFIED SIGN түлхүүр)
+// «Миний мэдээлэл»-ээ бүхэлд нь хуваалцахыг зөвшөөрнө → `qr.result` нь ИРГЭНИЙ PS256 JWS-ийг (x5c = [SIGN гэрчилгээ,
+// олгогч CA]) гинж, цуцлалт (OCSP), гарын үсэг, claim-аар шалгаж өгөгдлийг буцаана. CA өгөгдлийг хадгалахгүй — анхны
+// амжилттай уншилтаар устгана (дахин уншвал 410 QR_PRESENTATION_GONE). RP-д зөвхөн `QR_PRESENT` эрх. Go / .NET SDK-тэй
+// ижил дүрэм (гэрээний §6; test/fixtures/myqr_vectors.json — CA-ийн файлтай байт-ижил).
 
-import { createPublicKey, verify as cryptoVerify, type KeyObject } from "node:crypto";
+import { X509Certificate, constants, createHash, randomBytes, verify as cryptoVerify } from "node:crypto";
 import { RP_ROUTES, routePath } from "./contract.js";
-import { randomChallenge } from "./crypto.js";
-import { EidError, SessionFailedError } from "./errors.js";
+import { ApiError, EidError, SessionFailedError } from "./errors.js";
 import type { Http } from "./http.js";
+import { ocspRevocationChecker } from "./ocsp.js";
 import type { SessionApi } from "./session.js";
-import { parseExpiresAt, type RpCredentials, type SessionResult } from "./types.js";
-
-/** Аттрибутын каталог (CA гэрээ v1, 2026-10-23). */
-export const QR_ATTRIBUTES = ["age_over_18", "age_over_21", "full_name", "phone", "birth_date", "civil_id"] as const;
-export type QrAttribute = (typeof QR_ATTRIBUTES)[number];
+import { parseSubject } from "./subject.js";
+import type { RpCredentials, SessionResult } from "./types.js";
+import {
+  CITIZEN_INTERMEDIATES_PEM,
+  NATIONAL_ROOT_CA_PEM,
+  ResponseValidator,
+  type RevocationChecker,
+  type RevocationStatus,
+  type TrustConfig,
+} from "./validator.js";
 
 /** Иргэний аппын QR-ийн угтвар: `EIDMN-QR1:<token>`. */
 export const QR_PREFIX = "EIDMN-QR1:";
 export const DEFAULT_QR_ISSUER = "https://ca.eidmongolia.mn";
-export const DEFAULT_QR_JWKS_URL = "https://ca.eidmongolia.mn/.well-known/eid-jwks.json";
-export const DEFAULT_QR_JWKS_CACHE_TTL_MS = 3_600_000;
-/** Presentation-ийн `iat`-аас хойш хүлээн авах дээд хугацаа (мс). */
-export const DEFAULT_QR_MAX_AGE_MS = 600_000;
-/** `iat` ирээдүйд байж болох зөрүү (мс). */
-export const QR_CLOCK_SKEW_MS = 60_000;
-const JWKS_MIN_REFRESH_MS = 30_000;
-const MAX_JWS = 16 << 10;
-const MAX_JWKS = 64 << 10;
+/** `iat` / `exp` / гэрчилгээний хугацааны зөрүү (с). */
+export const QR_CLOCK_SKEW_SECONDS = 60;
+/** `exp − iat`-ийн дээд хэмжээ (с). */
+export const QR_MAX_AGE_SECONDS = 300;
+/** Өгөгдлийн хязгаар (гэрээний §1.3) — CA, апп, SDK гурвуулаа шалгана. */
+export const QR_LIMITS = Object.freeze({ maxFields: 128, maxKeyChars: 64, maxValueBytes: 2048, maxPhotoBytes: 153600 });
+const MAX_JWS_BYTES = 524288;
 
 /**
- * QR алдааны кодууд ({@link QrError.code}). CA-ийн 404 `QR_TOKEN_INVALID` нь {@link QrTokenInvalidError}
- * (`ApiError`, `code === "QR_TOKEN_INVALID"`) болж ирнэ.
- * - `QR_FORMAT_INVALID` — скан хийсэн мөр eID «Миний QR» биш (клиент талын)
- * - `QR_TOKEN_INVALID` — токен танигдахгүй / хугацаа дууссан (120 с) / ашиглагдсан → шинэ QR гаргуул
- * - `QR_ATTRIBUTES_INVALID` — аттрибут хоосон / каталогид алга / давхардсан (клиент талын, CA руу явахгүй)
- * - `QR_PRESENTATION_INVALID` — JWS шалгалт унасан — хариунд ИТГЭХГҮЙ
- * - `QR_JWKS_UNAVAILABLE` — CA-ийн JWKS татагдсангүй (түр; дахин оролдож болно)
- * - `QR_PENDING` — `qr.result`-ийн хүлээх хугацаа (`maxWaitMs`) дууссан ч иргэн хараахан хариулаагүй (CA-ийн session
- *   идэвхтэй хэвээр) — дахин `result` / `check` дуудаж болно. CA-ийн жинхэнэ хугацаа дуусалт = SessionFailedError TIMEOUT.
+ * Клиент талын алдааны кодууд ({@link QrError.code}, гэрээний §6.2). CA-ийн кодууд (`QR_TOKEN_INVALID` 404,
+ * `PERMISSION_DENIED` / `RP_REQUIRED` 403, `NO_SIGNING_CERTIFICATE` 409, `REQUEST_INVALID` 400, `RATE_LIMITED` 429)
+ * өөрчлөгдөхгүй `ApiError` / `ForbiddenError`-ийн `code`-д ирнэ; зөвхөн `GET /session`-ийн 410 → `QR_PRESENTATION_GONE`.
+ * - `QR_FORMAT_INVALID` — скан хийсэн мөр eID «Миний QR» биш (CA руу явахгүй)
+ * - `QR_JWS_MALFORMED` … `QR_DATA_INVALID` — presentation-ийн шалгалт унасан — хариунд ИТГЭХГҮЙ
+ * - `QR_REVOCATION_UNKNOWN` — OCSP хариу аваагүй (hard-fail; түр — дахин `verify` хийж болно)
+ * - `QR_PRESENTATION_GONE` — presentation аль хэдийн уншигдсан эсвэл хугацаа нь дууссан → шинэ QR уншуулна
+ * - `QR_PENDING` — `qr.result`-ийн `maxWaitMs` дууссан ч иргэн хараахан хариулаагүй — дахин `result` / `check`
  */
 export const QR_ERROR_CODES = [
   "QR_FORMAT_INVALID",
-  "QR_TOKEN_INVALID",
-  "QR_ATTRIBUTES_INVALID",
-  "QR_PRESENTATION_INVALID",
-  "QR_JWKS_UNAVAILABLE",
+  "QR_JWS_MALFORMED",
+  "QR_HEADER_INVALID",
+  "QR_CHAIN_INVALID",
+  "QR_CERT_REVOKED",
+  "QR_REVOCATION_UNKNOWN",
+  "QR_SIGNATURE_INVALID",
+  "QR_CLAIMS_INVALID",
+  "QR_AUDIENCE_MISMATCH",
+  "QR_SESSION_MISMATCH",
+  "QR_NONCE_MISMATCH",
+  "QR_NOT_YET_VALID",
+  "QR_EXPIRED",
+  "QR_DATA_INVALID",
+  "QR_PRESENTATION_GONE",
   "QR_PENDING",
 ] as const;
 export type QrErrorCode = (typeof QR_ERROR_CODES)[number];
@@ -60,426 +73,406 @@ export class QrError extends EidError {
   }
 }
 
-const bad = (reason: string) => new QrError("QR_PRESENTATION_INVALID", reason);
-
-const TOKEN_RE = /^[A-Za-z0-9_-]{43}$/;
-
-/** Скан хийсэн QR-ээс токен: `EIDMN-QR1:<token>` эсвэл зөвхөн токен (43 тэмдэгт base64url). Буруу бол QR_FORMAT_INVALID. */
-export function parseQr(scanned: string): string {
-  let s = String(scanned ?? "").trim();
-  if (s.startsWith(QR_PREFIX)) s = s.slice(QR_PREFIX.length);
-  if (!TOKEN_RE.test(s)) throw new QrError("QR_FORMAT_INVALID", "eID «Миний QR» биш");
-  return s;
-}
-
-function checkAttributes(attrs: readonly string[] | undefined): string[] {
-  if (!attrs?.length) throw new QrError("QR_ATTRIBUTES_INVALID", "аттрибут сонгоогүй");
-  const seen = new Set<string>();
-  for (const a of attrs) {
-    if (!(QR_ATTRIBUTES as readonly string[]).includes(a)) throw new QrError("QR_ATTRIBUTES_INVALID", `каталогид алга: ${a}`);
-    if (seen.has(a)) throw new QrError("QR_ATTRIBUTES_INVALID", `давхардсан: ${a}`);
-    seen.add(a);
-  }
-  return [...attrs];
+export interface ParsedQr {
+  token: string;
+  /** Хэвийн болгосон QR мөр (`EIDMN-QR1:<token>`, хоосон зайгүй). */
+  qr: string;
 }
 
 export interface QrConfig {
-  /** Анхдагч {@link DEFAULT_QR_JWKS_URL}. https (http зөвхөн localhost). */
-  jwksUrl?: string;
-  /** Хүлээгдэх `iss`; анхдагч {@link DEFAULT_QR_ISSUER}. */
+  /** Хүлээгдэх `iss`; анхдагч {@link DEFAULT_QR_ISSUER} (тест орчинд л). */
   issuer?: string;
-  jwksCacheTtlMs?: number;
-  maxAgeMs?: number;
 }
 
 export interface QrStartInput {
-  /** Скан хийсэн агуулга (`EIDMN-QR1:<token>`) эсвэл {@link parseQr}-ийн токен. */
+  /** Скан хийсэн агуулга (`EIDMN-QR1:<token>`). */
   qr: string;
-  /** Хүсэх аттрибутууд (≥ 1, давхардалгүй); RP-д аттрибут бүрийн `QR_ATTR:<нэр>` эрх. */
-  attributes: readonly QrAttribute[];
-  /** RP-ийн nonce (сонголттой) — JWS-ийн `nonce`-д буцна; өгөөгүй бол rpChallenge. */
+  /** RP-ийн nonce (16–128 байт, ASCII 0x21–0x7E) — JWS-ийн `nonce`-д буцна. Өгөөгүй бол base64url(16 санамсаргүй байт). */
   nonce?: string;
+  /** Касс / дэд системийн нэр (зөвхөн CA-ийн логт). Анхдагч `credentials.rpName`. */
+  relyingPartyName?: string;
 }
 
-/** `qr.start`-ийн хариу — JSON-оор хадгалж (stateless backend) `qr.result`-д дамжуулна. `vc`-г кассын дэлгэцэнд харуул. */
+/** `qr.start`-ийн хариу — JSON-оор хадгалж (stateless backend) `qr.result` / `check`-д дамжуулна. */
 export interface QrSession {
   sessionId: string;
-  vc: string;
   nonce: string;
-  attributes: QrAttribute[];
-  /** CA-ийн session дуусах мөч (мс epoch), байвал. */
-  expiresAt?: number;
 }
 
-export interface QrFullName {
-  surname: string;
-  givenName: string;
-}
-
-/** Баталгаажсан аттрибутууд — хүсээгүй / байхгүй нь алга. */
-export interface QrAttrs {
-  age_over_18?: boolean;
-  age_over_21?: boolean;
-  full_name?: QrFullName;
-  phone?: string;
-  birth_date?: string;
-  civil_id?: string;
-}
-
-export interface QrPresentation {
-  /** Энэ RP-д зориулсан тогтмол pairwise id (иргэний дугаар биш). */
+export interface QrClaims {
+  iss: string;
+  /** Гарын үсэгтний ETSI (`PNOMN-…`) — x5c[0]-ийн subject serialNumber. */
   sub: string;
-  attrs: QrAttrs;
-  /** Хүссэн боловч бүртгэлд байхгүй (алдаа биш). */
-  unavailable: QrAttribute[];
-  sessionId: string;
-  /** `iat`, мс epoch. */
-  issuedAt: number;
-  /** Түүхий compact JWS (аудитад хадгалж болно). */
+  /** RP UUID. */
+  aud: string;
+  /** CA-ийн бүртгэлтэй RP нэр. */
+  rp_name: string;
+  sid: string;
+  nonce: string;
+  iat: number;
+  exp: number;
+  /** Иргэний PIN2-оор зөвшөөрсөн өгүүлбэр. */
+  statement: string;
+  data: { source: string; fields: Record<string, string>; photo?: string };
+}
+
+export interface QrSigner {
+  certificate: X509Certificate;
+  /** = `claims.sub`. */
+  etsi: string;
+  givenName?: string;
+  surname?: string;
+  commonName?: string;
+}
+
+/** Шалгагдсан presentation. */
+export interface QrPresentation {
   jws: string;
+  claims: QrClaims;
+  /** «Миний мэдээлэл» — түлхүүр/утга яг апп дээр хадгалсан хэлбэрээр (payload-ийн дарааллаар). */
+  data: Record<string, string>;
+  /** Иргэний таних мэдээллийн эх сурвалж (`dan`, `passport`, `citizenid`, `gsign`, `guardian`, `unknown`…). */
+  source: string;
+  /** Нүүрний зураг (JPEG байт), байвал. */
+  photo?: Uint8Array;
+  signer: QrSigner;
+  /** `iat`. */
+  signedAt: Date;
+  /** hex SHA-256(signingInput) — CA-ийн аудитын `qrsha`-тай тэнцүү (маргаанд тулгах). */
+  sha256: string;
+}
+
+export interface QrExpect {
+  /** RP UUID (том/жижиг үсэг ялгахгүй). */
+  rpUUID: string;
+  sessionId: string;
+  nonce: string;
+  /** Анхдагч {@link DEFAULT_QR_ISSUER}. */
+  issuer?: string;
+  /** Анхдагч одоо. */
+  now?: Date;
 }
 
 /** `qr.check`-ийн хариу: иргэн хараахан хариулаагүй, эсвэл шалгагдсан presentation. */
-export type QrCheck = { state: "RUNNING" } | { state: "COMPLETE"; presentation: QrPresentation };
+export type QrCheck = { complete: false } | { complete: true; result: QrPresentation };
 
-export interface QrExpect {
-  issuer?: string;
-  /** RP UUID. */
-  audience: string;
-  sessionId: string;
-  nonce: string;
-  attributes: readonly string[];
-  /** мс epoch; анхдагч Date.now(). */
-  now?: number;
-  maxAgeMs?: number;
+const TOKEN_RE = /^[A-Za-z0-9_-]{43}$/;
+const SEGMENT_RE = /^[A-Za-z0-9_-]+$/;
+const STD_B64_RE = /^[A-Za-z0-9+/]*={0,2}$/;
+const SOURCE_RE = /^[a-z0-9_-]{1,32}$/;
+const KEY_FORBIDDEN_RE = /[\u0000-\u001f\u007f-\u009f]/;
+const LONE_SURROGATE_RE = /\p{Cs}/u;
+const utf8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+
+const fail = (code: QrErrorCode, reason: string) => new QrError(code, reason);
+
+/**
+ * Скан хийсэн мөр → `{ token, qr }` (гэрээний §1.2): ASCII хоосон зай хасна; `EIDMN-QR1:` угтвар + 43 тэмдэгт base64url
+ * токен. Бусад → {@link QrError} `QR_FORMAT_INVALID`.
+ */
+export function parseQr(scanned: string): ParsedQr {
+  const s = String(scanned ?? "").replace(/^[\t\n\v\f\r ]+|[\t\n\v\f\r ]+$/g, "");
+  const token = s.slice(QR_PREFIX.length);
+  if (!s.startsWith(QR_PREFIX) || !TOKEN_RE.test(token)) throw fail("QR_FORMAT_INVALID", "eID «Миний QR» биш");
+  return { token, qr: QR_PREFIX + token };
 }
 
-export interface Jwk {
-  kty?: string;
-  crv?: string;
-  x?: string;
-  y?: string;
-  kid?: string;
-  alg?: string;
-  use?: string;
-}
-export interface Jwks {
-  keys: Jwk[];
-}
-
-class UnknownKid extends Error {}
-
-const B64URL_RE = /^[A-Za-z0-9_-]*$/;
-function b64url(s: string): Buffer {
-  if (!B64URL_RE.test(s) || s.length % 4 === 1) throw bad("base64url буруу");
-  return Buffer.from(s, "base64url");
-}
-
-function keyFor(jwks: Jwks | null | undefined, kid: string): KeyObject {
-  const j = jwks?.keys?.find((k) => k?.kid === kid);
-  if (!j) throw new UnknownKid();
-  if (j.kty !== "EC" || j.crv !== "P-256" || (j.alg && j.alg !== "ES256") || (j.use && j.use !== "sig")) {
-    throw bad(`kid ${kid} нь ES256 P-256 түлхүүр биш`);
-  }
-  try {
-    if (b64url(j.x ?? "").length !== 32 || b64url(j.y ?? "").length !== 32) throw new Error("x/y");
-    return createPublicKey({ key: { kty: "EC", crv: "P-256", x: j.x, y: j.y }, format: "jwk" });
-  } catch {
-    throw bad(`kid ${kid}: түлхүүр буруу`);
-  }
+/** «Миний QR»-ийн өгүүлбэр (гэрээний §1.4): иргэн PIN2-оор яг үүнийг зөвшөөрсөн. */
+export function qrStatement(rpName: string): string {
+  return `Та ${rpName}-д «Миний мэдээлэл» хэсгийн бүх мэдээллийг хуваалцах гэж байна`;
 }
 
 function isObj(v: unknown): v is Record<string, unknown> {
   return !!v && typeof v === "object" && !Array.isArray(v);
 }
 
-const PHONE_RE = /^\+[1-9][0-9]{6,14}$/;
-const DATE_RE = /^([0-9]{4})-([0-9]{2})-([0-9]{2})$/;
-
-function validDate(s: string): boolean {
-  const m = DATE_RE.exec(s);
-  if (!m) return false;
-  const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
-  const t = new Date(Date.UTC(y, mo - 1, d));
-  return t.getUTCFullYear() === y && t.getUTCMonth() === mo - 1 && t.getUTCDate() === d;
-}
-
-function setAttr(out: QrAttrs, name: string, v: unknown): void {
-  const wrong = () => bad(`${name}-ийн төрөл буруу`);
-  switch (name) {
-    case "age_over_18":
-    case "age_over_21":
-      if (typeof v !== "boolean") throw wrong();
-      out[name] = v;
-      return;
-    case "full_name":
-      if (!isObj(v) || typeof v.surname !== "string" || typeof v.givenName !== "string" || !v.givenName) throw wrong();
-      out.full_name = { surname: v.surname, givenName: v.givenName };
-      return;
-    case "phone":
-      if (typeof v !== "string" || !PHONE_RE.test(v)) throw wrong();
-      out.phone = v;
-      return;
-    case "birth_date":
-      if (typeof v !== "string" || !validDate(v)) throw wrong();
-      out.birth_date = v;
-      return;
-    case "civil_id":
-      if (typeof v !== "string" || !v) throw wrong();
-      out.civil_id = v;
-      return;
-  }
-  throw wrong();
-}
-
-function numericDate(v: unknown): number | undefined {
-  return typeof v === "number" && Number.isFinite(v) && v > 0 && v < 1e11 ? v * 1000 : undefined;
-}
-
-function verifyInner(jws: string, jwks: Jwks | null | undefined, exp: QrExpect): QrPresentation {
-  if (typeof jws !== "string" || !jws || jws.length > MAX_JWS) throw bad("JWS хоосон эсвэл хэт урт");
-  const parts = jws.split(".");
-  if (parts.length !== 3) throw bad("compact JWS биш");
-  const [h64, p64, s64] = parts as [string, string, string];
-  const hb = b64url(h64);
-  const pb = b64url(p64);
-  const sig = b64url(s64);
-  let hdr: unknown;
+/** base64url (canonical) → UTF-8 (хатуу) → JSON; алдаа бол undefined. */
+function jsonSegment(seg: string): unknown {
   try {
-    hdr = JSON.parse(hb.toString("utf8"));
+    const b = Buffer.from(seg, "base64url");
+    if (b.toString("base64url") !== seg) return undefined;
+    return JSON.parse(utf8.decode(b));
   } catch {
-    throw bad("header JSON биш");
+    return undefined;
   }
-  if (!isObj(hdr) || hdr.alg !== "ES256") throw bad("alg ES256 биш");
-  if ("crit" in hdr) throw bad("crit дэмжихгүй");
-  if (typeof hdr.kid !== "string" || !hdr.kid) throw bad("kid алга");
-  const key = keyFor(jwks, hdr.kid);
-  if (sig.length !== 64) throw bad("ES256 гарын үсэг 64 байт биш");
-  const ok = cryptoVerify("sha256", Buffer.from(`${h64}.${p64}`, "ascii"), { key, dsaEncoding: "ieee-p1363" }, sig);
-  if (!ok) throw bad("гарын үсэг таарсангүй");
+}
 
-  let c: unknown;
-  try {
-    c = JSON.parse(pb.toString("utf8"));
-  } catch {
-    throw bad("payload JSON биш");
-  }
-  if (!isObj(c)) throw bad("payload JSON объект биш");
-  if (c.iss !== (exp.issuer || DEFAULT_QR_ISSUER)) throw bad("iss таарсангүй");
-  // aud = RP UUID (CA жижиг үсгээр бичнэ) — том/жижиг үсэг ялгахгүй.
-  if (!exp.audience || typeof c.aud !== "string" || c.aud.toLowerCase() !== exp.audience.toLowerCase()) throw bad("aud (RP UUID) таарсангүй");
-  if (!exp.sessionId || c.sid !== exp.sessionId) throw bad("sid таарсангүй");
-  if (!exp.nonce || c.nonce !== exp.nonce) throw bad("nonce таарсангүй");
-  if (typeof c.sub !== "string" || !c.sub) throw bad("sub алга");
-  const now = exp.now ?? Date.now();
-  const iat = numericDate(c.iat);
-  if (iat === undefined) throw bad("iat алга");
-  if (iat > now + QR_CLOCK_SKEW_MS) throw bad("iat ирээдүйд");
-  if (now - iat > (exp.maxAgeMs && exp.maxAgeMs > 0 ? exp.maxAgeMs : DEFAULT_QR_MAX_AGE_MS)) throw bad("presentation хуучирсан");
-  if ("exp" in c) {
-    const e = numericDate(c.exp);
-    if (e === undefined || now >= e + QR_CLOCK_SKEW_MS) throw bad("exp дууссан");
-  }
+/** Хатуу стандарт base64 (padding-тай, мөр таслалгүй, canonical); алдаа бол undefined. */
+function stdBase64(s: string): Buffer | undefined {
+  if (!s || s.length % 4 !== 0 || !STD_B64_RE.test(s)) return undefined;
+  const b = Buffer.from(s, "base64");
+  return b.toString("base64") === s ? b : undefined;
+}
 
-  const want = new Set(exp.attributes);
-  const got = new Set<string>();
-  let attrs: Record<string, unknown> = {};
-  if ("attrs" in c) {
-    if (!isObj(c.attrs)) throw bad("attrs объект биш");
-    attrs = c.attrs;
-  }
-  const out: QrPresentation = { sub: c.sub, attrs: {}, unavailable: [], sessionId: exp.sessionId, issuedAt: iat, jws };
-  for (const [name, v] of Object.entries(attrs)) {
-    if (!want.has(name)) throw bad(`хүсээгүй аттрибут: ${name}`);
-    setAttr(out.attrs, name, v);
-    got.add(name);
-  }
-  if ("unavailable" in c) {
-    if (!Array.isArray(c.unavailable)) throw bad("unavailable массив биш");
-    for (const x of c.unavailable) {
-      if (typeof x !== "string" || !want.has(x) || got.has(x)) throw bad(`unavailable буруу: ${String(x)}`);
-      got.add(x);
-      out.unavailable.push(x as QrAttribute);
+const derToPem = (der: Buffer): string =>
+  `-----BEGIN CERTIFICATE-----\n${der.toString("base64").match(/.{1,64}/g)!.join("\n")}\n-----END CERTIFICATE-----\n`;
+
+let defaultChecker: RevocationChecker | undefined;
+/** TrustConfig-д revocation алга бол SDK-ийн OCSP шалгагч (AIA; нэг процесст нэг кэш). */
+function revocationOf(trust: TrustConfig): RevocationChecker {
+  return trust.revocation ?? (defaultChecker ??= ocspRevocationChecker());
+}
+
+function checkData(d: unknown): QrClaims["data"] {
+  const bad = (why: string) => fail("QR_DATA_INVALID", why);
+  if (!isObj(d)) throw bad("data объект биш");
+  for (const k of Object.keys(d)) if (k !== "source" && k !== "fields" && k !== "photo") throw bad("data-д илүү гишүүн");
+  if (typeof d.source !== "string" || !SOURCE_RE.test(d.source)) throw bad("source буруу");
+  if (!isObj(d.fields)) throw bad("fields объект биш");
+  const keys = Object.keys(d.fields);
+  if (keys.length > QR_LIMITS.maxFields) throw bad(`fields > ${QR_LIMITS.maxFields}`);
+  for (const k of keys) {
+    const n = [...k].length;
+    if (n < 1 || n > QR_LIMITS.maxKeyChars || KEY_FORBIDDEN_RE.test(k) || LONE_SURROGATE_RE.test(k)) throw bad("түлхүүр буруу");
+    const v = d.fields[k];
+    if (typeof v !== "string") throw bad("утга string биш");
+    if (Buffer.byteLength(v, "utf8") > QR_LIMITS.maxValueBytes || v.includes("\u0000") || LONE_SURROGATE_RE.test(v)) {
+      throw bad(`утга > ${QR_LIMITS.maxValueBytes} байт эсвэл буруу тэмдэгт`);
     }
   }
-  if (got.size !== want.size) throw bad("хүссэн аттрибутын хариу дутуу");
-  return out;
+  let photo: string | undefined;
+  if ("photo" in d) {
+    if (typeof d.photo !== "string") throw bad("photo string биш");
+    const b = stdBase64(d.photo);
+    if (!b) throw bad("photo base64 биш");
+    if (b.length > QR_LIMITS.maxPhotoBytes) throw bad(`photo > ${QR_LIMITS.maxPhotoBytes} байт`);
+    if (b.length < 3 || b[0] !== 0xff || b[1] !== 0xd8 || b[2] !== 0xff) throw bad("photo JPEG биш");
+    photo = d.photo;
+  }
+  // Гэрээний §1.3: fields хоосон бол photo заавал.
+  if (keys.length === 0 && photo === undefined) throw bad("fields хоосон, photo алга");
+  return { source: d.source, fields: d.fields as Record<string, string>, ...(photo !== undefined ? { photo } : {}) };
 }
 
 /**
- * Compact JWS-ийг `jwks`-ээр шалгаж (ES256, kid) claim-уудыг тулгана: iss, aud (RP UUID), sid, nonce, iat (≤ now+60 с,
- * ≥ now−maxAge), exp (байвал), attrs ∪ unavailable = хүссэн аттрибутууд яг, аттрибут бүрийн төрөл. Алдаа бол
- * {@link QrError} `QR_PRESENTATION_INVALID` — хариунд ИТГЭХГҮЙ. Сүлжээгүй (хадгалсан presentation-ийг дахин шалгах, тест).
+ * «Миний QR» presentation-ийг шалгана (гэрээний §6.1, эхний алдаан дээр зогсоно): хэлбэр, header (`alg` PS256, `typ`
+ * eidmn-myqr+jwt, `x5c` [гэрчилгээ, олгогч CA], өөр гишүүнгүй), гинж (x5c[1] ∪ trust.intermediates → trust anchor, цаг
+ * ± 60 с; CA биш, KU contentCommitment, QUALIFIED, issuer allowlist, RSA ≥ 2048), цуцлалт (`trust.revocation`, алга бол
+ * SDK-ийн OCSP; анхдагч hard-fail), PS256 гарын үсэг, claim (`iss`, `sub` = гэрчилгээний serialNumber, өгүүлбэр, `aud`,
+ * `sid`, `nonce`, хугацаа), өгөгдлийн хязгаар. Алдаа бол {@link QrError} (§6.2-ийн код) — хариунд ИТГЭХГҮЙ.
+ *
+ * Итгэлцэл: `trust.trustAnchorsPem` алга бол {@link NATIONAL_ROOT_CA_PEM}; `intermediatesPem` алга бол
+ * {@link CITIZEN_INTERMEDIATES_PEM}; issuer allowlist, `revocationMode` нь `TrustConfig`-ийн дүрмээр. `allowUntrusted`,
+ * `checkKeyUsage: false` энд үйлчлэхгүй; түвшин үргэлж ≥ QUALIFIED.
  */
-export function verifyQrPresentation(jws: string, jwks: Jwks | null | undefined, expect: QrExpect): QrPresentation {
-  try {
-    return verifyInner(jws, jwks, expect);
-  } catch (e) {
-    if (e instanceof UnknownKid) throw bad("JWKS-д kid алга");
-    throw e;
+export async function verifyQrPresentation(jws: string, expect: QrExpect, trust: TrustConfig): Promise<QrPresentation> {
+  // 1. хэлбэр
+  if (typeof jws !== "string" || Buffer.byteLength(jws, "utf8") > MAX_JWS_BYTES) throw fail("QR_JWS_MALFORMED", "JWS хэт урт эсвэл string биш");
+  const seg = jws.split(".");
+  if (seg.length !== 3 || !seg.every((s) => SEGMENT_RE.test(s))) throw fail("QR_JWS_MALFORMED", "compact JWS биш");
+  const [h64, p64, s64] = seg as [string, string, string];
+
+  // 2–3. header, x5c
+  const badHeader = (why: string) => fail("QR_HEADER_INVALID", why);
+  const hdr = jsonSegment(h64);
+  if (!isObj(hdr)) throw badHeader("header JSON объект биш");
+  const hk = Object.keys(hdr);
+  if (hk.length !== 3 || !hk.includes("alg") || !hk.includes("typ") || !hk.includes("x5c")) throw badHeader("header зөвхөн alg, typ, x5c");
+  if (hdr.alg !== "PS256") throw badHeader("alg PS256 биш");
+  if (hdr.typ !== "eidmn-myqr+jwt") throw badHeader("typ eidmn-myqr+jwt биш");
+  const x5c = hdr.x5c;
+  if (!Array.isArray(x5c) || x5c.length !== 2 || !x5c.every((c) => typeof c === "string" && c.length > 0)) {
+    throw badHeader("x5c 2 гэрчилгээ биш");
   }
+  const certs = (x5c as string[]).map((c) => {
+    const der = stdBase64(c);
+    if (!der) throw badHeader("x5c base64 биш");
+    try {
+      const cert = new X509Certificate(der);
+      if (!cert.raw.equals(der)) throw new Error("trailing");
+      return cert;
+    } catch {
+      throw badHeader("x5c гэрчилгээ биш");
+    }
+  });
+  const leaf = certs[0]!;
+
+  // 4. гинж (x5c[1] — зөвхөн завсрын нэр дэвшигч, хэзээ ч anchor биш)
+  const nowMs = (expect.now ?? new Date()).getTime();
+  const validator = new ResponseValidator({
+    ...trust,
+    trustAnchorsPem: trust.trustAnchorsPem?.length ? trust.trustAnchorsPem : [NATIONAL_ROOT_CA_PEM],
+    intermediatesPem: [...(trust.intermediatesPem ?? CITIZEN_INTERMEDIATES_PEM), derToPem(certs[1]!.raw)],
+    requiredLevel: trust.requiredLevel === "QSCD" ? "QSCD" : "QUALIFIED",
+    allowUntrusted: false,
+  });
+  let issuer: X509Certificate | undefined;
+  try {
+    issuer = validator.verifyQrSigner(leaf, nowMs, QR_CLOCK_SKEW_SECONDS * 1000);
+  } catch (e) {
+    throw fail("QR_CHAIN_INVALID", e instanceof Error ? e.message : "гинж хүчингүй");
+  }
+  const kt = leaf.publicKey.asymmetricKeyType;
+  if ((kt !== "rsa" && kt !== "rsa-pss") || (leaf.publicKey.asymmetricKeyDetails?.modulusLength ?? 0) < 2048) {
+    throw fail("QR_CHAIN_INVALID", "гарын үсэгтний түлхүүр RSA ≥ 2048 биш");
+  }
+
+  // 5. цуцлалт
+  let status: RevocationStatus | string;
+  try {
+    status = await revocationOf(trust)(leaf, issuer);
+  } catch {
+    status = "unknown";
+  }
+  if (status === "revoked") throw fail("QR_CERT_REVOKED", "гэрчилгээ цуцлагдсан");
+  if (status !== "good" && (trust.revocationMode ?? "hard-fail") === "hard-fail") {
+    throw fail("QR_REVOCATION_UNKNOWN", "гэрчилгээний цуцлалтын төлөв тогтоогдсонгүй");
+  }
+
+  // 6. PS256 (SHA-256, MGF1-SHA-256, salt 32) — хүлээн авсан байтаар, дахин serialize хийхгүй
+  const signingInput = Buffer.from(`${h64}.${p64}`, "ascii");
+  let sigOk = false;
+  try {
+    const sig = Buffer.from(s64, "base64url");
+    sigOk =
+      sig.toString("base64url") === s64 &&
+      cryptoVerify("sha256", signingInput, { key: leaf.publicKey, padding: constants.RSA_PKCS1_PSS_PADDING, saltLength: 32 }, sig);
+  } catch {
+    sigOk = false;
+  }
+  if (!sigOk) throw fail("QR_SIGNATURE_INVALID", "гарын үсэг таарсангүй");
+
+  // 7. payload, claim
+  const c = jsonSegment(p64);
+  if (!isObj(c)) throw fail("QR_JWS_MALFORMED", "payload JSON объект биш");
+  const badClaims = (why: string) => fail("QR_CLAIMS_INVALID", why);
+  if (c.iss !== (expect.issuer || DEFAULT_QR_ISSUER)) throw badClaims("iss таарсангүй");
+  const subj = parseSubject(leaf);
+  if (typeof c.sub !== "string" || !subj.serialNumber || c.sub !== subj.serialNumber) throw badClaims("sub ≠ гэрчилгээний serialNumber");
+  for (const k of ["rp_name", "statement", "nonce", "sid", "aud"] as const) if (typeof c[k] !== "string") throw badClaims(`${k} string биш`);
+  if (!Number.isSafeInteger(c.iat) || !Number.isSafeInteger(c.exp)) throw badClaims("iat/exp бүхэл тоо биш");
+  if (c.statement !== qrStatement(c.rp_name as string)) throw badClaims("statement таарсангүй");
+  const iat = c.iat as number;
+  const exp = c.exp as number;
+
+  // 8–10. RP, session, nonce
+  if (!expect.rpUUID || (c.aud as string).toLowerCase() !== expect.rpUUID.toLowerCase()) throw fail("QR_AUDIENCE_MISMATCH", "aud (RP UUID) таарсангүй");
+  if (!expect.sessionId || c.sid !== expect.sessionId) throw fail("QR_SESSION_MISMATCH", "sid таарсангүй");
+  if (!expect.nonce || c.nonce !== expect.nonce) throw fail("QR_NONCE_MISMATCH", "nonce таарсангүй");
+
+  // 11. хугацаа
+  const now = nowMs / 1000;
+  if (exp - iat <= 0 || exp - iat > QR_MAX_AGE_SECONDS) throw badClaims(`exp − iat ∉ (0, ${QR_MAX_AGE_SECONDS}]`);
+  if (iat > now + QR_CLOCK_SKEW_SECONDS) throw fail("QR_NOT_YET_VALID", "iat ирээдүйд");
+  if (now >= exp + QR_CLOCK_SKEW_SECONDS) throw fail("QR_EXPIRED", "presentation-ийн хугацаа дууссан");
+
+  // 12. өгөгдөл
+  const data = checkData(c.data);
+
+  // 13. үр дүн
+  const claims: QrClaims = {
+    iss: c.iss as string,
+    sub: c.sub,
+    aud: c.aud as string,
+    rp_name: c.rp_name as string,
+    sid: c.sid as string,
+    nonce: c.nonce as string,
+    iat,
+    exp,
+    statement: c.statement as string,
+    data,
+  };
+  return {
+    jws,
+    claims,
+    data: Object.fromEntries(Object.entries(data.fields)),
+    source: data.source,
+    ...(data.photo !== undefined ? { photo: new Uint8Array(Buffer.from(data.photo, "base64")) } : {}),
+    signer: {
+      certificate: leaf,
+      etsi: c.sub,
+      ...(subj.givenName ? { givenName: subj.givenName } : {}),
+      ...(subj.surname ? { surname: subj.surname } : {}),
+      ...(subj.commonName ? { commonName: subj.commonName } : {}),
+    },
+    signedAt: new Date(iat * 1000),
+    sha256: createHash("sha256").update(signingInput).digest("hex"),
+  };
 }
 
 export interface QrApiDeps {
   http: Http;
   session: SessionApi;
   credentials: RpCredentials;
-  config?: QrConfig;
-  fetchImpl?: typeof fetch;
-  dispatcher?: unknown;
-  timeoutMs?: number;
+  /** Клиентийн TrustConfig (`ClientConfig.trust`). */
+  trust?: TrustConfig;
+  /** Хүлээгдэх `iss` (`ClientConfig.qr.issuer`); анхдагч {@link DEFAULT_QR_ISSUER}. */
+  issuer?: string;
 }
 
-/** `client.qr` — «Миний QR»: parse → start → result. */
+/** `client.qr` — «Миний QR»: parse → start → result / check. */
 export class QrApi {
-  private jwks: Jwks | null = null;
-  private fetchedAt = 0;
-  private lastAttempt = 0;
-  private inflight: Promise<Jwks> | null = null;
-
   constructor(private readonly d: QrApiDeps) {}
 
   /** {@link parseQr}. */
-  parse(scanned: string): string {
+  parse(scanned: string): ParsedQr {
     return parseQr(scanned);
   }
 
   /**
-   * `POST /authentication/qr` — QR-ийн токеныг (нэг удаагийн) CA-д өгч иргэний утас руу хүсэлт илгээнэ; `vc`-г кассын
-   * дэлгэцэнд харуул. Алдаа: {@link QrError} (FORMAT / ATTRIBUTES — CA руу явахгүй), 404 {@link QrTokenInvalidError}
-   * (шинэ QR гаргуул), 403 ForbiddenError (QR_PRESENT / QR_ATTR:* эрх алга).
+   * `POST /authentication/qr` — QR-ийн токеныг (нэг удаагийн) CA-д өгч иргэний утас руу хүсэлт илгээнэ (VC алга). Буруу
+   * мөр → {@link QrError} `QR_FORMAT_INVALID` (CA руу явахгүй). CA-ийн алдаа: 404 `QrTokenInvalidError` (шинэ QR), 409
+   * `NoSigningCertificateError`, 403 `ForbiddenError` (`PERMISSION_DENIED` — `QR_PRESENT` алга, `RP_REQUIRED`), 400
+   * `RequestInvalidError` (nonce буруу г.м.), 429 `RATE_LIMITED`.
    */
   async start(input: QrStartInput): Promise<QrSession> {
-    const token = parseQr(input.qr);
-    const attributes = checkAttributes(input.attributes) as QrAttribute[];
-    const rpChallenge = randomChallenge(32);
-    const nonce = input.nonce?.trim() || undefined;
+    const p = parseQr(input.qr);
+    const nonce = input.nonce ?? randomBytes(16).toString("base64url");
     const body = {
-      qr: QR_PREFIX + token,
-      attributes,
+      qr: p.qr,
       relyingPartyUUID: this.d.credentials.rpUUID,
-      relyingPartyName: this.d.credentials.rpName,
-      signatureProtocol: "ACSP_V2",
-      signatureProtocolParameters: { rpChallenge },
-      ...(nonce ? { nonce } : {}),
+      relyingPartyName: input.relyingPartyName ?? this.d.credentials.rpName,
+      nonce,
     };
     const r = (await this.d.http.post(routePath(RP_ROUTES.authQr), body)) as Record<string, unknown>;
-    const sessionId = typeof r.sessionID === "string" ? r.sessionID : "";
+    const sessionId = typeof r?.sessionID === "string" ? r.sessionID : "";
     if (!sessionId) throw new EidError("POST /authentication/qr: sessionID алга");
-    const vcRaw = r.vc;
-    const vc = typeof vcRaw === "string" ? vcRaw : isObj(vcRaw) && vcRaw.value != null ? String(vcRaw.value) : "";
-    const expiresAt = parseExpiresAt(r.expiresAt);
-    return { sessionId, vc, nonce: nonce ?? rpChallenge, attributes, ...(expiresAt !== undefined ? { expiresAt } : {}) };
+    return { sessionId, nonce };
   }
 
   /**
-   * Session дуустал long-poll хийж presentation-ийг CA-ийн JWKS-ээр шалгана. Татгалзсан / хугацаа дууссан бол
-   * SessionFailedError (`USER_REFUSED`, `TIMEOUT` г.м.); шалгалт унавал {@link QrError} `QR_PRESENTATION_INVALID`;
-   * JWKS татагдахгүй бол `QR_JWKS_UNAVAILABLE` (дахин оролдож болно).
+   * Session дуустал long-poll хийж presentation-ийг {@link verifyQrPresentation}-аар шалгана. Татгалзсан / хугацаа
+   * дууссан → SessionFailedError (`endResult`); `maxWaitMs` дуусахад иргэн хариулаагүй → `QR_PENDING`; 410 →
+   * `QR_PRESENTATION_GONE` (CA presentation-ийг нэг л удаа өгнө — шинэ QR уншуулна).
    */
   async result(session: QrSession, opts?: { maxWaitMs?: number; serverPollMs?: number }): Promise<QrPresentation> {
     if (!session?.sessionId) throw new EidError("qr.result: QrSession шаардлагатай");
-    const r = await this.d.session.waitForResult(session.sessionId, { expiresAt: session.expiresAt, ...opts });
-    if (r.state !== "COMPLETE") throw new QrError("QR_PENDING", "иргэн хараахан хариулаагүй");
+    const r = await gone(this.d.session.waitForResult(session.sessionId, opts));
+    if (r.state !== "COMPLETE") throw fail("QR_PENDING", "иргэн хараахан хариулаагүй");
     return this.finish(r, session);
   }
 
-  /**
-   * Нэг удаагийн шалгалт (polling UI-д): `GET /session/{id}` (`serverPollMs` хүртэл, анхдагч 1000 мс) — иргэн хараахан
-   * хариулаагүй бол `{ state: "RUNNING" }`, зөвшөөрсөн бол JWS/JWKS-ээр шалгасан `{ state: "COMPLETE", presentation }`.
-   * Татгалзсан / CA-ийн хугацаа дууссан бол SessionFailedError; бусад алдаа {@link result}-тэй ижил.
-   */
+  /** Нэг удаагийн шалгалт (polling UI): `GET /session/{id}` (`serverPollMs` хүртэл, анхдагч 1000 мс). Алдаа {@link result}-тэй ижил. */
   async check(session: QrSession, opts?: { serverPollMs?: number }): Promise<QrCheck> {
     if (!session?.sessionId) throw new EidError("qr.check: QrSession шаардлагатай");
-    const r = await this.d.session.poll(session.sessionId, opts?.serverPollMs ?? 1_000);
-    if (r.state !== "COMPLETE") return { state: "RUNNING" };
-    return { state: "COMPLETE", presentation: await this.finish(r, session) };
+    const r = await gone(this.d.session.poll(session.sessionId, opts?.serverPollMs ?? 1_000));
+    if (r.state !== "COMPLETE") return { complete: false };
+    return { complete: true, result: await this.finish(r, session) };
+  }
+
+  /** Presentation JWS-ийг шалгана; `rpUUID` анхдагч `credentials.rpUUID`, `issuer` — клиентийн тохиргоо. */
+  verify(jws: string, expect: Omit<QrExpect, "rpUUID"> & { rpUUID?: string }): Promise<QrPresentation> {
+    return verifyQrPresentation(
+      jws,
+      { ...expect, rpUUID: expect.rpUUID ?? this.d.credentials.rpUUID, issuer: expect.issuer ?? this.d.issuer },
+      this.d.trust ?? {},
+    );
   }
 
   private finish(r: SessionResult, session: QrSession): Promise<QrPresentation> {
     if (r.endResult !== "OK") throw new SessionFailedError(r.endResult ?? "UNKNOWN");
     const jws = r.presentation?.jws;
-    if (!jws) throw bad("хариунд presentation алга");
-    return this.verify(jws, session);
+    if (!jws) throw fail("QR_JWS_MALFORMED", "хариунд presentation алга");
+    return this.verify(jws, { sessionId: session.sessionId, nonce: session.nonce });
   }
+}
 
-  /** Хадгалсан presentation JWS-ийг QrSession-тэй тулгаж шалгана (JWKS кэш; танихгүй kid → нэг удаа дахин татна). */
-  async verify(jws: string, session: QrSession): Promise<QrPresentation> {
-    const cfg = this.d.config ?? {};
-    const exp: QrExpect = {
-      issuer: cfg.issuer,
-      audience: this.d.credentials.rpUUID,
-      sessionId: session.sessionId,
-      nonce: session.nonce,
-      attributes: session.attributes,
-      maxAgeMs: cfg.maxAgeMs,
-    };
-    try {
-      return verifyInner(jws, await this.keys(false), exp);
-    } catch (e) {
-      if (!(e instanceof UnknownKid)) throw e;
-    }
-    return verifyQrPresentation(jws, await this.keys(true), exp);
-  }
-
-  private async keys(force: boolean): Promise<Jwks> {
-    const ttl = this.d.config?.jwksCacheTtlMs && this.d.config.jwksCacheTtlMs > 0 ? this.d.config.jwksCacheTtlMs : DEFAULT_QR_JWKS_CACHE_TTL_MS;
-    const now = Date.now();
-    const fresh = this.jwks && now - this.fetchedAt < ttl;
-    if (fresh && (!force || now - this.lastAttempt < JWKS_MIN_REFRESH_MS)) return this.jwks!;
-    if (!this.inflight) {
-      this.lastAttempt = now;
-      this.inflight = this.fetchJwks()
-        .then((k) => {
-          this.jwks = k;
-          this.fetchedAt = Date.now();
-          return k;
-        })
-        .finally(() => {
-          this.inflight = null;
-        });
-    }
-    return this.inflight;
-  }
-
-  private async fetchJwks(): Promise<Jwks> {
-    const url = this.d.config?.jwksUrl || DEFAULT_QR_JWKS_URL;
-    const fail = (why: string) => new QrError("QR_JWKS_UNAVAILABLE", why);
-    let u: URL;
-    try {
-      u = new URL(url);
-    } catch {
-      throw fail("jwksUrl буруу");
-    }
-    if (u.protocol !== "https:" && !(u.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(u.hostname))) {
-      throw fail("jwksUrl https байх ёстой");
-    }
-    // RP secret ЭНД ИЛГЭЭХГҮЙ — нийтийн түлхүүр.
-    const init: Record<string, unknown> = {
-      method: "GET",
-      headers: { Accept: "application/json" },
-      signal: AbortSignal.timeout(this.d.timeoutMs ?? 15_000),
-    };
-    if (this.d.dispatcher) init.dispatcher = this.d.dispatcher;
-    let res: Response;
-    try {
-      res = await (this.d.fetchImpl ?? fetch)(url, init as RequestInit);
-    } catch (e) {
-      throw fail(`татагдсангүй: ${(e as Error).message}`);
-    }
-    if (res.status !== 200) {
-      await res.body?.cancel().catch(() => undefined);
-      throw fail(`HTTP ${res.status}`);
-    }
-    const text = await res.text();
-    if (text.length > MAX_JWKS) throw fail("JWKS хэт том");
-    let k: unknown;
-    try {
-      k = JSON.parse(text);
-    } catch {
-      throw fail("JWKS JSON биш");
-    }
-    if (!isObj(k) || !Array.isArray(k.keys) || k.keys.length === 0) throw fail("JWKS хоосон");
-    return k as unknown as Jwks;
+/** `GET /session`-ийн 410 → {@link QrError} `QR_PRESENTATION_GONE`. */
+async function gone(p: Promise<SessionResult>): Promise<SessionResult> {
+  try {
+    return await p;
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 410) throw fail("QR_PRESENTATION_GONE", "presentation аль хэдийн уншигдсан эсвэл хугацаа дууссан");
+    throw e;
   }
 }

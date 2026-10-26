@@ -33,7 +33,7 @@ export const RP_ROUTES = {
   tokenAuthChallenge: { method: "POST", path: "/token/auth/challenge" },
   tokenAuthVerify: { method: "POST", path: "/token/auth/verify" },
   share: { method: "POST", path: "/share" },
-  /** «Миний QR» (CA гэрээ v1, 2026-10-23). */
+  /** «Миний QR» (CA гэрээ myqr-2026-10-26): `{qr, relyingPartyUUID, relyingPartyName, nonce}` → `{sessionID}`. */
   authQr: { method: "POST", path: "/authentication/qr" },
 } as const satisfies Record<string, RpRoute>;
 
