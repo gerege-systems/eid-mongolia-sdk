@@ -1,4 +1,21 @@
 # Changelog
+## 0.39.0 — 2026-10-27
+
+### Changed — `<eid-login-button>`: нэвтрэх цонх top layer-д (`<dialog>` + `showModal()`)
+
+- **Юу:** цонх нь shadow root доторх нативи `<dialog part="dialog">`, `showModal()`-оор нээгдэнэ; dim давхарга `::backdrop`
+  (өнгө хэвээр `hsl(222 47% 11% / 0.5)`). Хэмжээ, padding, радиус, төвлөрөл, `max-height` + scroll, ≤639px padding, `dir`/`lang`,
+  theme хувьсагч хэвээр. Esc (`cancel` event) өмнөх хаалтын замаар (poll, status хүсэлт зогсоно), backdrop дарахад хаагдана,
+  элемент устахад хаагдана. `showModal` байхгүй хөтөчид өмнөх `div` fixed overlay (`part="backdrop"` + `part="dialog"`).
+- **Яагаад:** RP хуудасны өвөг элементэд `transform`/`filter`/`backdrop-filter`/`contain`/`will-change` байвал `position: fixed`
+  тэр элементийн дотор хавчигдаж цонх 56px header-д clip-логддог байв (eidmongolia.mn). Top layer нь өвөг containing block,
+  z-index, overflow-д автахгүй.
+- **Public API:** `::part(dialog)` хэвээр. `::part(backdrop)` одоо зөвхөн fallback замд байна (`<dialog>` горимд тусдаа элемент
+  үгүй; `::part(dialog)::backdrop` хөтчүүдэд найдвартай дэмжигдэхгүй). CSS хувьсагч өөрчлөгдөөгүй.
+- **Хаана:** `src/button.ts`, `test/button.test.ts`, `scripts/button-e2e.mjs`, `.github/workflows/ci.yml`, README.
+- **Шалгасан:** `npm run lint`, `npm test` (jsdom: showModal нээлт, cancel → хаалт/poll зогсоно, устгал, fallback);
+  `scripts/button-e2e.mjs` Chromium-д (backdrop-filter + transform + contain: paint header дотор dialog төвд, 416px өргөн, Esc).
+
 ## 0.38.1 — 2026-10-27
 
 ### Changed — `<eid-login-button>`: хэрэглэгчид харагдах «eID» → «e-ID»

@@ -435,6 +435,8 @@ h2, p, ol { margin: 0; }
 .trigger.icon-only { width: 44px; height: 44px; padding: 0; }
 .backdrop { position: fixed; inset: 0; z-index: 2147483000; background: hsl(222 47% 11% / 0.5); display: flex; align-items: center;
   justify-content: center; padding: 16px; overflow-y: auto; }
+dialog.dialog { position: fixed; inset: 0; margin: auto; height: fit-content; width: min(26rem, calc(100% - 32px)); max-width: none; }
+dialog.dialog::backdrop { background: hsl(222 47% 11% / 0.5); }
 .dialog { position: relative; width: 100%; max-width: 26rem; max-height: calc(100dvh - 32px); overflow-y: auto; background: var(--_eid-bg);
   color: var(--_eid-fg); border: 1px solid var(--_eid-border); border-radius: var(--_eid-radius-lg); padding: 24px; font-size: 0.875rem; line-height: 1.5rem; }
 @media (max-width: 639px) { .dialog { padding: 16px; } }
@@ -557,7 +559,7 @@ export class EidLoginButton extends Base {
 
   private root!: ShadowRoot;
   private trigger!: HTMLButtonElement;
-  private backdrop: HTMLDivElement | null = null;
+  private backdrop: HTMLElement | null = null; // <dialog> (top layer) эсвэл fallback div
   private body!: HTMLDivElement;
   private live!: HTMLParagraphElement;
   private timer = 0;
@@ -683,8 +685,10 @@ export class EidLoginButton extends Base {
     this.close();
     const gen = ++this.gen;
     this.lastFocus = (this.getRootNode() as Document | ShadowRoot).activeElement ?? document.activeElement;
-    const bd = el("div", { class: "backdrop", part: "backdrop" });
-    const dlg = el("div", { class: "dialog", role: "dialog", "aria-modal": "true", "aria-labelledby": "eid-title", part: "dialog", dir: this.uiDir, lang: this.uiLang });
+    // Top layer (<dialog>.showModal) — өвөг элементийн transform/filter/backdrop-filter/overflow-д автахгүй.
+    const modal = typeof HTMLDialogElement !== "undefined" && typeof HTMLDialogElement.prototype.showModal === "function";
+    const attrs = { class: "dialog", "aria-labelledby": "eid-title", part: "dialog", dir: this.uiDir, lang: this.uiLang };
+    const dlg = modal ? el("dialog", attrs) : el("div", { ...attrs, role: "dialog", "aria-modal": "true" });
     const head = el("div", { class: "head" });
     const x = el("button", { type: "button", class: "x", "aria-label": this.t.close }, "×");
     x.addEventListener("click", () => this.close());
@@ -693,13 +697,29 @@ export class EidLoginButton extends Base {
     this.body = el("div");
     this.live = el("p", { class: "sr-only", "aria-live": "polite" });
     dlg.append(head, this.body, this.live);
-    bd.append(dlg);
-    bd.addEventListener("mousedown", (e) => {
-      if (e.target === bd) this.close();
-    });
+    let bd: HTMLElement = dlg;
+    if (modal) {
+      // ::backdrop дээрх дарилт dialog-ийн өөрт ирдэг — хайрцгийн гадна байвал хаана.
+      dlg.addEventListener("mousedown", (e) => {
+        const r = dlg.getBoundingClientRect();
+        const m = e as MouseEvent;
+        if (m.clientX < r.left || m.clientX > r.right || m.clientY < r.top || m.clientY > r.bottom) this.close();
+      });
+      dlg.addEventListener("cancel", (e) => {
+        e.preventDefault();
+        this.close();
+      });
+    } else {
+      bd = el("div", { class: "backdrop", part: "backdrop" });
+      bd.append(dlg);
+      bd.addEventListener("mousedown", (e) => {
+        if (e.target === bd) this.close();
+      });
+    }
     bd.addEventListener("keydown", (e) => this.onKey(e));
     this.root.append(bd);
     this.backdrop = bd;
+    if (modal) (dlg as HTMLDialogElement).showModal();
     this.showLoading();
     x.focus();
     void this.begin(gen, { mode: "qr" });
@@ -711,8 +731,10 @@ export class EidLoginButton extends Base {
     clearTimeout(this.timer);
     clearInterval(this.tick);
     if (!this.backdrop) return;
-    this.backdrop.remove();
+    const bd = this.backdrop;
     this.backdrop = null;
+    if (bd.localName === "dialog" && bd.hasAttribute("open")) (bd as HTMLDialogElement).close();
+    bd.remove();
     (this.lastFocus as HTMLElement | null)?.focus?.();
     if (!this.lastFocus) this.trigger.focus();
   }

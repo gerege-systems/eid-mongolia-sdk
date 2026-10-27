@@ -185,6 +185,7 @@ document.querySelector("eid-login-button").addEventListener("eid-login-error", (
 ```
 
 Гадны хамааралгүй (QR encoder дотроо), цонх нь focus trap, Esc, `aria-live` төлөвтэй.
+Цонх нь нативи `<dialog>` + `showModal()` (browser top layer) — RP хуудасны өвөг элементийн `transform`/`filter`/`backdrop-filter`/`overflow` нөлөөлөхгүй; `showModal` үгүй хөтөчид `position: fixed` overlay-д унана.
 
 **Дизайн, theme.** Дизайн нь eID нэвтрэх хуудсынх (лого, өнгө). Фонт нь хуудаснаас өвлөгдөнө (товч, цонх, input бүгд).
 `theme="auto"` үед дараалал: хуудасны `html[data-theme="dark|light"]` → `html.dark` / `html.light` → OS
@@ -200,7 +201,7 @@ Dark-ийн дараалал: `--eid-<нэр>-dark` → `--eid-<нэр>` → dar
   --eid-accent-dark: var(--brand-400);    /* зөвхөн dark-д (өгөхгүй бол --eid-accent) */
   --eid-radius: 6px; --eid-radius-lg: 8px;
 }
-eid-login-button::part(button) { width: 100%; }  /* part: button, icon, label, backdrop, dialog */
+eid-login-button::part(button) { width: 100%; }  /* part: button, icon, label, dialog (backdrop — зөвхөн fallback-д) */
 eid-login-button::part(label) { font-weight: 600; }
 eid-login-button::part(icon) { width: 24px; height: 24px; }
 ```

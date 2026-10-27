@@ -89,3 +89,27 @@ jobs:
           BROWSER: ${{ matrix.browser }}
           # brotli 11 soffice.wasm-д ~4+ мин; .br-ийн зөв эсэхэд чанар нөлөөлөхгүй.
           EID_CONVERT_BROTLI_QUALITY: 9
+  button-e2e:
+    # <eid-login-button>: backdrop-filter-тай header дотор ч цонх top layer-д, viewport-ийн төвд (жинхэнэ хөтөч).
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chromium, webkit]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+      - run: npx playwright install --with-deps ${{ matrix.browser == 'chromium' && '--only-shell chromium' || 'webkit' }}
+      - run: node scripts/button-e2e.mjs
+        env:
+          BROWSER: ${{ matrix.browser }}
