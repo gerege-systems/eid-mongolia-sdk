@@ -489,7 +489,7 @@ test("утас: Web2App start-url руу шууд навигаци (fetch-гүй
   assert.equal(requests.length, 0);
 });
 
-test("Esc цонхыг хааж, poll зогсоно; Tab focus цонхонд үлдэнэ", async () => {
+test("fallback (showModal үгүй): Esc цонхыг хааж, poll зогсоно; Tab focus цонхонд үлдэнэ", async () => {
   startReplies = [{ status: 200, body: { mode: "qr", qr: QR, vc: "1", expiresIn: 120 } }];
   const { sr, click } = make();
   click();
@@ -504,6 +504,60 @@ test("Esc цонхыг хааж, poll зогсоно; Tab focus цонхонд �
   const n = requests.length;
   await tick(1200);
   assert.equal(requests.length, n, "хаасны дараа poll үгүй");
+});
+
+// jsdom-д <dialog>.showModal байхгүй — хамгийн бага polyfill (open атрибут)-ээр top-layer замыг шалгана.
+function withModalDialog<T>(fn: (calls: string[]) => Promise<T>): Promise<T> {
+  const D = dom.window.HTMLDialogElement as unknown as { prototype: Record<string, unknown> };
+  const calls: string[] = [];
+  D.prototype.showModal = function (this: HTMLElement) { calls.push("showModal"); this.setAttribute("open", ""); };
+  D.prototype.close = function (this: HTMLElement) { calls.push("close"); this.removeAttribute("open"); };
+  Object.defineProperty(globalThis, "HTMLDialogElement", { value: dom.window.HTMLDialogElement, configurable: true, writable: true });
+  const restore = () => {
+    delete D.prototype.showModal;
+    delete D.prototype.close;
+    delete (globalThis as Record<string, unknown>).HTMLDialogElement;
+  };
+  return fn(calls).finally(restore);
+}
+
+test("top layer: <dialog> showModal-оор нээгдэж, cancel (Esc) нь хаалтын замаар poll зогсооно", async () => {
+  await withModalDialog(async (calls) => {
+    startReplies = [{ status: 200, body: { mode: "qr", qr: QR, vc: "1", expiresIn: 120 } }];
+    const { sr, click } = make();
+    click();
+    await until(() => !!sr.querySelector("form"));
+    const dlg = sr.querySelector("dialog.dialog") as HTMLDialogElement;
+    assert.ok(dlg, "<dialog> байна");
+    assert.equal(sr.querySelector(".backdrop"), null, "div backdrop үгүй");
+    assert.equal(dlg.getAttribute("part"), "dialog");
+    assert.equal(dlg.getAttribute("aria-labelledby"), "eid-title");
+    assert.equal(dlg.hasAttribute("open"), true);
+    assert.deepEqual(calls, ["showModal"]);
+    click(); // давхар нээлт — нэг dialog л үлдэнэ
+    assert.equal(sr.querySelectorAll("dialog").length, 1);
+    const cancel = new (dom.window.Event)("cancel", { cancelable: true });
+    sr.querySelector("dialog.dialog")!.dispatchEvent(cancel);
+    assert.equal(cancel.defaultPrevented, true);
+    assert.equal(sr.querySelector("dialog"), null);
+    const n = requests.length;
+    await tick(1200);
+    assert.equal(requests.length, n, "хаасны дараа poll үгүй");
+  });
+});
+
+test("top layer: элемент устгагдахад dialog хаагдаж, poll зогсоно", async () => {
+  await withModalDialog(async () => {
+    startReplies = [{ status: 200, body: { mode: "qr", qr: QR, vc: "1", expiresIn: 120 } }];
+    const { sr, click, b } = make();
+    click();
+    await until(() => !!sr.querySelector("form"));
+    b.remove();
+    assert.equal(sr.querySelector("dialog"), null);
+    const n = requests.length;
+    await tick(1200);
+    assert.equal(requests.length, n);
+  });
 });
 
 test("lang: eID аппын 7 хэл; zh-CN → zh, үл мэдэгдэх → mn", () => {
