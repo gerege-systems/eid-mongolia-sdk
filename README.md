@@ -156,7 +156,7 @@ app.use("/auth/eid", express.json(), async (req, res) => {
 | `theme` | `auto` \| `light` \| `dark` | `auto` |
 | `success-url` (`successUrl`) | backend redirect өгөөгүй үед шилжих URL | — |
 | `label` | товчны текст; `""` → зөвхөн лого | i18n: «e-ID-ээр нэвтрэх» / «Log in with e-ID» |
-| `icon` | `eid` (eID emblem, inline SVG дөрвөлжин — товчинд 20px, зөвхөн-лого үед 24px, цонхны толгойд 24px; light / dark хувилбар theme-ийг дагана) \| `none` (логогүй) | `eid` |
+| `icon` | `eid` («e-ID» wordmark, inline SVG `fill: currentColor` — товч / гарчгийн текстийн өнгөөр light / dark-ийг дагана; өндөр товчинд 16px, зөвхөн-лого үед 12px, цонхны толгойд 20px; анхдагч текстэй үед лого «e-ID»-г орлоно: [e-ID] нэвтрэх, бүтэн нэр `aria-label`-д) \| `none` (логогүй, бүтэн текст) | `eid` |
 | `variant` | `default` (лого + текст) \| `icon` (зөвхөн лого, 44×44) | `default` |
 | `aria-label` | товчны хүртээмжийн нэр (дэлгэц уншигч) | зөвхөн-лого үед `label` эсвэл i18n текст |
 
@@ -203,13 +203,13 @@ Dark-ийн дараалал: `--eid-<нэр>-dark` → `--eid-<нэр>` → dar
 }
 eid-login-button::part(button) { width: 100%; }  /* part: button, icon, label, dialog (backdrop — зөвхөн fallback-д) */
 eid-login-button::part(label) { font-weight: 600; }
-eid-login-button::part(icon) { width: 24px; height: 24px; }
+eid-login-button::part(icon) { height: 18px; }
 ```
 
 | Хувьсагч (`-dark` хувилбартай) | Юунд | Light анхдагч | Dark анхдагч |
 |---|---|---|---|
 | `--eid-accent` | үндсэн товч | `oklch(0.534 0.2 259)` | `oklch(0.64 0.15 259)` |
-| `--eid-logo` | **deprecated (0.38.0)** — emblem-ийн өнгө брэндээр тогтмол (light / dark хувилбар); утга өгсөн ч үл хэрэгжинэ | — | — |
+| `--eid-logo` | **deprecated (0.38.0)** — үл хэрэгжинэ; 0.40.0-оос wordmark `currentColor` (товч / гарчгийн текстийн өнгө) | — | — |
 | `--eid-accent-fg` | үндсэн товчны текст | `#fff` | `hsl(229 50% 6%)` |
 | `--eid-accent-subtle` | алхмын дугаарын дэвсгэр | `oklch(0.97 0.03 259)` | `oklch(0.24 0.06 259)` |
 | `--eid-accent-subtle-fg` | алхмын дугаар | `oklch(0.474 0.19 259)` | `oklch(0.82 0.1 259)` |

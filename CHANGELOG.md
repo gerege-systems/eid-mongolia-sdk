@@ -1,4 +1,21 @@
 # Changelog
+## 0.40.0 — 2026-11-02
+
+### Changed — `<eid-login-button>`: цонхны толгой ба товчинд «e-ID» wordmark (emblem-ийн оронд); «e-ID Mongolia»
+
+- **Юу:** QR цонхны толгой («e-ID-ээр нэвтрэх») ба товчны лого (`icon="eid"`, анхдагч) 0.38.0-ийн дугуй emblem-ийн
+  оронд одоогийн «e-ID» wordmark — eidmongolia.mn (`landing/brand/eid-wordmark-*.svg`) ба eID админ консолын
+  `eid-wordmark.tsx`-тэй ижил path, нэг өнгө `fill: currentColor` (товч / гарчгийн текстийн өнгө → light / dark-ийг
+  дагана). Лого «e-ID» гэж бичигддэг тул анхдагч текстэй үед «e-ID»-г давтахгүй: [e-ID] нэвтрэх / "Log in with [e-ID]"
+  (7 хэлэнд `withLogo`), бүтэн нэр `aria-label`-д (товч ба гарчиг). Өндөр: товч 16px, зөвхөн-лого 12px, толгой 20px.
+  QR алхам ба `qrAlt` 7 хэлэнд «eID Mongolia» → «e-ID Mongolia». `icon="none"`, `variant="icon"`, `label`,
+  `aria-label`, `part=icon/label` өмнөх шигээ; `--eid-logo` deprecated хэвээр (үл хэрэгжинэ). Public API өөрчлөгдөөгүй.
+- **Яагаад:** эзэмшигчийн шийдвэр (2026-11-02) — нэвтрэх цонх хуучин emblem харуулж байв; брэнд нь «e-ID» wordmark ба
+  «e-ID Mongolia».
+- **Хаана:** `src/logo.ts`, `src/button.ts`, `test/button.test.ts`, README.
+- **Шалгасан:** `npm run lint`, `npm test`; Chromium-д цонх light / dark screenshot (wordmark текстийн өнгөөр, console алдаагүй).
+- **Үлдсэн:** PAdES-ийн бичвэр («eID Mongolia-аар зурсан», TSA нэр) golden вектортай тул хөндөөгүй.
+
 ## 0.39.0 — 2026-10-27
 
 ### Changed — `<eid-login-button>`: нэвтрэх цонх top layer-д (`<dialog>` + `showModal()`)

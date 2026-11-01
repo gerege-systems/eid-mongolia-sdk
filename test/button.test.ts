@@ -56,42 +56,41 @@ beforeEach(() => {
   requests = [];
 });
 
-test("товч: emblem + бүтэн текст, aria-haspopup; lang=en", () => {
+test("товч: «e-ID» wordmark + текст, aria-haspopup; lang=en", () => {
   const { sr, b } = make();
   const btn = sr.querySelector("button.trigger")!;
   assert.equal(btn.getAttribute("aria-haspopup"), "dialog");
   const logo = btn.querySelector("svg.logo")!;
-  assert.equal(logo.getAttribute("viewBox"), "0 0 64 64");
+  assert.equal(logo.getAttribute("viewBox"), "0 0 3840 1372");
   assert.equal(logo.getAttribute("aria-hidden"), "true");
-  assert.equal(logo.querySelectorAll("path").length, 4);
-  assert.equal(logo.querySelectorAll("circle").length, 3);
-  assert.equal(logo.querySelectorAll(".m-a").length, 1, "theme-ийн fill: зүүн тал");
-  assert.equal(logo.querySelectorAll(".m-l").length, 2, "theme-ийн stroke: цагираг, төвийн хүрээ");
+  assert.equal(logo.querySelectorAll("path").length, 1);
+  assert.ok((logo.querySelector("path")!.getAttribute("d") ?? "").length > 1000);
   assert.equal(logo.querySelector("[style]"), null, "inline style үгүй (CSP)");
+  assert.equal(logo.querySelector("[fill]"), null, "өнгө CSS-ийн currentColor-оос");
   assert.equal(btn.querySelector("img"), null, "inline SVG — data URI зураг үгүй");
-  assert.equal(btn.firstElementChild!.tagName.toLowerCase(), "svg", "лого эхэнд");
-  // Emblem-д үсэг алга — текст бүтэн харагдана, aria-label шаардлагагүй.
-  assert.equal(btn.textContent, "e-ID-ээр нэвтрэх");
-  assert.equal(btn.hasAttribute("aria-label"), false);
+  assert.equal(btn.getAttribute("aria-label"), "e-ID-ээр нэвтрэх", "уншигчийн нэр бүтэн, зайгүй");
+  // Лого «e-ID» гэж бичигддэг — харагдах текстэд «e-ID» давтагдахгүй: [лого] нэвтрэх.
+  const visible = () => Array.from(btn.querySelectorAll(".brand > span")).map((n) => n.textContent).join("|");
+  assert.equal(visible(), "нэвтрэх");
+  assert.equal(btn.querySelector(".brand")!.firstElementChild!.tagName.toLowerCase(), "svg", "лого эхэнд");
   b.setAttribute("lang", "en");
-  assert.equal(btn.textContent, "Log in with e-ID");
+  assert.equal(btn.getAttribute("aria-label"), "Log in with e-ID");
+  assert.equal(visible(), "Log in with ");
+  assert.equal(btn.querySelector(".brand")!.lastElementChild!.tagName.toLowerCase(), "svg", "en: лого төгсгөлд");
   assert.ok(b instanceof EidLoginButton);
 });
 
-test("emblem: light / dark өнгө shadow CSS-ээр, хэмжээ 20 / 24 (зөвхөн-лого) / 24 (цонх); хуучин --eid-logo үгүй", () => {
+test("wordmark: fill currentColor (light / dark текстийн өнгийг дагана), өндөр 16 / 12 (зөвхөн-лого) / 20 (цонх)", () => {
   const { sr, b } = make({ theme: "light" });
   const base = sr.querySelector("style:not([data-eid-theme])")!.textContent ?? "";
   const dark = () => sr.querySelector('style[data-eid-theme="dark"]')!.textContent ?? "";
-  assert.match(base, /\.logo \{ display: block; flex: none; width: 20px; height: 20px; \}/);
-  assert.match(base, /\.logo \.m-a \{ fill: #0A1631; \}/);
-  assert.match(base, /\.logo \.m-l \{ stroke: #fff; \}/);
-  assert.match(base, /\.trigger\.icon-only \.logo \{ width: 24px; height: 24px; \}/);
-  assert.match(base, /\.head \.logo \{ width: 24px; height: 24px; \}/);
-  assert.doesNotMatch(base, /eid-logo|3840/);
+  assert.match(base, /\.logo \{ display: block; flex: none; height: 16px; width: auto; aspect-ratio: 3840 \/ 1372; fill: currentColor; \}/);
+  assert.match(base, /\.trigger\.icon-only \.logo \{ height: 12px; \}/);
+  assert.match(base, /\.head \.logo \{ height: 20px; \}/);
+  assert.doesNotMatch(base, /m-a|m-l|eid-logo/);
   assert.equal(dark(), "");
   b.setAttribute("theme", "dark");
-  assert.match(dark(), /\.logo \.m-a \{ fill: #fff; \}/);
-  assert.match(dark(), /\.logo \.m-l \{ stroke: #0A1631; \}/);
+  assert.doesNotMatch(dark(), /logo/, "dark-д тусдаа лого өнгө хэрэггүй");
 });
 
 test("товч: label атрибут (шууд шинэчлэгдэнэ), анхдагч i18n; part=button/icon/label", () => {
@@ -99,15 +98,15 @@ test("товч: label атрибут (шууд шинэчлэгдэнэ), анх
   const btn = sr.querySelector("button.trigger")!;
   assert.equal(btn.getAttribute("part"), "button");
   assert.equal(btn.querySelector("svg.logo")!.getAttribute("part"), "icon");
-  assert.equal(btn.querySelector("span[part=label]")!.textContent, "e-ID-ээр нэвтрэх");
-  assert.equal(btn.hasAttribute("aria-label"), false, "харагдах текст бүтэн → aria-label үгүй");
+  assert.equal(btn.querySelector("span[part=label]")!.textContent, "нэвтрэх");
+  assert.equal(btn.getAttribute("aria-label"), "e-ID-ээр нэвтрэх", "лого + анхдагч текст → бүтэн нэр");
   b.setAttribute("label", "Нэвтрэх");
   assert.equal(btn.textContent, "Нэвтрэх");
   assert.equal(btn.hasAttribute("aria-label"), false, "өөрийн label → aria-label үгүй");
   b.setAttribute("lang", "en");
   assert.equal(btn.textContent, "Нэвтрэх", "label нь lang-аас давуу");
   b.removeAttribute("label");
-  assert.equal(btn.textContent, "Log in with e-ID");
+  assert.equal(btn.getAttribute("aria-label"), "Log in with e-ID");
   const m = make({ label: "Sign in" } as Record<string, string>);
   assert.equal(m.sr.querySelector("button.trigger")!.textContent, "Sign in");
 });
@@ -256,11 +255,14 @@ test("desktop: ачаалж байна → QR (svg) + VC + алхмууд → OK
   assert.equal(dlg.getAttribute("aria-modal"), "true");
   const h2 = sr.querySelector("#eid-title")!;
   assert.equal(dlg.getAttribute("aria-labelledby"), "eid-title");
-  assert.equal(h2.textContent, "e-ID-ээр нэвтрэх", "нэр бүтэн");
-  assert.ok(sr.querySelector(".head > svg.logo[aria-hidden=true]"), "emblem цонхны толгойд");
+  assert.equal(h2.getAttribute("aria-label"), "e-ID-ээр нэвтрэх", "нэр бүтэн, зайгүй");
+  assert.ok(h2.querySelector(".brand > svg.logo[aria-hidden=true]"), "wordmark гарчиг дотор");
+  assert.equal(h2.querySelector(".brand > span")!.textContent, "нэвтрэх");
   assert.match(text(), /Ачаалж байна/);
   await until(() => !!sr.querySelector(".qr svg path"));
   assert.match(text(), /Баталгаажуулах код/);
+  assert.match(text(), /Утсан дээрх e-ID Mongolia аппыг нээнэ/);
+  assert.doesNotMatch(text(), /eID/, "брэнд нь e-ID");
   assert.equal(sr.querySelector(".qr-vc .vc")!.textContent, "12345");
   assert.match(sr.querySelector(".meta")!.textContent!, /^Хүсэлтийн хугацаа: \d:\d\d$/);
   assert.match(text(), /PIN1 кодоо оруулна/);
@@ -576,11 +578,11 @@ test("lang: eID аппын 7 хэл; zh-CN → zh, үл мэдэгдэх → mn"
   const btn = sr.querySelector("button.trigger")!;
   for (const [lang, name] of Object.entries(names)) {
     b.setAttribute("lang", lang);
-    assert.equal(btn.textContent, name, lang);
+    assert.equal(btn.getAttribute("aria-label"), name, lang);
     assert.equal(btn.getAttribute("dir"), lang === "ar" ? "rtl" : "ltr", lang);
   }
   b.setAttribute("lang", "de");
-  assert.equal(btn.textContent, names.mn, "үл мэдэгдэх → mn");
+  assert.equal(btn.getAttribute("aria-label"), names.mn, "үл мэдэгдэх → mn");
 });
 
 test("lang=ar: цонх dir=rtl, араб текст; регистрийн оролт ltr; start-д lang=ar", async () => {
