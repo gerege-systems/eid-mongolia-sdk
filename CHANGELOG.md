@@ -1,4 +1,18 @@
 # Changelog
+## 0.40.1 — 2026-11-02
+
+### Fixed — `<eid-login-button>`: dark горимд «Дахин оролдох» (disabled) ба outline хүрээний контраст (WCAG AA)
+
+- **Юу:** dark-д `.btn:disabled` (Retry-After countdown-ийн үед идэвхгүй «Дахин оролдох») `opacity: 0.6`-аар бүдгэрч
+  текст 1.49:1, товч/цонх 2.76:1 болж байв → одоо `opacity: 1`, `bg-muted` дэвсгэр, `fg-subtle` текст (6.47:1), `border-strong`
+  хүрээ. Dark `--eid-border-strong` `hsl(215 25% 27%)` (#344256) → `hsl(215 20% 45%)` (#5c6f8a): outline товч, input хүрээ
+  цонхны дэвсгэрээс 1.93:1 → 3.83:1 (≥3:1). Идэвхтэй «Дахин оролдох» (accent) өмнөөс AA: текст/дэвсгэр 5.79:1, hover 4.61:1.
+  Бусад бүх dark текст ≥4.5:1 (fg 18.78, fg-muted 13.26, fg-subtle 7.65, danger 7.16, warning 10.62, алхмын тоо 9.38).
+  Light өөрчлөгдөөгүй; `--eid-border-strong(-dark)` override өмнөх шигээ ажиллана.
+- **Яагаад:** dark горимд «Дахин оролдох» товч дэвсгэрээсээ бүдэг харагдаж байсан.
+- **Хаана:** `src/button.ts` (`EID_COLOR_TOKENS`, `DARK_CSS`), `test/button.test.ts`, README (токен хүснэгт).
+- **Шалгасан:** `npm run lint`, `npm test`; контрастыг WCAG 2.x харьцаагаар тооцсон.
+
 ## 0.40.0 — 2026-11-02
 
 ### Changed — `<eid-login-button>`: цонхны толгой ба товчинд «e-ID» wordmark (emblem-ийн оронд); «e-ID Mongolia»
