@@ -221,7 +221,7 @@ eid-login-button::part(icon) { height: 18px; }
 | `--eid-fg-muted` | хоёрдогч текст | `hsl(215 19% 35%)` | `hsl(213 27% 84%)` |
 | `--eid-fg-subtle` | тайлбар, placeholder | `hsl(215 16% 45%)` | `hsl(215 20% 65%)` |
 | `--eid-border` | цонх, QR, тусгаарлагч | `hsl(214 32% 91%)` | `hsl(217 33% 17%)` |
-| `--eid-border-strong` | outline товч, input | `hsl(213 27% 84%)` | `hsl(215 25% 27%)` |
+| `--eid-border-strong` | outline товч, input | `hsl(213 27% 84%)` | `hsl(215 20% 45%)` |
 | `--eid-warning-bg` / `-border` / `-fg` | сүлжээний анхааруулга | `hsl(48 100% 96%)` / `hsl(45 95% 78%)` / `hsl(23 75% 33%)` | `hsl(20 60% 10%)` / `hsl(22 70% 26%)` / `hsl(40 92% 65%)` |
 | `--eid-danger-fg` | алдаа | `hsl(0 74% 42%)` | `hsl(0 91% 71%)` |
 | `--eid-radius` / `--eid-radius-lg` (theme-гүй) | булан | `6px` / `8px` | — |

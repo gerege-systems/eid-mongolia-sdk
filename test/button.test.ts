@@ -244,6 +244,15 @@ test("токен: --eid-* хоёр theme-д (хуудасны аль ч түвш
   assert.doesNotMatch(dark(), /^[^]*:\s*oklch\(0\.64 0\.15 259\);/m, "dark accent хатуу утгаар тодорхойлогдохгүй");
 });
 
+test("dark: disabled товч opacity-гаар бүдгэрэхгүй, border-strong ≥3:1 (WCAG AA)", () => {
+  const { sr, b } = make({ theme: "dark" });
+  const dark = sr.querySelector('style[data-eid-theme="dark"]')!.textContent ?? "";
+  assert.match(dark, /\.btn:disabled \{ opacity: 1; background: var\(--_eid-bg-muted\); color: var\(--_eid-fg-subtle\); border-color: var\(--_eid-border-strong\); \}/);
+  assert.match(dark, /hsl\(215 20% 45%\)/);
+  b.setAttribute("theme", "light");
+  assert.equal(sr.querySelector('style[data-eid-theme="dark"]')!.textContent, "");
+});
+
 test("desktop: ачаалж байна → QR (svg) + VC + алхмууд → OK: event + redirect", async () => {
   startReplies = [{ status: 200, body: { mode: "qr", qr: QR, vc: "12345", expiresIn: 120 } }];
   statusReplies = [{ state: "PENDING", qr: QR, expiresIn: 119 }, { state: "OK", redirect: "/dashboard", data: { u: 1 } }];

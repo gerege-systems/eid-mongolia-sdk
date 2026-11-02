@@ -390,7 +390,7 @@ const EID_COLOR_TOKENS: ReadonlyArray<readonly [string, string, string]> = [
   ["fg-muted", "hsl(215 19% 35%)", "hsl(213 27% 84%)"],
   ["fg-subtle", "hsl(215 16% 45%)", "hsl(215 20% 65%)"],
   ["border", "hsl(214 32% 91%)", "hsl(217 33% 17%)"],
-  ["border-strong", "hsl(213 27% 84%)", "hsl(215 25% 27%)"],
+  ["border-strong", "hsl(213 27% 84%)", "hsl(215 20% 45%)"],
   ["accent", "oklch(0.534 0.2 259)", "oklch(0.64 0.15 259)"],
   ["accent-fg", "#fff", "hsl(229 50% 6%)"],
   ["accent-subtle", "oklch(0.97 0.03 259)", "oklch(0.24 0.06 259)"],
@@ -414,8 +414,10 @@ button, input { font-family: inherit; }
 
 // Dark — `theme`-ээс (эсвэл auto үед хуудсын html[data-theme] / html.dark / prefers-color-scheme) хамаарч тусдаа
 // <style>-д идэвхжинэ: `--eid-<нэр>-dark` → `--eid-<нэр>` → dark анхдагч.
+// Dark-д disabled товч (жишээ нь Retry-After countdown-ийн «Дахин оролдох») opacity-гаар бүдэгрэхгүй: тод текст + хүрээ (WCAG AA).
 const DARK_CSS = `:host { color-scheme: dark;
   ${darkVars} }
+.btn:disabled { opacity: 1; background: var(--_eid-bg-muted); color: var(--_eid-fg-subtle); border-color: var(--_eid-border-strong); }
 `;
 
 const CSS_REST = `
