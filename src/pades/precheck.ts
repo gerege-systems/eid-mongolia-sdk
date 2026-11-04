@@ -30,15 +30,14 @@ function openReader(doc: Uint8Array): Reader | undefined {
   }
 }
 
-/** #4: trailer (xref stream толь)-д /Encrypt; задрахгүй бол файлын байтаас regex. */
+/**
+ * #4: trailer (xref stream толь)-д /Encrypt түлхүүр бий эсэх; задрахгүй бол файлын байтаас regex. keys() — /Encrypt-ийг
+ * resolve хийхгүй (Go SDK v0.21.1 `Trailer().Keys()`): унжсан лавлагаа / null ч шифрлэгдсэн гэж ангилна.
+ */
 export function encrypted(doc: Uint8Array): boolean {
   const r = openReader(doc);
   if (!r) return ENCRYPT_KEY.test(fromLatin1(doc));
-  try {
-    return !r.trailerValue().key("Encrypt").isNull();
-  } catch {
-    return false;
-  }
+  return r.trailerValue().keys().includes("Encrypt");
 }
 
 interface SigDict {

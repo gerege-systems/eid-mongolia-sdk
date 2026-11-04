@@ -1,6 +1,9 @@
 // checkStructure — Go SDK pades/internal/validate/nesting.go (CheckStructure)-ийн порт: PDF-ийг рекурсив parser-т
 // (pdf/reader.ts — digitorus/pdf-ийн порт) өгөхөөс ӨМНӨХ хямд урьдчилсан шалгалт. Массив/толийн давхарлалт > 256,
-// хэт их уншилт, задалсан ObjStm-ийн хэмжээ эсвэл давтаагүй ObjStm (/DecodeParms) → StructureError (fail-closed).
+// хэт их уншилт, задалсан ObjStm-ийн хэмжээ эсвэл давтаагүй ObjStm (/DecodeParms, олон шүүлтүүр) → StructureError
+// (fail-closed). Шифрлэгдсэн баримтын ObjStm-ийг ч мөн адил шалгана (алгасахгүй): ciphertext нь zlib болж задрахгүй тул
+// хууль ёсны баримтыг татгалзахгүй, харин /Encrypt-ийг түүхий байтаар (тайлбар, мөр, stream дотор) таних нь бүх ObjStm
+// шалгалтыг унтраах тойруу зам байсан (Go SDK v0.21.1, 2026-11-04).
 // Go-той ижил дүрэм (golden validate/v4 deep-nesting*) — нэг баримтад бүх SDK ижил хариу өгнө.
 
 import { fromLatin1 } from "../bytes.js";
@@ -22,9 +25,6 @@ export class StructureError extends Error {
     this.name = "StructureError";
   }
 }
-
-// Go regexp `\s` = [\t\n\f\r ] (JS `\s`-ээс ялгаатай).
-const ENCRYPT_REF = /\/Encrypt(?:[\t\n\f\r ]+\d+[\t\n\f\r ]+\d+[\t\n\f\r ]+R|[\t\n\f\r ]*<<)/;
 
 const isSpace = (c: number): boolean => c === 0 || c === 0x09 || c === 0x0a || c === 0x0c || c === 0x0d || c === 0x20;
 // ()<>[]{}/%
@@ -159,7 +159,6 @@ class Scan {
   constructor(
     public budget: number,
     public inflateLeft: number,
-    readonly encrypted: boolean,
   ) {}
 
   /** b[start:]-аас reader-ийн нэг объектыг (давхар `N G obj`-ийг оруулаад) гүнээр шалгана. */
@@ -208,6 +207,11 @@ class Scan {
         case Tok.Dict:
           if (stack.length >= MAX_NESTING) throw new StructureError();
           if (stack.length === 1 && stack[0]!.dict && stack[0]!.key === "DecodeParms") info.parms = true;
+          if (stack.length === 1 && stack[0]!.dict && stack[0]!.key === "Filter") {
+            // reader: давхар түлхүүрийн сүүлийнх (Map.set); массивын нэрсийг noteScalar тоолно
+            info.filter = "";
+            info.filters = 0;
+          }
           stack.push({ dict: tok === Tok.Dict, expectKey: tok === Tok.Dict, key: "" });
           continue;
         case Tok.ArrEnd:
@@ -222,6 +226,9 @@ class Scan {
               const t3 = l.next();
               if (t3 === Tok.Word && l.val === "R") {
                 if (stack.length === 1 && stack[0]!.dict && ["Type", "Filter", "DecodeParms", "N", "First"].includes(stack[0]!.key)) info.indirect = true;
+                // /Filter [6 0 R] — reader index()-ээр resolve хийж задална (DecodeParms-ийн гүн дэх лавлагаа, жишээ нь
+                // /JBIG2Globals, хууль ёсны тул зөвхөн Filter).
+                if (stack.length === 2 && stack[0]!.dict && stack[0]!.key === "Filter") info.indirect = true;
                 done = true; // лавлагаа = нэг утга
               } else if (t3 === Tok.Word && l.val === "obj") {
                 continue; // давхар `N G obj` — дараагийн утга нь энэ объектын үргэлжлэл
@@ -257,6 +264,10 @@ class Scan {
           if (tok === Tok.Name) {
             info.filter = val;
             info.filters = 1;
+          } else {
+            // null → reader шүүлтүүргүй (түүхийгээр) уншина; давхар түлхүүрийн сүүлийнх
+            info.filter = "";
+            info.filters = 0;
           }
           break;
         case "DecodeParms":
@@ -280,7 +291,7 @@ class Scan {
 
   /** `stream`-ийн араас FlateDecode өгөгдлийг (zlib өөрөө төгсөнө) задалж, толгойн offset бүрээс объектыг шалгана. */
   private objStm(l: Lex, info: ObjStmInfo): void {
-    if (l.next() !== Tok.Word || l.val !== "stream" || this.encrypted) return;
+    if (l.next() !== Tok.Word || l.val !== "stream") return;
     if (info.indirect) throw new StructureError(); // /Type /Filter /N /First лавлагаагаар — хууль ёсны баримтад гардаггүй
     if (info.typ !== "ObjStm") return;
     const b = l.b;
@@ -291,7 +302,8 @@ class Scan {
       this.objStmData(b.subarray(p), info); // шахаагүй ObjStm — өгөгдөл нь файлын үлдсэн хэсэг
       return;
     }
-    if (info.filters !== 1 || info.filter !== "FlateDecode") return; // reader дэмжихгүй шүүлтүүр
+    if (info.filters > 1) throw new StructureError(); // reader [/FlateDecode /FlateDecode …]-г гинжлэн задалдаг — давтахгүй, fail-closed
+    if (info.filter !== "FlateDecode") return; // reader дэмжихгүй шүүлтүүр
     if (info.parms) throw new StructureError(); // predictor-тэй ObjStm-ийг давтахгүй — fail-closed
     let data: Uint8Array;
     try {
@@ -328,7 +340,7 @@ class Scan {
  */
 export function checkStructure(doc: Uint8Array): void {
   const text = fromLatin1(doc);
-  const s = new Scan(NEST_SCAN_FACTOR * doc.length + (1 << 20), MAX_OBJSTM_BYTES, ENCRYPT_REF.test(text));
+  const s = new Scan(NEST_SCAN_FACTOR * doc.length + (1 << 20), MAX_OBJSTM_BYTES);
   for (const kw of ["obj", "trailer"]) {
     for (let i = 0; ; ) {
       const k = text.indexOf(kw, i);

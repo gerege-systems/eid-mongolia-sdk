@@ -20,6 +20,9 @@ const SEEDS = [
   "validate/input/deep-nesting-objstm.pdf",
   "validate/input/encrypted-aes-128.pdf",
   "fuzz/objstm-cycle-c8b2f6dc9d5d37bf.pdf",
+  // шифрлэгдсэн ObjStm (ciphertext-ийг checkStructure алгасахгүй шалгана — Go SDK v0.21.1)
+  "encrypted-objstm/aes128.pdf",
+  "encrypted-objstm/rc4-uncompressed.pdf",
 ].map(read);
 const ITER = Number(process.env.EID_FUZZ_ITER ?? 150);
 const PER_CASE_MS = 5000;
