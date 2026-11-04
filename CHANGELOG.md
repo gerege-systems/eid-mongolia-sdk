@@ -1,7 +1,7 @@
 # Changelog
 ## 0.40.2 — 2026-11-04
 
-### Security — `/pades`, `/validate`: ObjStm-ийн zip bomb / гүний хамгаалалтыг тойрох хоёр зам хаагдав
+### Security — `/pades`, `/validate`: ObjStm-ийн zip bomb / гүний хамгаалалтыг тойрох замууд хаагдав
 
 - **Юу:** `src/pades/pdf/nesting.ts` (`checkStructure`; `prepare`, `suggestPlacement`, `complete`, `validatePdf` дууддаг) —
   санах ойн DoS: уншигч (`pdf/reader.ts`) ObjStm-ийг хязгааргүй задалдаг тул RP-ийн процесс / хөтчийн tab OOM эсвэл
