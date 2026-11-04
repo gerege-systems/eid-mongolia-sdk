@@ -58,6 +58,21 @@ export function zlibInflate(src: Uint8Array, limit = 64 << 20, initial?: number)
   return inflateRaw(src.subarray(2), limit, undefined, initial);
 }
 
+/**
+ * zlibInflate шиг, гэхдээ deflate-ийн дундах алдаанд (InflateLimitError-оос бусад) тэр хүртэл тайлсан хэсгийг буцаана —
+ * Go `data, _ := io.ReadAll(zlib reader)`. pdf/nesting.ts: уншигч ObjStm-ийг зөвхөн /Length хүртэл задалж таслагдсан
+ * хэсгийг авдаг тул урьдчилсан шалгалт /Length-ийн араах эвдэрсэн байтаас болж ObjStm-ийг алгасахгүй (дор хаяж уншигчийн
+ * авах өгөгдлийг шалгана). Header алдаа — InflateError (уншигч мөн задалж чадахгүй).
+ */
+export function zlibInflatePrefix(src: Uint8Array, limit: number, initial?: number): Uint8Array {
+  if (src.length < 2) throw new InflateError("zlib: header алга");
+  const cmf = src[0]!;
+  const flg = src[1]!;
+  if ((cmf & 0x0f) !== 8 || cmf >> 4 > 7 || ((cmf << 8) | flg) % 31 !== 0) throw new InflateError("zlib: header буруу");
+  if (flg & 0x20) throw new InflateError("zlib: preset dictionary");
+  return inflate(src.subarray(2), limit, undefined, initial, false, true);
+}
+
 /** inflateRaw-ийн нэмэлт гаралт (хатуу zlib — validate/pdfobj.ts): end — deflate-ийн дараах эхний байт, truncated —
  * өгөгдөл дутуу (энэ үед end утгагүй). */
 export interface InflateInfo {
@@ -67,7 +82,7 @@ export interface InflateInfo {
 
 /** Raw deflate (RFC 1951). Төгсгөлийн block хүртэл (дараах байт — adler — үл тоомсорлоно). */
 export function inflateRaw(src: Uint8Array, limit = 64 << 20, info?: InflateInfo, initial?: number): Uint8Array {
-  return inflate(src, limit, info, initial, false);
+  return inflate(src, limit, info, initial, false, false);
 }
 
 /**
@@ -90,7 +105,7 @@ export function zlibInflateStrict(src: Uint8Array, limit: number): Uint8Array {
     start = 6;
   }
   const info: InflateInfo = { end: 0, truncated: false };
-  const out = inflate(src.subarray(start), limit, info, undefined, true);
+  const out = inflate(src.subarray(start), limit, info, undefined, true, false);
   if (info.truncated) throw new InflateError("inflate: өгөгдөл дутуу");
   const at = start + info.end;
   if (at + 4 > src.length) throw new InflateError("zlib: adler32 алга");
@@ -132,7 +147,14 @@ function complete(lengths: ArrayLike<number>, n: number): boolean {
   return sum === 2 ** max || (sum === 1 && max === 1 && count === 1);
 }
 
-function inflate(src: Uint8Array, limit: number, info: InflateInfo | undefined, initial: number | undefined, strict: boolean): Uint8Array {
+function inflate(
+  src: Uint8Array,
+  limit: number,
+  info: InflateInfo | undefined,
+  initial: number | undefined,
+  strict: boolean,
+  prefix: boolean,
+): Uint8Array {
   let pos = 0;
   let bitBuf = 0;
   let bitCnt = 0;
@@ -178,8 +200,9 @@ function inflate(src: Uint8Array, limit: number, info: InflateInfo | undefined, 
   try {
     inflateBlocks();
   } catch (e) {
-    // Таслагдсан stream: Go-ийн stream reader шиг тайлсан хэсгийг буцаана (уншигч өөрөө хэмжээг шалгана).
-    if (!(e instanceof Truncated)) throw e;
+    // Таслагдсан stream: Go-ийн stream reader шиг тайлсан хэсгийг буцаана (уншигч өөрөө хэмжээг шалгана). prefix: бусад
+    // алдаанд ч (хязгаараас бусад) тайлсан хэсгийг.
+    if (!(e instanceof Truncated) && !(prefix && e instanceof InflateError && !(e instanceof InflateLimitError))) throw e;
     if (info) info.truncated = true;
   }
   if (info) info.end = pos;

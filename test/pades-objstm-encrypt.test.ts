@@ -122,7 +122,7 @@ for (const f of encFiles) {
 }
 
 /** Go objStmXrefPDF: xref stream-тэй PDF, obj 3 нь ObjStm 4 дотор (толгойн нэмэлт hdr, түүхий stream өгөгдөл data). */
-function objStmXrefPDF(hdr: string, data: Uint8Array): Uint8Array {
+function objStmXrefPDF(hdr: string, data: Uint8Array, length = data.length): Uint8Array {
   const parts: Buffer[] = [latin1("%PDF-1.7\n")];
   const len = () => parts.reduce((n, b) => n + b.length, 0);
   const offs = new Map<number, number>();
@@ -131,7 +131,7 @@ function objStmXrefPDF(hdr: string, data: Uint8Array): Uint8Array {
   offs.set(2, len());
   parts.push(latin1("2 0 obj\n<< /Type /Pages /Kids [] /Count 0 >>\nendobj\n"));
   offs.set(4, len());
-  parts.push(latin1(`4 0 obj\n<< /Type /ObjStm /N 1 /First 4 ${hdr} /Length ${data.length} >>\nstream\n`), Buffer.from(data), latin1("\nendstream\nendobj\n"));
+  parts.push(latin1(`4 0 obj\n<< /Type /ObjStm /N 1 /First 4 ${hdr} /Length ${length} >>\nstream\n`), Buffer.from(data), latin1("\nendstream\nendobj\n"));
   offs.set(5, len());
   const xr: number[] = [];
   for (let i = 0; i <= 5; i++) {
@@ -164,5 +164,20 @@ for (const [name, hdr, data, bad] of [
     assert.equal(await validateCode(doc), bad ? "PDF_INVALID" : "PDF_NO_SIGNATURE");
     if (bad) assert.equal(await prepareCode(doc), "PDF_INVALID+structure");
     else assert.notEqual(await prepareCode(doc), "PDF_INVALID+structure");
+  });
+}
+
+// TS-ийн нэмэлт (review 2026-11-04): урьдчилсан шалгалт уншигчаас өөрөөр уншдаг байсан хоёр газар.
+// (a) Уншигч ObjStm-ийг /Length хүртэл задалж таслагдсан хэсгийг авдаг; шалгалт файлын үлдсэн хэсгийг задалж /Length-ийн
+//     араах буруу block төрлийн байтад (0x06) алдаа өгөөд ObjStm-ийг бүхэлд нь алгасдаг байв.
+// (b) Бүхэл биш offset-ийг уншигч 0 гэж уншдаг (`3 x` → /First дээрх объект), шалгалт алгасдаг байв.
+const syncFlushed = deflateSync(deep, { finishFlush: constants.Z_SYNC_FLUSH }); // final block / adler-гүй
+for (const [name, doc] of [
+  ["/Length-ийн араас буруу deflate block (0x06)", objStmXrefPDF("/Filter /FlateDecode", Buffer.concat([syncFlushed, Buffer.from([0x06])]), syncFlushed.length)],
+  ["бүхэл биш offset (`3 x`)", objStmXrefPDF("", Buffer.concat([latin1("3 x "), Buffer.alloc(MAX_NESTING + 10, 0x5b)]))],
+] as const) {
+  test(`ObjStm урьдчилсан шалгалт ↔ уншигч: ${name} → PDF_INVALID (бүтэц)`, async () => {
+    assert.equal(await validateCode(doc), "PDF_INVALID");
+    assert.equal(await prepareCode(doc), "PDF_INVALID+structure");
   });
 }

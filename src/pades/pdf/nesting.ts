@@ -7,7 +7,7 @@
 // Go-той ижил дүрэм (golden validate/v4 deep-nesting*) — нэг баримтад бүх SDK ижил хариу өгнө.
 
 import { fromLatin1 } from "../bytes.js";
-import { InflateLimitError, zlibInflate } from "./inflate.js";
+import { InflateLimitError, zlibInflatePrefix } from "./inflate.js";
 import { PRef, PStream, Reader, type ObjPtr, type PObj } from "./reader.js";
 
 /** PDF объектын массив/толийн давхарлалтын дээд гүн (Go validate.MaxNesting). */
@@ -307,7 +307,8 @@ class Scan {
     if (info.parms) throw new StructureError(); // predictor-тэй ObjStm-ийг давтахгүй — fail-closed
     let data: Uint8Array;
     try {
-      data = zlibInflate(b.subarray(p), this.inflateLeft, 64 << 10);
+      // Файлын үлдсэн хэсгийг (уншигч /Length хүртэл) — /Length-ийн араах эвдэрсэн байтын алдаанд тайлсан хэсгийг шалгана.
+      data = zlibInflatePrefix(b.subarray(p), this.inflateLeft, 64 << 10);
     } catch (e) {
       if (e instanceof InflateLimitError) throw new StructureError();
       return; // reader мөн задалж чадахгүй
@@ -321,12 +322,13 @@ class Scan {
     const l = new Lex(data, 0);
     for (let i = 0; i < info.nCount; i++) {
       if (l.next() === Tok.EOF) break;
-      if (l.next() !== Tok.Word) continue;
-      if (!isInt(l.val)) continue;
-      const off = parseInt64(l.val);
-      if (info.first < 0 || off < 0 || info.first + off >= data.length) continue;
+      const t = l.next();
+      if (t === Tok.EOF) break;
+      // reader: бүхэл биш offset → 0, сөрөг /First ч first+off ≥ 0 бол уншина — ижил байрлалыг шалгана.
+      const at = info.first + (t === Tok.Word ? parseInt64(l.val) : 0);
+      if (at < 0 || at >= data.length) continue;
       if (this.budget < 0) throw new StructureError();
-      this.object(data, info.first + off, false);
+      this.object(data, at, false);
     }
     if (this.budget < 0) throw new StructureError();
   }
