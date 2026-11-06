@@ -1068,12 +1068,15 @@ OK ирж болзошгүй. Иймд `ResponseValidator`:
    clientAuth, sign → emailProtection — CA-ийн профайл; CA-д EKU байвал түүнд багтах), үл таних **critical
    extension** → татгалзана. **Name constraints**-тэй CA гинжинд байвал fail-closed (CA-ийн бодит гинжинд алга).
    Хариунд гинж ирдэггүй — `intermediatesPem` өгөөгүй бол SDK-д суусан 02, 03, 04 (`CITIZEN_INTERMEDIATES_PEM`,
-   0.19.0-аас). certificatePolicies-ийг шалгахгүй.
+   0.19.0-аас). Гинжинд certificatePolicies-ийг шалгахгүй (түвшинд — 3).
 3. Гэрчилгээ хүчинтэй хугацаанд + шаардсан `certificateLevel` (default `QUALIFIED`). **0.19.0-аас түвшинг
    гэрчилгээнээс тогтооно** (`certificateLevelOf`): гарын үсгийн гэрчилгээнд qcStatements QcCompliance → QUALIFIED
-   (+ QcSSCD → QSCD), qcStatements-гүй (USB токен) → ADVANCED; нэвтрэлтийн гэрчилгээнд CA qcStatements бичдэггүй тул
-   профайлаар — KeyUsage keyEncipherment (утасны P-CITIZEN-AUTH) → QUALIFIED, үгүй (токены) → ADVANCED. Хариуны
-   `certificateLevel` түүнээс өндөр бол татгалзана; бага бол хариуныхыг авна. Буцаах `certificateLevel` = энэ утга.
+   (+ QcSSCD → QSCD; утас ба 2026-11-06-аас хойш олгосон USB токен QUALIFIED), qcStatements-гүй (түүнээс өмнө олгосон
+   токен) → ADVANCED; нэвтрэлтийн гэрчилгээнд CA qcStatements бичдэггүй тул профайлаар → QUALIFIED: KeyUsage
+   keyEncipherment (утасны P-CITIZEN-AUTH), эсвэл EKU clientAuth + emailProtection ба үндэсний policy
+   `2.16.496.1.101.1.2.8` (токены P-CITIZEN-AUTH-TOKEN, 0.40.3-аас); бусад → ADVANCED. Хариуны `certificateLevel`
+   түүнээс өндөр бол татгалзана; бага бол хариуныхыг авна (хуучин токены AUTH-ийг CA ADVANCED гэж зарлана). Буцаах
+   `certificateLevel` = энэ утга.
 4. Гарын үсгийг иргэний public key-ээр шалгана:
    - **auth** → ACSP_V2 payload (`smart-id|ACSP_V2|serverRandom|rpChallenge|userChallenge|B64(rpName)|B64(brokeredRpName)|B64(SHA-256(interactions))|interactionTypeUsed|initialCallbackUrl|flowType`, hash = хүсэлтийн `hashAlgorithm`) дээр — `flowType`, `userChallenge`, `serverRandom` ба алгоритмын downgrade-ийг мөн шалгана;
      `expectedFlowType` өгвөл `flowType` эхлүүлсэн урсгалтай ЯГ таарах, Web2App/App2App-д `userChallengeVerifier` заавал
