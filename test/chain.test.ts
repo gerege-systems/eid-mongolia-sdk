@@ -159,7 +159,7 @@ test("issuer allowlist — анхдагч CITIZEN_ISSUING_CA_SKI (anchor-тай 
   validator().validateAuth(a.result, a.acsp);
 });
 
-test("certificateLevel — гэрчилгээнээс: SIGN qcStatements → QUALIFIED, qc-гүй → ADVANCED; AUTH KE → QUALIFIED, токен → ADVANCED", () => {
+test("certificateLevel — гэрчилгээнээс: SIGN qcStatements → QUALIFIED, qc-гүй → ADVANCED; AUTH KE / токен → QUALIFIED", () => {
   const v = validator();
   const adv = validator(ROOT, CHAIN, { requiredLevel: "ADVANCED" });
   // Утасны SIGN (qcStatements QcCompliance)
@@ -185,16 +185,25 @@ test("certificateLevel — гэрчилгээнээс: SIGN qcStatements → QUA
   const qscd = issue("lvQscd", ISSUING, [...SIGN_EXT.filter((e) => !e.startsWith("1.3.6.1.5.5.7.1.3")),
     "1.3.6.1.5.5.7.1.3=DER:30:14:30:08:06:06:04:00:8e:46:01:01:30:08:06:06:04:00:8e:46:01:04"], { subj: CITIZEN });
   assert.equal(certificateLevelOf(qscd.cert, "RAW_DIGEST_SIGNATURE"), "QSCD");
-  // Утасны AUTH (KU keyEncipherment, P-CITIZEN-AUTH) → QUALIFIED; токены AUTH (KU DS, P-CITIZEN-AUTH-TOKEN) → ADVANCED.
+  // Утасны AUTH (KU keyEncipherment, P-CITIZEN-AUTH) → QUALIFIED; токены AUTH (P-CITIZEN-AUTH-TOKEN: KU DS, EKU
+  // clientAuth + emailProtection, үндэсний policy, EC P-256) → QUALIFIED (CA 2026-11-06).
   const auth = issue("lvAuth", ISSUING, AUTH_EXT, { subj: CITIZEN });
   assert.equal(certificateLevelOf(auth.cert, "ACSP_V2"), "QUALIFIED");
-  const tokAuth = issue("lvTokAuth", ISSUING, [...LEAF_COMMON, "keyUsage=critical,digitalSignature", "extendedKeyUsage=clientAuth,emailProtection"],
-    { subj: CITIZEN, key: "ec" });
-  assert.equal(certificateLevelOf(tokAuth.cert, "ACSP_V2"), "ADVANCED");
+  const tokAuthExt = (eku: string, policy = true) => [...LEAF_COMMON.filter((e) => policy || e !== POLICY),
+    "keyUsage=critical,digitalSignature", `extendedKeyUsage=${eku}`];
+  const tokAuth = issue("lvTokAuth", ISSUING, tokAuthExt("clientAuth,emailProtection"), { subj: CITIZEN, key: "ec" });
+  assert.equal(certificateLevelOf(tokAuth.cert, "ACSP_V2"), "QUALIFIED");
+  assert.equal(certificateLevelOf(tokAuth.cert, "RAW_DIGEST_SIGNATURE"), "ADVANCED");
   const ta = authOf(tokAuth);
-  rejects(() => v.validateAuth(ta.result, ta.acsp), /өндөр/);
+  assert.equal(v.validateAuth(ta.result, ta.acsp).certificateLevel, "QUALIFIED");
+  // 2026-11-06-аас өмнө олгосон токен — CA ADVANCED гэж зарлана → хариуных (бага нь).
   const ta2 = authOf(tokAuth, "ADVANCED");
   assert.equal(adv.validateAuth(ta2.result, ta2.acsp).certificateLevel, "ADVANCED");
+  // Үндэсний policy-гүй, эсвэл EKU emailProtection-гүй (KE-гүй) нэвтрэлтийн гэрчилгээ → ADVANCED.
+  const noPolicy = issue("lvTokNoPol", ISSUING, tokAuthExt("clientAuth,emailProtection", false), { subj: CITIZEN, key: "ec" });
+  assert.equal(certificateLevelOf(noPolicy.cert, "ACSP_V2"), "ADVANCED");
+  const noEmail = issue("lvTokNoEmail", ISSUING, tokAuthExt("clientAuth"), { subj: CITIZEN, key: "ec" });
+  assert.equal(certificateLevelOf(noEmail.cert, "ACSP_V2"), "ADVANCED");
 });
 
 test("гинж — татгалзах: pathLen, завсрын EKU, CA:false, keyCertSign-гүй, хугацаа дууссан, буруу root, MDDC дутуу", () => {

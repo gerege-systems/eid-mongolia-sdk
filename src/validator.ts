@@ -429,7 +429,7 @@ export class ResponseValidator {
 
   /**
    * Токены нэвтрэлтийн гэрчилгээ ({@link TokenApi.authVerify}) — хугацаа, зориулалт (auth), гинж, issuer. Түвшинг
-   * шалгахгүй (USB токен ADVANCED).
+   * шалгахгүй (2026-11-06-аас өмнө олгосон токен CA-д ADVANCED).
    * @internal
    */
   verifyTokenAuthCertificate(leaf: X509Certificate): void {
@@ -777,12 +777,16 @@ const LEVEL_RANK: Record<string, number> = { ADVANCED: 1, QUALIFIED: 2, QSCD: 3 
 const OID_QC_STATEMENTS = "1.3.6.1.5.5.7.1.3";
 const OID_QC_COMPLIANCE = "0.4.0.1862.1.1";
 const OID_QC_SSCD = "0.4.0.1862.1.4";
+/** Монголын үндэсний PKI-ийн certificate policy (CA `crypto/ca_policy.go` NationalPolicyOID). */
+const OID_POLICY_NATIONAL = "2.16.496.1.101.1.2.8";
 
 /**
  * Гэрчилгээнээс тогтоох түвшин (CA `crypto/ca_profile.go`): qcStatements-д QcCompliance → QUALIFIED (+ QcSSCD →
- * QSCD); qcStatements алга бол — гарын үсгийн гэрчилгээ ADVANCED (USB токен), нэвтрэлтийн гэрчилгээ (CA AUTH-д
- * qcStatements бичдэггүй) KeyUsage-аар: keyEncipherment-тэй (утасны P-CITIZEN-AUTH) → QUALIFIED, үгүй (токены
- * P-CITIZEN-AUTH-TOKEN) → ADVANCED. `protocol` — "ACSP_V2" (auth) эсвэл "RAW_DIGEST_SIGNATURE" (sign).
+ * QSCD); qcStatements алга бол — гарын үсгийн гэрчилгээ ADVANCED (2026-11-06-аас өмнө олгосон USB токен), нэвтрэлтийн
+ * гэрчилгээ (CA AUTH-д qcStatements бичдэггүй) профайлаар → QUALIFIED: KeyUsage keyEncipherment (утасны
+ * P-CITIZEN-AUTH), эсвэл EKU clientAuth + emailProtection ба үндэсний policy 2.16.496.1.101.1.2.8 (токены
+ * P-CITIZEN-AUTH-TOKEN, EC — keyEncipherment үгүй); бусад → ADVANCED. Хариуны түвшин үүнээс бага бол хариуных хүчинтэй.
+ * `protocol` — "ACSP_V2" (auth) эсвэл "RAW_DIGEST_SIGNATURE" (sign). Go SDK-ийн `eid.CertificateLevelOf`-тэй ижил.
  */
 export function certificateLevelOf(cert: X509Certificate, protocol: string): CertificateLevel {
   const qc = qcStatementIds(cert);
@@ -790,8 +794,28 @@ export function certificateLevelOf(cert: X509Certificate, protocol: string): Cer
     if (!qc.includes(OID_QC_COMPLIANCE)) return "ADVANCED";
     return qc.includes(OID_QC_SSCD) ? "QSCD" : "QUALIFIED";
   }
-  if (protocol === "ACSP_V2" && keyUsageBits(cert) & 0x20) return "QUALIFIED";
+  if (protocol === "ACSP_V2" && (keyUsageBits(cert) & 0x20 || isCitizenAuthToken(cert))) return "QUALIFIED";
   return "ADVANCED";
+}
+
+/** P-CITIZEN-AUTH-TOKEN-ийн профайл: EKU clientAuth + emailProtection (иргэний AUTH-ийн хос) ба certificatePolicies-д үндэсний OID. */
+function isCitizenAuthToken(cert: X509Certificate): boolean {
+  const eku = extKeyUsage(cert);
+  return eku.includes(EKU_CLIENT_AUTH) && eku.includes(EKU_EMAIL_PROTECTION) && certPolicyIds(cert).includes(OID_POLICY_NATIONAL);
+}
+
+/** certificatePolicies (2.5.29.32)-ийн policyIdentifier-ууд; алга бол []. */
+function certPolicyIds(cert: X509Certificate): string[] {
+  const v = certExtension(cert.raw, "2.5.29.32");
+  if (!v) return [];
+  const seq = tlv(v, 0, v.length);
+  const out: string[] = [];
+  for (let p = seq.start; p < seq.end; ) {
+    const pi = tlv(v, p, seq.end);
+    out.push(oidOf(v, tlv(v, pi.start, pi.end)));
+    p = pi.end;
+  }
+  return out;
 }
 
 /**
