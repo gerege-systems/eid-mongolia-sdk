@@ -3,7 +3,7 @@
 // (acsp.go), утас, RP SDK гурвуулаа '|'-ээр холбосон нэг мөрийг угсарна — нэг байт зөрвөл
 // гарын үсэг таарахгүй.
 
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import type { FlowType, HashAlgorithm, Interaction } from "./types.js";
 
 /** SHA-256 digest, base64. Текст эсвэл байтаас. Sign flow-ийн baримтын digest үүсгэхэд. */
@@ -72,4 +72,25 @@ export function buildAcspV2Payload(p: AcspV2Params): Buffer {
 /** HASH_{hashAlgorithm}(payload). */
 export function acspV2Digest(p: AcspV2Params, hashAlgorithm: HashAlgorithm | string): Buffer {
   return createHash(nodeHash(hashAlgorithm)).update(buildAcspV2Payload(p)).digest();
+}
+
+/**
+ * Linked signing буцах URL-ийн `sessionSecretDigest` = BASE64URL-NOPAD(SHA-256(base64-decode(sessionSecret))).
+ * `sessionSecret` — certificate-choice device-link session-ий нууц (стандарт base64). Smart-ID RP-API v3
+ * `CallbackUrlUtil`-тай ижил.
+ */
+export function sessionSecretDigest(sessionSecret: string): string {
+  return createHash("sha256").update(Buffer.from(sessionSecret, "base64")).digest("base64url");
+}
+
+/**
+ * Callback-ийн `sessionSecretDigest`-ийг certificate-choice session-ий `sessionSecret`-тэй тулгана (timing-safe).
+ * Буруу хэлбэр / хоосон оролтод `false` (throw хийхгүй).
+ */
+export function verifySessionSecretDigest(digest: string, sessionSecret: string): boolean {
+  if (typeof digest !== "string" || typeof sessionSecret !== "string" || !digest || !sessionSecret) return false;
+  if (!/^[A-Za-z0-9_-]+$/.test(digest)) return false;
+  const got = Buffer.from(digest, "utf8");
+  const want = Buffer.from(sessionSecretDigest(sessionSecret), "utf8");
+  return got.length === want.length && timingSafeEqual(got, want);
 }

@@ -125,6 +125,8 @@ export {
   buildAcspV2Payload,
   acspV2Digest,
   interactionsToBase64,
+  sessionSecretDigest,
+  verifySessionSecretDigest,
   type AcspV2Params,
 } from "./crypto.js";
 export { isMobileUserAgent, type NavigatorLike } from "./devicelink.js";

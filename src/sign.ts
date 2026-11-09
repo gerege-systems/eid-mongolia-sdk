@@ -320,6 +320,13 @@ function dtbsBase64(v: Uint8Array | string): string {
 /** Certificate-choice session-ий тохиргоо. */
 export interface CertChoiceOptions {
   certificateLevel?: CertificateLevel;
+  /**
+   * Linked signing буцах URL (`initialCallbackUrl`) — зөвхөн {@link SignApi.certificateChoiceDeviceLink}. Өгвөл
+   * Web2App/App2App холбоос үүснэ; утас linked SIGN дууссаны дараа энэ URL-ийг `sessionSecretDigest` + `sessionId`
+   * query-тэй нээнэ ({@link verifySessionSecretDigest}). CA-д RP-ийн callback_hosts жагсаалтаар шалгагдана;
+   * жагсаалтад байхгүй бол CA хаяж, session зөвхөн QR болно. Notification (etsi)-д илгээгдэхгүй.
+   */
+  callbackUrl?: string;
 }
 
 /**
@@ -396,7 +403,7 @@ export class SignApi {
   private async deviceLink(
     path: string,
     body: Record<string, unknown>,
-    extra: Pick<DeviceLinkSession, "sessionType" | "sign" | "relyingPartyName">,
+    extra: Pick<DeviceLinkSession, "sessionType" | "sign" | "relyingPartyName" | "initialCallbackUrl">,
   ): Promise<DeviceLinkSession> {
     const sent = Date.now();
     const r = rec(await this.http.post(path, body));
@@ -553,7 +560,7 @@ export class SignApi {
   // ── Certificate-choice ──
 
   private certChoiceBody(opts?: CertChoiceOptions): Record<string, unknown> {
-    // CA dto.CertificateChoiceRequest — interactions/initialCallbackUrl БАЙХГҮЙ (үл мэдэгдэх талбар → 400).
+    // CA dto.CertificateChoiceRequest (notification) — interactions/initialCallbackUrl БАЙХГҮЙ (үл мэдэгдэх талбар → 400).
     return {
       relyingPartyUUID: this.creds.rpUUID,
       relyingPartyName: this.creds.rpName,
@@ -570,13 +577,18 @@ export class SignApi {
   }
 
   /**
-   * QR: иргэн хэн болохыг урьдчилж мэдэхгүй үед гэрчилгээ сонгуулах. CA-ийн certificate-choice хүсэлт
-   * initialCallbackUrl авдаггүй тул ЗӨВХӨН QR холбоос (`deviceLinkInput(s, "QR", lang)`). CERT эрх.
+   * Device link: иргэн хэн болохыг урьдчилж мэдэхгүй үед гэрчилгээ сонгуулах. `opts.callbackUrl` өгөөгүй бол
+   * ЗӨВХӨН QR (`deviceLinkInput(s, "QR", lang)`); өгвөл (CA-ийн callback_hosts-д байх https URL) Web2App/App2App
+   * холбоос мөн угсарна, linked sign дууссаны дараа утас callback-ийг нээнэ. CERT эрх.
    */
   async certificateChoiceDeviceLink(opts?: CertChoiceOptions): Promise<DeviceLinkSession> {
-    return this.deviceLink(routePath(RP_ROUTES.certChoiceDeviceLink), this.certChoiceBody(opts), {
+    const body = this.certChoiceBody(opts);
+    const callback = opts?.callbackUrl?.trim();
+    if (callback) body.initialCallbackUrl = callback;
+    return this.deviceLink(routePath(RP_ROUTES.certChoiceDeviceLink), body, {
       sessionType: "cert",
       relyingPartyName: this.creds.rpName,
+      ...(callback ? { initialCallbackUrl: callback } : {}),
     });
   }
 
