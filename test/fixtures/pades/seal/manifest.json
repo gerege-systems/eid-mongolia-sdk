@@ -1,0 +1,19 @@
+{
+  "cmsSha256": "94e2699984f30c84b9831986f351866c7c0e529e1acc6f4ef266e4eb093e21f8",
+  "dtbs": "a1afd98d751ec357d84ebbe24ff448564e929efff9993399b869f4fee386d137",
+  "http": {
+    "GET http://crl.pki.test/02.crl e3b0c44298fc1c14": "http/02.der",
+    "GET http://crl.pki.test/03.crl e3b0c44298fc1c14": "http/01.der",
+    "GET http://crl.pki.test/04.crl e3b0c44298fc1c14": "http/07.der",
+    "GET http://crl.pki.test/root.crl e3b0c44298fc1c14": "http/03.der",
+    "POST http://ocsp.pki.test/03 368c2ac3ced09cd6": "http/08.der",
+    "POST http://ocsp.pki.test/04 5167f83c7d8126d9": "http/04.der",
+    "POST http://ocsp.pki.test/04 8c3736800cc86ff0": "http/06.der",
+    "POST http://tsa.pki.test/ e745b8bc436d48fe": "http/05.der"
+  },
+  "now": "2026-10-14T12:00:30+08:00",
+  "outSha256": "b4aaafec2f4536c91b9f3d0a7b46584c97d6512fb46595bcc5e63b78c0b7de22",
+  "reason": "Байгууллагын тамга",
+  "signature": "MEQCIEjAMPt9n6iXZyhtbJz0w7WOkcdWY5AI8qc3kLK/ATo0AiBujKp+HQcak71xegdyf08nHePXBbq/kFTzvCNVacY8XQ==",
+  "signingTime": "2026-10-14T12:00:00+08:00"
+}

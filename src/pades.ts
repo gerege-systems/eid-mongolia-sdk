@@ -765,3 +765,69 @@ export async function complete(state: Uint8Array | ArrayBuffer, signature: Uint8
     claimedRole: st.claimedRole,
   };
 }
+
+/** Байгууллагын тамганы RP-API — `EidClient.seal` (`SealApi`) хангана; тестэд орлуулж болно. */
+export interface PadesSealer {
+  getCertificate(orgEtsi: string): Promise<{ certificate: Uint8Array }>;
+  seal(orgEtsi: string, digest: Uint8Array, hashAlgorithm: "SHA-256"): Promise<{ signature: Uint8Array; certificate: Uint8Array }>;
+}
+
+/**
+ * {@link sealPdf}-ийн тохиргоо. Тамга үл харагдах, баталгаажуулалтын (QR) хуудасгүй: verify хуудас нь CA-ийн бүртгэл
+ * (`/verify/{docId}`) рүү заадаг ч тамга иргэний гарын үсгийн бүртгэлд (`POST /pdf/signatures`) ордоггүй.
+ */
+export interface PadesSealOptions {
+  /** `/Reason` (≤ 127 UTF-16 нэгж). */
+  reason?: string;
+  /** `/Name`; хоосон бол гэрчилгээний CN (байгууллагын нэр). */
+  signerName?: string;
+  /** `/M`. Анхдагч — одоо. */
+  signingTime?: Date;
+  /** Олгогч гинж DER (05, 03, 02). Анхдагч — шигтгэсэн eID гинжээс. */
+  chain?: Uint8Array[];
+  /** TSA/OCSP/CRL ({@link complete}-тэй ижил). RFC 3161 timestamp ЗААВАЛ — TSA унавал `TSA_UNAVAILABLE`. */
+  complete?: PadesCompleteOptions;
+}
+
+/** e-Seal профайл: KeyUsage-д nonRepudiation, digitalSignature үгүй, EKU үгүй, CA биш (шалгагчийн `usage: "seal"`). */
+function isSealCert(c: Certificate): boolean {
+  return !c.isCA && (c.keyUsage & 2) !== 0 && (c.keyUsage & 1) === 0 && c.extKeyUsage.length === 0;
+}
+
+/**
+ * PDF-ийг байгууллагын цахим тамгаар (e-Seal) тамгална: тамганы гэрчилгээ (`GET /seal/certificate/{orgEtsi}`) →
+ * {@link prepare} → 32 байт DTBS-ийг `POST /seal/{orgEtsi}`-ээр (SHA-256) тамгалуулна → {@link complete} (TSA + OCSP/CRL +
+ * DSS) → PAdES-BASELINE-LT. PDF eID руу очихгүй. Шалгагчид (CA `/v3/validate/pdf`, `validatePdf`) энэ гарын үсгийг
+ * `usage: "seal"` (байгууллагын тамга) гэж ангилна. Go `pades.SealPDF`-тэй ижил.
+ *
+ * `sealer` нь RP backend-ийн `EidClient.seal` (RP secret) — хөтөчөөс шууд дуудахгүй.
+ *
+ * @throws {PadesError} SIGNER_INVALID (гэрчилгээ e-Seal биш, эсвэл тамгалах хооронд гэрчилгээ солигдсон — дахин оролд),
+ *   prepare/complete-ийн бусад код (SIGNATURE_INVALID, TSA_UNAVAILABLE, LTV_UNAVAILABLE …). RP-API-ийн алдаа
+ *   (ForbiddenError — SEAL эрхгүй; ApiError 429 — `retryable`) хэвээр шидэгдэнэ.
+ */
+export async function sealPdf(sealer: PadesSealer, orgEtsi: string, pdf: Uint8Array | ArrayBuffer, opts: PadesSealOptions = {}): Promise<PadesCompleted> {
+  if (!sealer || typeof sealer.getCertificate !== "function" || typeof sealer.seal !== "function") {
+    throw new PadesError("REQUEST_INVALID", "sealer (EidClient.seal) заавал");
+  }
+  const sc = await sealer.getCertificate(orgEtsi);
+  let cert: Certificate;
+  try {
+    cert = parseCertificate(u8(sc.certificate, "certificate"));
+  } catch (e) {
+    throw new PadesError("SIGNER_INVALID", "тамганы гэрчилгээ задарсангүй", { cause: e });
+  }
+  if (!isSealCert(cert)) throw new PadesError("SIGNER_INVALID", "гэрчилгээ e-Seal биш (KeyUsage = зөвхөн nonRepudiation байх ёстой)");
+  const p = await prepare(pdf, {
+    signerCert: cert.raw,
+    chain: opts.chain,
+    signerName: opts.signerName,
+    reason: opts.reason,
+    signingTime: opts.signingTime,
+  });
+  const r = await sealer.seal(orgEtsi, p.dtbs, "SHA-256");
+  if (!eq(u8(r.certificate, "certificate"), cert.raw)) {
+    throw new PadesError("SIGNER_INVALID", "тамгалах хооронд байгууллагын тамганы гэрчилгээ солигдсон — дахин оролдоно уу");
+  }
+  return complete(p.state, r.signature, opts.complete);
+}

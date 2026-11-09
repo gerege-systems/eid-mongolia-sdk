@@ -3,6 +3,7 @@
 //   client.sign      — гарын үсэг эхлүүлэх (digest; push / device link), гэрчилгээ сонгуулах (certificate-choice) ба
 //                      клиент талын PAdES-ийн DTBS (sign.pdfDigest / signPdfDigest, registerSignature)
 //   client.organization — иргэний төлөөлөх байгууллагууд
+//   client.seal      — байгууллагын цахим тамга (SEAL:<orgEtsi>): тамганы гэрчилгээ, digest тамгалах (pades `sealPdf`)
 //   client.person    — иргэний PKI самбар (PKI_READ): гэрчилгээ, төхөөрөмж, үйл ажиллагаа, тоо, хүүхдүүд
 //   client.qr        — «Миний QR» (биечлэн шалгах): иргэний QR → «Миний мэдээлэл» (иргэний PIN2 PS256 JWS, x5c)
 //   client.token     — USB токены гэрчилгээ олголт (TOKEN_ISSUE) ба токеноор нэвтрэлт (AUTH)
@@ -32,6 +33,7 @@ import {
 } from "./sign.js";
 import { SessionApi } from "./session.js";
 import { OrganizationApi } from "./organization.js";
+import { SealApi } from "./seal.js";
 import { PersonApi } from "./person.js";
 import { TokenApi } from "./token.js";
 import { QrApi, type QrConfig } from "./myqr.js";
@@ -114,6 +116,8 @@ export class EidClient {
   readonly auth: AuthApi;
   readonly sign: SignApi;
   readonly organization: OrganizationApi;
+  /** Байгууллагын цахим тамга (e-Seal) — `SEAL:<orgEtsi>` эрх. */
+  readonly seal: SealApi;
   readonly person: PersonApi;
   readonly token: TokenApi;
   /** «Миний QR» (биечлэн шалгах): parse → start → result / check. */
@@ -141,6 +145,7 @@ export class EidClient {
     this.auth = new AuthApi(http, cfg.credentials, { certificateLevel: level });
     this.sign = new SignApi(http, cfg.credentials, { certificateLevel: level, sessionTtlMs: cfg.signSessionTtlMs, pdfTimeoutMs: cfg.pdfTimeoutMs });
     this.organization = new OrganizationApi(http);
+    this.seal = new SealApi(http);
     this.person = new PersonApi(http);
     this.validator = new ResponseValidator(cfg.trust ?? {});
     this.token = new TokenApi(http, cfg.credentials, this.validator);
