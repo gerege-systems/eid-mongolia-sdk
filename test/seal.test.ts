@@ -6,7 +6,17 @@ import assert from "node:assert/strict";
 import { createHash, X509Certificate } from "node:crypto";
 import { readFileSync } from "node:fs";
 
-import { ApiError, EidClient, ForbiddenError, SEAL_REQUEST_FIELDS, ValidationError, isSealCertificate } from "../dist/index.js";
+import {
+  ApiError,
+  EidClient,
+  ForbiddenError,
+  SEAL_REQUEST_FIELDS,
+  SealApproverUnavailableError,
+  SealCertificateRequestError,
+  SealRequestNotFoundError,
+  ValidationError,
+  isSealCertificate,
+} from "../dist/index.js";
 import * as pades from "../dist/pades.js";
 
 const S = new URL("./fixtures/pades/seal/", import.meta.url);
@@ -112,6 +122,130 @@ test("seal.getCertificate — GET /seal/certificate/{orgEtsi} (dto.SealCertifica
   assert.equal(c.serialNumber, "88001");
   assert.equal(c.notAfter, "2029-11-01T00:00:00Z");
   assert.equal(c.certificateLevel, "QUALIFIED");
+});
+
+// ── Тамганы гэрчилгээний олголт (CA !483): POST → 202 PENDING, GET …/requests/{id} → ISSUED/REJECTED/EXPIRED/FAILED ──
+
+const ORG = "NTRMN-6235972";
+const RID = "5f0c2b1e-7a40-4c11-9a51-2f6e0d3c9b11";
+/** CA dto.SealCertificateRequestResponse (бичлэг). */
+const sealReq = (status: string, extra: Record<string, unknown> = {}) => ({
+  requestId: RID, orgEtsi: ORG, status, createdAt: "2026-11-09T05:00:00Z", expiresAt: "2026-11-09T05:07:00Z", ...extra,
+});
+const sealCertBody = () => ({
+  orgEtsi: ORG, certificate: b64(SEAL), serialNumber: "88002", subjectDn: "CN=Gerege Systems LLC",
+  issuerDn: "CN=eID Mongolia Organization Issuing CA", notBefore: "2026-11-09T05:01:00Z", notAfter: "2029-11-09T05:01:00Z",
+  certificateLevel: "QUALIFIED",
+});
+const DECIDED = { decidedAt: "2026-11-09T05:01:00Z" };
+/** Дарааллаар хариулах fake (сүүлийнхийг давтана). */
+const seq = (rs: { status?: number; body: unknown; headers?: Record<string, string> }[]) => {
+  let i = 0;
+  return () => rs[Math.min(i++, rs.length - 1)]!;
+};
+
+test("seal.requestCertificate — POST /seal/certificate/{orgEtsi} → 202 PENDING", async () => {
+  const { eid, calls } = client(() => ({ status: 202, body: sealReq("PENDING", { approvers: 2 }) }));
+  const r = await eid.seal.requestCertificate(ORG);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0]!.method, "POST");
+  assert.equal(calls[0]!.url, "https://rp.eidmongolia.mn/seal/certificate/NTRMN-6235972");
+  assert.equal(calls[0]!.auth, "Bearer rp_sk_x");
+  assert.equal(r.requestId, RID);
+  assert.equal(r.status, "PENDING");
+  assert.equal(r.approvers, 2);
+  assert.equal(r.expiresAt, "2026-11-09T05:07:00Z");
+  assert.equal(r.certificate, undefined);
+});
+
+test("seal.getCertificateRequest — GET …/requests/{id}; ISSUED үед certificate", async () => {
+  const { eid, calls } = client(() => ({ body: sealReq("ISSUED", { ...DECIDED, certificate: sealCertBody() }) }));
+  const r = await eid.seal.getCertificateRequest(ORG, RID);
+  assert.equal(calls[0]!.method, "GET");
+  assert.equal(calls[0]!.url, `https://rp.eidmongolia.mn/seal/certificate/NTRMN-6235972/requests/${RID}`);
+  assert.equal(r.status, "ISSUED");
+  assert.equal(r.decidedAt, "2026-11-09T05:01:00Z");
+  assert.deepEqual(r.certificate?.certificate, SEAL);
+  assert.equal(r.certificate?.serialNumber, "88002");
+  // ISSUED боловч certificate-гүй / requestId-гүй хариу → ValidationError.
+  await assert.rejects(client(() => ({ body: sealReq("ISSUED") })).eid.seal.getCertificateRequest(ORG, RID), ValidationError);
+  await assert.rejects(client(() => ({ body: { status: "PENDING" } })).eid.seal.getCertificateRequest(ORG, RID), ValidationError);
+});
+
+test("seal.waitForCertificate — PENDING → APPROVED → ISSUED", async () => {
+  const { eid, calls } = client(
+    seq([{ body: sealReq("PENDING") }, { body: sealReq("APPROVED", DECIDED) }, { body: sealReq("ISSUED", { ...DECIDED, certificate: sealCertBody() }) }]),
+  );
+  const c = await eid.seal.waitForCertificate(ORG, RID, { intervalMs: 1 });
+  assert.equal(calls.length, 3);
+  assert.deepEqual(c.certificate, SEAL);
+  assert.equal(c.notAfter, "2029-11-09T05:01:00Z");
+});
+
+test("seal.waitForCertificate — REJECTED / EXPIRED / FAILED → SealCertificateRequestError", async () => {
+  const cases: [string, Record<string, unknown>, string | undefined][] = [
+    ["REJECTED", DECIDED, undefined],
+    ["EXPIRED", { failure: "EXPIRED" }, "EXPIRED"],
+    ["FAILED", { ...DECIDED, failure: "SEAL_ISSUANCE_FAILED" }, "SEAL_ISSUANCE_FAILED"],
+  ];
+  for (const [status, extra, failure] of cases) {
+    const { eid, calls } = client(seq([{ body: sealReq("PENDING") }, { body: sealReq(status, extra) }]));
+    await assert.rejects(
+      eid.seal.waitForCertificate(ORG, RID, { intervalMs: 1 }),
+      (e: unknown) => e instanceof SealCertificateRequestError && e.outcome === status && e.requestId === RID && e.failure === failure,
+    );
+    assert.equal(calls.length, 2, status);
+  }
+});
+
+test("seal.waitForCertificate — timeoutMs дуусвал TIMEOUT; signal тасалбал reason", async () => {
+  const { eid } = client(() => ({ body: sealReq("PENDING") }));
+  await assert.rejects(
+    eid.seal.waitForCertificate(ORG, RID, { intervalMs: 5, timeoutMs: 30 }),
+    (e: unknown) => e instanceof SealCertificateRequestError && e.outcome === "TIMEOUT" && e.failure === undefined,
+  );
+  const ac = new AbortController();
+  const p = eid.seal.waitForCertificate(ORG, RID, { intervalMs: 10_000, signal: ac.signal });
+  setTimeout(() => ac.abort(new Error("цуцалсан")), 20);
+  await assert.rejects(p, /цуцалсан/);
+});
+
+test("seal.waitForCertificate — 429 Retry-After-ийг дагана, бусад алдаа шууд", async () => {
+  const { eid, calls } = client(
+    seq([
+      { status: 429, body: { error: "хэт олон", code: "RATE_LIMITED" }, headers: { "Retry-After": "1" } },
+      { body: sealReq("ISSUED", { ...DECIDED, certificate: sealCertBody() }) },
+    ]),
+  );
+  const t0 = Date.now();
+  const c = await eid.seal.waitForCertificate(ORG, RID, { intervalMs: 1 });
+  assert.ok(Date.now() - t0 >= 950, "Retry-After 1 с хүлээсэн");
+  assert.equal(calls.length, 2);
+  assert.deepEqual(c.certificate, SEAL);
+
+  await assert.rejects(
+    client(() => ({ status: 404, body: { error: "олдсонгүй", code: "SEAL_REQUEST_NOT_FOUND" } })).eid.seal.waitForCertificate(ORG, RID, { intervalMs: 1 }),
+    (e: unknown) => e instanceof SealRequestNotFoundError && e instanceof ApiError && e.status === 404 && e.code === "SEAL_REQUEST_NOT_FOUND",
+  );
+});
+
+test("seal.requestCertificate — алдаа: 409 SEAL_APPROVER_UNAVAILABLE, 409 байгууллага, 403, 429", async () => {
+  await assert.rejects(
+    client(() => ({ status: 409, body: { error: "ADMIN алга", code: "SEAL_APPROVER_UNAVAILABLE" } })).eid.seal.requestCertificate(ORG),
+    (e: unknown) => e instanceof SealApproverUnavailableError && e instanceof ApiError && e.status === 409 && !e.retryable,
+  );
+  await assert.rejects(
+    client(() => ({ status: 409, body: { error: "байгууллага ACTIVE биш" } })).eid.seal.requestCertificate(ORG),
+    (e: unknown) => e instanceof ApiError && !(e instanceof SealApproverUnavailableError) && e.status === 409,
+  );
+  await assert.rejects(
+    client(() => ({ status: 403, body: { error: "SEAL эрхгүй", code: "PERMISSION_DENIED" } })).eid.seal.requestCertificate(ORG),
+    ForbiddenError,
+  );
+  await assert.rejects(
+    client(() => ({ status: 429, body: { error: "хэт олон", code: "RATE_LIMITED" }, headers: { "Retry-After": "3600" } })).eid.seal.requestCertificate(ORG),
+    (e: unknown) => e instanceof ApiError && e.status === 429 && e.retryable && e.retryAfterMs === 3_600_000,
+  );
 });
 
 test("isSealCertificate", () => {

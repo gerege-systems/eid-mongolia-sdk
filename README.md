@@ -1027,8 +1027,45 @@ writeFileSync("sealed.pdf", done.pdf); // PAdES-BASELINE-LT, байгуулла�
   `SIGNATURE_INVALID`, `TSA_UNAVAILABLE` / `LTV_UNAVAILABLE` (`retryable`); RP-API-ийн алдаа хэвээр: **429
   `RATE_LIMITED`** → `ApiError` (`retryable`, `retryAfterMs`-ийн дараа дахин), 404 — байгууллага олдсонгүй, 409 —
   байгууллага ACTIVE биш эсвэл идэвхтэй тамганы гэрчилгээ алга/цуцлагдсан.
-- Тамганы гэрчилгээ олгох (`POST /seal/certificate/{orgEtsi}`) энэ хувилбарт алга — байгууллагын захирлын
-  баталгаажуулалттай олголтын урсгал CA-д нэвтэрмэгц нэмэгдэнэ. Go: `pades.SealPDF`; .NET: `EidPades.SealAsync`.
+- `eid.seal.getCertificate(org)` нь байгууллагын **одоогийн (олгогдсон, идэвхтэй)** тамганы гэрчилгээг буцаана — шинээр
+  олгохгүй; идэвхтэй cert алга / цуцлагдсан бол 409. Go: `pades.SealPDF`; .NET: `EidPades.SealAsync`.
+
+### Тамганы гэрчилгээ олгуулах (0.43.0)
+
+Гэрчилгээг RP ч, оператор ч шууд гаргахгүй — **хүсэлт** үүсгэнэ. Байгууллагын хүчинтэй **ADMIN** төлөөлөгч бүр (идэвхтэй
+eID төхөөрөмжтэй, ≤ 5) eID аппад «"<байгууллага>"-ын цахим тамганы гэрчилгээ олгохыг зөвшөөрч байна» хүсэлт хүлээн авч
+**PIN2**-оор батална. Нэг ADMIN баталмагц гэрчилгээ гарна (`ISSUED`); татгалзвал `REJECTED`; батлах хугацаа (гарын
+үсгийн session TTL + 2 мин) дуусвал `EXPIRED`.
+
+```ts
+import { SealApproverUnavailableError, SealCertificateRequestError } from "@gerege-systems/eid-mongolia-sdk";
+
+const req = await eid.seal.requestCertificate("NTRMN-6235972"); // 202 {requestId, status: "PENDING", expiresAt, approvers}
+try {
+  const cert = await eid.seal.waitForCertificate("NTRMN-6235972", req.requestId, { timeoutMs: 10 * 60_000 });
+  // cert: {certificate (DER), serialNumber, notBefore, notAfter, certificateLevel, …} — getCertificate-тэй ижил хэлбэр
+} catch (e) {
+  if (e instanceof SealCertificateRequestError) {
+    // e.outcome: "REJECTED" | "EXPIRED" | "FAILED" → шинэ хүсэлт; "TIMEOUT" → ижил requestId-аар дахин хүлээж болно
+  } else if (e instanceof SealApproverUnavailableError) {
+    // (requestCertificate) байгууллагад идэвхтэй eID-тэй ADMIN алга
+  } else throw e;
+}
+```
+
+- `requestCertificate(org)` — `POST /seal/certificate/{orgEtsi}` → `SealCertificateRequest` (`requestId`, `status:
+  "PENDING"`, `createdAt`, `expiresAt`, `approvers`). Байгууллагад PENDING хүсэлт байвал CA түүнийг буцаана (шинэ push үгүй).
+- `getCertificateRequest(org, requestId)` — `GET /seal/certificate/{orgEtsi}/requests/{requestId}`: `status` = `PENDING` |
+  `APPROVED` (олгогдож байна) | `ISSUED` (`certificate` бөглөгдсөн) | `REJECTED` | `EXPIRED` | `FAILED` (`failure`:
+  `SEAL_ISSUANCE_FAILED` | `PUSH_FAILED`). Нэг удаагийн шалгалт (өөрийн UI poll).
+- `waitForCertificate(org, requestId, { timeoutMs = 15 мин, intervalMs = 3 с, signal })` — ISSUED болтол асууж гэрчилгээг
+  буцаана; REJECTED / EXPIRED / FAILED / хугацаа дууссан → `SealCertificateRequestError` (`outcome`, `requestId`,
+  `failure`). 429/503 + Retry-After (`ApiError.retryable`) — Retry-After-ийг хүлээгээд үргэлжилнэ; `signal` тасрахад
+  `signal.reason`.
+- Алдаа: **409 `SEAL_APPROVER_UNAVAILABLE`** → `SealApproverUnavailableError`; 409 (code-гүй) — байгууллага ACTIVE биш;
+  **404 `SEAL_REQUEST_NOT_FOUND`** → `SealRequestNotFoundError` (өөр байгууллагын id ч мөн); 403 → `ForbiddenError`
+  (`SEAL:<orgEtsi>` эрхгүй); **429 `RATE_LIMITED`** → `ApiError` (`retryAfterMs`) — байгууллагад цагт 5 хүсэлт (PIN2 push
+  спамаас хамгаална). Хүсэлтийн төлөвийн poll тооцоонд орохгүй.
 
 ## 4. QR ба ижил төхөөрөмж — device link v3
 
