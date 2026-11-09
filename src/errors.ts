@@ -251,9 +251,9 @@ export class ResponseTooLargeError extends EidError {
   }
 }
 
-/** Алдаа/логт орох зам: `/etsi/{…}`, `/document/{…}`, `/linked/{…}` → `…`, query хасагдана. */
+/** Алдаа/логт орох зам: `/etsi/{…}`, `/document/{…}`, `/linked/{…}`, `/seal/[certificate/]{…}` → `…`, query хасагдана. */
 export function maskPath(path: string): string {
-  return path.split(/[?#]/)[0]!.replace(/\/(etsi|document|linked)\/[^/?#\s]+/g, "/$1/…");
+  return path.split(/[?#]/)[0]!.replace(/\/(etsi|document|linked|seal(?:\/certificate)?)\/[^/?#\s]+/g, "/$1/…");
 }
 
 /**

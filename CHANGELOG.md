@@ -1,4 +1,14 @@
 # Changelog
+## 0.42.0 — 2026-11-09
+
+### Added — байгууллагын цахим тамга (e-Seal): `eid.seal` ба `sealPdf`
+
+- **Юу:** `SealApi` (`EidClient.seal`): `getCertificate(orgEtsi)` — `GET /seal/certificate/{orgEtsi}`; `seal(orgEtsi, digest, hashAlgorithm = "SHA-256")` — `POST /seal/{orgEtsi}` (`{digest, hashType}`), хариуны ECDSA гарын үсгийг хариуны гэрчилгээгээр digest дээр шалгаж, гэрчилгээ e-Seal профайл (`isSealCertificate`: KeyUsage = зөвхөн nonRepudiation, EKU-гүй) эсэхийг тулгана. `/pades`: `sealPdf(sealer, orgEtsi, pdf, opts)` — тамганы cert → `prepare` (verify хуудасгүй, үл харагдах) → DTBS-ийг SHA-256-аар тамгалуулна → `complete` (RFC 3161 timestamp ЗААВАЛ, OCSP/CRL, DSS) → PAdES-BASELINE-LT; тамгалах хооронд cert солигдвол `SIGNER_INVALID`. `PadesSealer`, `PadesSealOptions`, `SEAL_REQUEST_FIELDS`. `maskPath` нь `/seal/…` замын байгууллагын таних тэмдгийг нууна.
+- **Яагаад:** RP тамгын RP-API-г түүхий HTTP-ээр дуудаж CMS/PAdES-ээ өөрөө угсардаг байсан, TSA заавал биш байсан (E-SEAL судалгааны G10). Иргэний PDF урсгалтай ижил fail-closed.
+- **Хаана:** `src/seal.ts`, `src/pades.ts`, `src/client.ts`, `src/contract.ts`, `src/errors.ts`, `src/index.ts`; тест `test/seal.test.ts` + `test/fixtures/pades/seal/` (Go reference v0.24.0 `pades.SealPDF`-ийн бичлэг — гаралт Go-тэй байт-ижил); README §3i.
+- **Шалгасан:** CI (`npm run lint`, `npm test`, golden, bundle size).
+- **Үлдсэн:** тамганы гэрчилгээ олгох (`POST /seal/certificate/{orgEtsi}`) — CA-д байгууллагын баталгаажуулалттай (PIN2) олголтын урсгал нэвтэрмэгц.
+
 ## 0.41.0 — 2026-11-09
 
 ### Docs — 0.40.3 тэмдэглэлийн засвар

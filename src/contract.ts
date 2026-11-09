@@ -35,6 +35,10 @@ export const RP_ROUTES = {
   share: { method: "POST", path: "/share" },
   /** «Миний QR» (CA гэрээ myqr-2026-10-26): `{qr, relyingPartyUUID, relyingPartyName, nonce}` → `{sessionID}`. */
   authQr: { method: "POST", path: "/authentication/qr" },
+  /** Байгууллагын тамганы гэрчилгээ (CA `dto.SealCertificateResponse`). */
+  sealCertificate: { method: "GET", path: "/seal/certificate/{orgEtsi}" },
+  /** Байгууллагын тамга (CA `dto.SealRequest` `{digest, hashType}` → `dto.SealResponse`). */
+  seal: { method: "POST", path: "/seal/{orgEtsi}" },
 } as const satisfies Record<string, RpRoute>;
 
 /**
@@ -70,6 +74,12 @@ export const PDF_SIGNATURE_REGISTER_FIELDS = [
  * 0329ef95, !371). CA үл мэдэгдэх талбарыг 400 REQUEST_INVALID-аар татгалздаг. Live discovery-ийн `endpoints.share`
  * тайлбартай гэрээний тест тулгана.
  */
+/**
+ * `POST /seal/{orgEtsi}`-ийн биеийн талбарууд, SDK-ийн илгээдэг — CA `server/internal/dto/org_dtos.go` `SealRequest`-ийн
+ * JSON tag (`relyingPartyUUID`/`relyingPartyName` нь CA-д заавал биш). CA `DisallowUnknownFields`.
+ */
+export const SEAL_REQUEST_FIELDS = ["digest", "hashType"] as const;
+
 export const SHARE_FORM_FIELDS = ["file", "filename", "to", "subject", "message", "lang"] as const;
 
 /** Template-ийн `{param}`-уудыг дарааллаар нь `encodeURIComponent` хийсэн `args`-аар орлуулна. */

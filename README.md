@@ -998,6 +998,38 @@ KeyUsage contentCommitment, QUALIFIED (qcStatements), issuer allowlist (анхд
 `PERMISSION_DENIED` / `RP_REQUIRED`, 404 `QR_TOKEN_INVALID`, 409 `NO_SIGNING_CERTIFICATE`, 429 `RATE_LIMITED`; `GET /session`-ийн
 410 → `QrError` `QR_PRESENTATION_GONE` (presentation нэг л удаа өгөгдөнө). `qr.issuer` тохиргоо — тест орчинд л.
 
+## 3i. Байгууллагын цахим тамга (e-Seal) — `eid.seal`, `sealPdf` (0.42.0)
+
+Байгууллагын нэрийн өмнөөс **хүнгүй, автомат** систем баримт тамгална (нэхэмжлэх, тодорхойлолт, хуулга): түлхүүр eID-ийн
+серверт, иргэн/PIN/апп оролцохгүй, хариу шууд (session-гүй). RP-д тухайн байгууллагын **`SEAL:<orgEtsi>`** эрх хэрэгтэй
+(eID-ийн оператор олгоно; эрхгүй бол `ForbiddenError` 403). Иргэн байгууллагын нэрийн өмнөөс зурах бол §3a (тамга биш).
+Зөвхөн backend (RP secret).
+
+```ts
+import { sealPdf, PadesError } from "@gerege-systems/eid-mongolia-sdk/pades";
+
+const done = await sealPdf(eid.seal, "NTRMN-6235972", pdfBytes, { reason: "Нэхэмжлэх" });
+writeFileSync("sealed.pdf", done.pdf); // PAdES-BASELINE-LT, байгууллагын тамгатай
+```
+
+- Урсгал: `eid.seal.getCertificate(org)` (`GET /seal/certificate/{orgEtsi}`) → `prepare` (signerCert = тамганы cert) →
+  32 байт DTBS-ийг `eid.seal.seal(org, dtbs, "SHA-256")` (`POST /seal/{orgEtsi}`, `{digest, hashType}`) → `complete`.
+  PDF eID руу очихгүй.
+- **RFC 3161 timestamp заавал** (eID TSA, `complete.tsaUrl`): TSA хүрэхгүй бол `TSA_UNAVAILABLE`, цагийн тэмдэггүй файл
+  буцаахгүй; OCSP/CRL + DSS → B-LT. Тамга үл харагдах, баталгаажуулалтын (QR) хуудасгүй — тамга иргэний гарын үсгийн
+  бүртгэлд (`registerSignature`) ордоггүй тул `/verify/{docId}` холбоос өгөхгүй.
+- Шалгагч (`validatePdf`, CA `/v3/validate/pdf`) энэ гарын үсгийг `certificate.usage: "seal"` гэж ангилна — хэрэглэгчид
+  «Байгууллагын тамга» гэж харуулна уу.
+- `eid.seal.seal` хариуг шалгана: гарын үсэг хариуны гэрчилгээгээр digest дээр таарч, гэрчилгээ e-Seal профайл
+  (`isSealCertificate`: KeyUsage = зөвхөн nonRepudiation, EKU-гүй) байх ёстой — эс бөгөөс `ValidationError`.
+  `hashAlgorithm`: `SHA-256` (анхдагч) | `SHA-384` | `SHA-512`.
+- Алдаа: `PadesError` `SIGNER_INVALID` (cert e-Seal биш, эсвэл тамгалах хооронд cert солигдсон — дахин оролд),
+  `SIGNATURE_INVALID`, `TSA_UNAVAILABLE` / `LTV_UNAVAILABLE` (`retryable`); RP-API-ийн алдаа хэвээр: **429
+  `RATE_LIMITED`** → `ApiError` (`retryable`, `retryAfterMs`-ийн дараа дахин), 404 — байгууллага олдсонгүй, 409 —
+  байгууллага ACTIVE биш эсвэл идэвхтэй тамганы гэрчилгээ алга/цуцлагдсан.
+- Тамганы гэрчилгээ олгох (`POST /seal/certificate/{orgEtsi}`) энэ хувилбарт алга — байгууллагын захирлын
+  баталгаажуулалттай олголтын урсгал CA-д нэвтэрмэгц нэмэгдэнэ. Go: `pades.SealPDF`; .NET: `EidPades.SealAsync`.
+
 ## 4. QR ба ижил төхөөрөмж — device link v3
 
 Иргэн өөр төхөөрөмжийн дэлгэц дээрх **QR**-ийг утсаараа уншина, эсвэл RP-ийн сайт/аппыг eID апптай **ижил
