@@ -3,13 +3,16 @@
 // 403); хэт олон хүсэлтэд 429 → ApiError (`retryable`, `retryAfterMs`).
 //
 // PDF-ийг тамгалах: `@gerege-systems/eid-mongolia-sdk/pades`-ийн `sealPdf(eid.seal, orgEtsi, pdf)` (PAdES-BASELINE-LT,
-// RFC 3161 timestamp заавал). Тамганы гэрчилгээ олгох (`POST /seal/certificate/{orgEtsi}`) энэ хувилбарт алга —
-// байгууллагын баталгаажуулалттай олголтын урсгал CA-д нэвтэрмэгц нэмэгдэнэ.
+// RFC 3161 timestamp заавал).
+//
+// Тамганы гэрчилгээ олгох (CA !483, 2026-11-09): `requestCertificate` → 202 PENDING хүсэлт; байгууллагын ADMIN eID аппаараа
+// PIN2-оор батална; `getCertificateRequest` / `waitForCertificate`-ээр ISSUED (гэрчилгээтэй) / REJECTED / EXPIRED / FAILED
+// хүртэл асууна.
 
 import { X509Certificate } from "node:crypto";
-import { RP_ROUTES, SEAL_REQUEST_FIELDS, routePath } from "./contract.js";
+import { RP_ROUTES, RP_ROUTES_UNDISCOVERED, SEAL_REQUEST_FIELDS, routePath } from "./contract.js";
 import { hashLen } from "./crypto.js";
-import { ValidationError } from "./errors.js";
+import { ApiError, SealCertificateRequestError, ValidationError } from "./errors.js";
 import type { Http } from "./http.js";
 import type { CertificateLevel, HashAlgorithm } from "./types.js";
 import { verifyPrehashedSignature } from "./validator.js";
@@ -30,6 +33,47 @@ export interface SealCertificate {
   /** Серверийн түүхий JSON. */
   raw: unknown;
 }
+
+/** Тамганы гэрчилгээний хүсэлтийн төлөв (CA `dto.SealCertificateRequestResponse.status`). */
+export type SealCertificateRequestStatus = "PENDING" | "APPROVED" | "ISSUED" | "REJECTED" | "EXPIRED" | "FAILED";
+
+/**
+ * `POST /seal/certificate/{orgEtsi}` (202) ба `GET /seal/certificate/{orgEtsi}/requests/{requestId}` (CA
+ * `dto.SealCertificateRequestResponse`).
+ */
+export interface SealCertificateRequest {
+  requestId: string;
+  orgEtsi: string;
+  /** PENDING / APPROVED — хүлээнэ; ISSUED — `certificate` бөглөгдсөн; REJECTED / EXPIRED / FAILED — шинэ хүсэлт. */
+  status: SealCertificateRequestStatus | string;
+  /** RFC 3339. */
+  createdAt: string;
+  /** RFC 3339 — батлах хугацааны төгсгөл (дараа нь EXPIRED). */
+  expiresAt: string;
+  decidedAt?: string;
+  /** PIN2 push илгээсэн ADMIN-ийн тоо (шинэ/PENDING хариунд). */
+  approvers?: number;
+  /** FAILED/EXPIRED үеийн машин код: `EXPIRED` | `SEAL_ISSUANCE_FAILED` | `PUSH_FAILED`. */
+  failure?: string;
+  /** ISSUED үед — {@link SealApi.getCertificate}-тэй ижил хэлбэр. */
+  certificate?: SealCertificate;
+  raw: unknown;
+}
+
+/** {@link SealApi.waitForCertificate}-ийн сонголт. */
+export interface SealWaitOptions {
+  /** Нийт хүлээх дээд хугацаа (мс). Анхдагч {@link DEFAULT_SEAL_WAIT_TIMEOUT_MS}. */
+  timeoutMs?: number;
+  /** Poll хоорондын зай (мс). Анхдагч {@link DEFAULT_SEAL_POLL_INTERVAL_MS}; 429/503-ын Retry-After илүү бол түүнийг дагана. */
+  intervalMs?: number;
+  /** Цуцлах — тасармагц `signal.reason`-ыг шиднэ. */
+  signal?: AbortSignal;
+}
+
+/** `waitForCertificate`-ийн анхдагч хүлээх хугацаа — CA-ийн батлах цонх (sign session TTL + 2 мин)-оос урт. */
+export const DEFAULT_SEAL_WAIT_TIMEOUT_MS = 15 * 60_000;
+/** `waitForCertificate`-ийн анхдагч poll зай (CA зөвлөмж 2–5 с). */
+export const DEFAULT_SEAL_POLL_INTERVAL_MS = 3_000;
 
 /** `POST /seal/{orgEtsi}` (CA `dto.SealResponse`). */
 export interface SealResult {
@@ -72,24 +116,116 @@ export function isSealCertificate(cert: X509Certificate | Uint8Array): boolean {
   return (bits & 0x40) !== 0 && (bits & 0x80) === 0;
 }
 
+function parseSealCertificate(raw: unknown, orgEtsi: string): SealCertificate {
+  const r = rec(raw);
+  return {
+    orgEtsi: String(r.orgEtsi ?? orgEtsi),
+    certificate: b64(r.certificate, "certificate"),
+    serialNumber: String(r.serialNumber ?? ""),
+    subjectDn: String(r.subjectDn ?? ""),
+    issuerDn: String(r.issuerDn ?? ""),
+    notBefore: String(r.notBefore ?? ""),
+    notAfter: String(r.notAfter ?? ""),
+    certificateLevel: String(r.certificateLevel ?? ""),
+    raw,
+  };
+}
+
+function parseSealRequest(raw: unknown, orgEtsi: string): SealCertificateRequest {
+  const r = rec(raw);
+  if (typeof r.requestId !== "string" || r.requestId === "" || typeof r.status !== "string" || r.status === "") {
+    throw new ValidationError("seal: хүсэлтийн хариунд requestId/status алга");
+  }
+  const status = r.status;
+  if (status === "ISSUED" && !r.certificate) throw new ValidationError("seal: ISSUED хүсэлтэд certificate алга");
+  return {
+    requestId: r.requestId,
+    orgEtsi: String(r.orgEtsi ?? orgEtsi),
+    status,
+    createdAt: String(r.createdAt ?? ""),
+    expiresAt: String(r.expiresAt ?? ""),
+    ...(typeof r.decidedAt === "string" ? { decidedAt: r.decidedAt } : {}),
+    ...(typeof r.approvers === "number" ? { approvers: r.approvers } : {}),
+    ...(typeof r.failure === "string" && r.failure ? { failure: r.failure } : {}),
+    ...(r.certificate ? { certificate: parseSealCertificate(r.certificate, orgEtsi) } : {}),
+    raw,
+  };
+}
+
+/** `ms` хүлээнэ; `signal` тасрахад `signal.reason`-аар reject. */
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) return reject(signal.reason);
+    const onAbort = () => {
+      clearTimeout(t);
+      reject(signal!.reason);
+    };
+    const t = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, Math.max(0, ms));
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
 export class SealApi {
   constructor(private readonly http: Http) {}
 
-  /** `GET /seal/certificate/{orgEtsi}` — байгууллагын идэвхтэй тамганы гэрчилгээ (PAdES-ийн signerCert). */
+  /**
+   * `GET /seal/certificate/{orgEtsi}` — байгууллагын одоогийн (хамгийн сүүлд олгогдсон, идэвхтэй) тамганы гэрчилгээ
+   * (PAdES-ийн signerCert). Шинээр олгохгүй — олголт {@link requestCertificate}. Идэвхтэй cert алга / цуцлагдсан бол 409.
+   */
   async getCertificate(orgEtsi: string): Promise<SealCertificate> {
-    const raw = await this.http.get(routePath(RP_ROUTES.sealCertificate, orgEtsi));
-    const r = rec(raw);
-    return {
-      orgEtsi: String(r.orgEtsi ?? orgEtsi),
-      certificate: b64(r.certificate, "certificate"),
-      serialNumber: String(r.serialNumber ?? ""),
-      subjectDn: String(r.subjectDn ?? ""),
-      issuerDn: String(r.issuerDn ?? ""),
-      notBefore: String(r.notBefore ?? ""),
-      notAfter: String(r.notAfter ?? ""),
-      certificateLevel: String(r.certificateLevel ?? ""),
-      raw,
-    };
+    return parseSealCertificate(await this.http.get(routePath(RP_ROUTES.sealCertificate, orgEtsi)), orgEtsi);
+  }
+
+  /**
+   * `POST /seal/certificate/{orgEtsi}` — тамганы гэрчилгээний ХҮСЭЛТ (202, `status: "PENDING"`). Байгууллагын ADMIN
+   * төлөөлөгч(ид) eID аппаараа PIN2-оор батална; {@link waitForCertificate} / {@link getCertificateRequest}-ээр асууна.
+   * Байгууллагад PENDING хүсэлт байвал CA түүнийг буцаана (шинэ push үгүй). Алдаа: 409 {@link
+   * SealApproverUnavailableError} (идэвхтэй төхөөрөмжтэй ADMIN алга), 409 `ApiError` (байгууллага ACTIVE биш), 403
+   * `ForbiddenError` (`SEAL:<orgEtsi>` эрхгүй), 404 (байгууллага олдсонгүй), 429 `RATE_LIMITED` (байгууллагад 5/цаг;
+   * `retryAfterMs`).
+   */
+  async requestCertificate(orgEtsi: string): Promise<SealCertificateRequest> {
+    return parseSealRequest(await this.http.post(routePath(RP_ROUTES.sealCertificateRequest, orgEtsi), {}), orgEtsi);
+  }
+
+  /**
+   * `GET /seal/certificate/{orgEtsi}/requests/{requestId}` — хүсэлтийн төлөв; ISSUED үед `certificate` бөглөгдөнө. Олдоогүй
+   * (эсвэл өөр байгууллагынх) → {@link SealRequestNotFoundError} 404.
+   */
+  async getCertificateRequest(orgEtsi: string, requestId: string): Promise<SealCertificateRequest> {
+    const raw = await this.http.get(routePath(RP_ROUTES_UNDISCOVERED.sealCertificateRequestStatus, orgEtsi, requestId));
+    return parseSealRequest(raw, orgEtsi);
+  }
+
+  /**
+   * Хүсэлт ISSUED болтол `intervalMs` тутамд асууж олгогдсон гэрчилгээг буцаана. REJECTED / EXPIRED / FAILED →
+   * {@link SealCertificateRequestError} (`outcome`, `failure`; шинэ хүсэлт хэрэгтэй); `timeoutMs` дуусвал `outcome:
+   * "TIMEOUT"` (хүсэлт серверт PENDING хэвээр — ижил `requestId`-аар дахин хүлээж болно). Түр алдаа (`ApiError.retryable`:
+   * 429/503 + Retry-After) — Retry-After-ийг хүлээгээд үргэлжилнэ; бусад алдаа шууд шидэгдэнэ.
+   */
+  async waitForCertificate(orgEtsi: string, requestId: string, opts: SealWaitOptions = {}): Promise<SealCertificate> {
+    const interval = opts.intervalMs !== undefined && opts.intervalMs > 0 ? opts.intervalMs : DEFAULT_SEAL_POLL_INTERVAL_MS;
+    const deadline = Date.now() + (opts.timeoutMs !== undefined && opts.timeoutMs > 0 ? opts.timeoutMs : DEFAULT_SEAL_WAIT_TIMEOUT_MS);
+    for (;;) {
+      if (opts.signal?.aborted) throw opts.signal.reason;
+      let wait = interval;
+      try {
+        const r = await this.getCertificateRequest(orgEtsi, requestId);
+        if (r.status === "ISSUED" && r.certificate) return r.certificate;
+        if (r.status === "REJECTED" || r.status === "EXPIRED" || r.status === "FAILED") {
+          throw new SealCertificateRequestError(r.status, r.requestId, r.failure);
+        }
+      } catch (e) {
+        if (!(e instanceof ApiError && e.retryable)) throw e;
+        wait = Math.max(interval, e.retryAfterMs ?? 0);
+      }
+      const left = deadline - Date.now();
+      if (left <= 0) throw new SealCertificateRequestError("TIMEOUT", requestId);
+      await sleep(Math.min(wait, left), opts.signal);
+    }
   }
 
   /**

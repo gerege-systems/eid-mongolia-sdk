@@ -113,6 +113,37 @@ export class RequestInvalidError extends ApiError {}
 export class QrTokenInvalidError extends ApiError {}
 
 /**
+ * 409 `SEAL_APPROVER_UNAVAILABLE` (`eid.seal.requestCertificate`) — байгууллагад идэвхтэй eID төхөөрөмжтэй ADMIN төлөөлөгч
+ * алга: тамганы гэрчилгээг PIN2-оор батлах хүн байхгүй. Байгууллагын ADMIN eID-ээ идэвхжүүлсний дараа дахин хүснэ.
+ */
+export class SealApproverUnavailableError extends ApiError {}
+
+/**
+ * 404 `SEAL_REQUEST_NOT_FOUND` (`eid.seal.getCertificateRequest`) — тамганы гэрчилгээний хүсэлт олдсонгүй (эсвэл өөр
+ * байгууллагынх).
+ */
+export class SealRequestNotFoundError extends ApiError {}
+
+/** Тамганы гэрчилгээний хүсэлтийн төгсгөлийн (ISSUED биш) төлөв, эсвэл `waitForCertificate`-ийн хугацаа дууссан. */
+export type SealRequestOutcome = "REJECTED" | "EXPIRED" | "FAILED" | "TIMEOUT";
+
+/**
+ * `eid.seal.waitForCertificate` — хүсэлт гэрчилгээгүй дууссан: `REJECTED` (ADMIN татгалзсан), `EXPIRED` (батлах хугацаа
+ * дууссан), `FAILED` (`failure`: `SEAL_ISSUANCE_FAILED` | `PUSH_FAILED` г.м.) — бүгд шинэ хүсэлт (`requestCertificate`)
+ * шаардана; `TIMEOUT` — `timeoutMs` дууссан ч хүсэлт серверт PENDING хэвээр (ижил `requestId`-аар дахин хүлээж болно).
+ */
+export class SealCertificateRequestError extends EidError {
+  constructor(
+    readonly outcome: SealRequestOutcome,
+    readonly requestId: string,
+    /** Серверийн `failure` код (FAILED/EXPIRED үед), байхгүй бол undefined. */
+    readonly failure?: string,
+  ) {
+    super(`тамганы гэрчилгээний хүсэлт ${outcome}${failure ? ` (${failure})` : ""}`);
+  }
+}
+
+/**
  * CA-ийн түр (давтаж болох) алдааны кодууд — `ApiError.code`. RATE_LIMITED (429 `/pdf/signatures`, `/token/auth/*`),
  * STATE_UNAVAILABLE (503 session start, токен, бүртгэл; Retry-After 5), ISSUANCE_PENDING (503 токены үр дүн, 5).
  * TSA_UNAVAILABLE / LTV_UNAVAILABLE нь CA-ийн биш — клиент талын `PadesError.code` (`/pades`, өөрийн `retryable`).

@@ -22,7 +22,17 @@ export {
 export { PDF_SIGNATURE_REGISTER_FIELDS, SEAL_REQUEST_FIELDS, SHARE_FORM_FIELDS } from "./contract.js";
 export { SessionApi, parseSessionResult, personMatchesCertificate, DEFAULT_MAX_WAIT_MS, WAIT_GRACE_MS } from "./session.js";
 export { OrganizationApi } from "./organization.js";
-export { SealApi, isSealCertificate, type SealCertificate, type SealResult } from "./seal.js";
+export {
+  SealApi,
+  isSealCertificate,
+  DEFAULT_SEAL_WAIT_TIMEOUT_MS,
+  DEFAULT_SEAL_POLL_INTERVAL_MS,
+  type SealCertificate,
+  type SealCertificateRequest,
+  type SealCertificateRequestStatus,
+  type SealWaitOptions,
+  type SealResult,
+} from "./seal.js";
 export {
   ShareError,
   SHARE_ERROR_CODES,
@@ -173,6 +183,9 @@ export {
   CertChoiceInvalidError,
   RequestInvalidError,
   QrTokenInvalidError,
+  SealApproverUnavailableError,
+  SealRequestNotFoundError,
+  SealCertificateRequestError,
   NetworkError,
   SessionFailedError,
   ValidationError,
@@ -186,6 +199,7 @@ export {
   type OnBehalfErrorCode,
   type PdfRegisterErrorCode,
   type RetryableErrorCode,
+  type SealRequestOutcome,
   type HttpErrorInit,
 } from "./errors.js";
 export { DEFAULT_SIGN_SESSION_TTL_MS, sessionExpiry, startExpiry, parseExpiresAt } from "./types.js";
