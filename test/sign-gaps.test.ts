@@ -17,6 +17,8 @@ import {
   buildDeviceLink,
   deviceLinkInput,
   parseSessionResult,
+  sessionSecretDigest,
+  verifySessionSecretDigest,
   sessionExpiry,
   sha256Base64,
 } from "../dist/index.js";
@@ -119,7 +121,7 @@ test("expiresAt — push sign, signSessionTtlMs, sessionExpiry", async () => {
   assert.equal(sessionExpiry(1000, 5000), 6000);
 });
 
-test("certificate-choice — etsi push / device-link (зөвхөн QR), body талбарууд", async () => {
+test("certificate-choice — etsi push / device-link, body талбарууд", async () => {
   const { eid, last } = client();
   const s = await eid.sign.certificateChoiceByEtsi("PNOMN-12345678");
   assert.equal(path(last().url), "/signature/certificate-choice/notification/etsi/PNOMN-12345678");
@@ -134,6 +136,38 @@ test("certificate-choice — etsi push / device-link (зөвхөн QR), body т�
   assert.equal(d.sessionType, "cert");
   assert.match(buildDeviceLink(deviceLinkInput(d, "QR", "eng")), /sessionType=cert/);
   assert.throws(() => buildDeviceLink(deviceLinkInput(d, "Web2App", "eng")), DeviceLinkError);
+});
+
+test("certificate-choice device-link — callbackUrl: body, Web2App холбоос, QR authCode callback-гүй; etsi-д илгээхгүй", async () => {
+  const { eid, last } = client();
+  const cb = "https://rp.example/auth/eid/callback?value=abc";
+  const d = await eid.sign.certificateChoiceDeviceLink({ callbackUrl: `  ${cb} ` });
+  assert.equal(last().body.initialCallbackUrl, cb);
+  assert.equal(d.initialCallbackUrl, cb);
+  const w = buildDeviceLink(deviceLinkInput(d, "Web2App", "eng"));
+  assert.match(w, /deviceLinkType=Web2App/);
+  const qr = buildDeviceLink({ ...deviceLinkInput(d, "QR", "eng"), now: d.receivedAt + 5000 });
+  const plain = await eid.sign.certificateChoiceDeviceLink();
+  assert.equal("initialCallbackUrl" in last().body, false);
+  assert.equal(plain.initialCallbackUrl, undefined);
+  const qrPlain = buildDeviceLink({ ...deviceLinkInput({ ...plain, receivedAt: d.receivedAt }, "QR", "eng"), now: d.receivedAt + 5000 });
+  assert.equal(qr.split("authCode=")[1], qrPlain.split("authCode=")[1]);
+  await eid.sign.certificateChoiceDeviceLink({ callbackUrl: "   " });
+  assert.equal("initialCallbackUrl" in last().body, false);
+  await eid.sign.certificateChoiceByEtsi("PNOMN-12345678", { callbackUrl: cb });
+  assert.equal("initialCallbackUrl" in last().body, false);
+});
+
+test("sessionSecretDigest / verifySessionSecretDigest", () => {
+  const secret = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=";
+  const dg = "Yw3NKWbEM2aRElRIu7JbT_QSpJxzLbLIq8G4WBvXEN0";
+  assert.equal(sessionSecretDigest(secret), dg);
+  assert.equal(verifySessionSecretDigest(dg, secret), true);
+  assert.equal(verifySessionSecretDigest(dg.slice(0, -1) + "1", secret), false);
+  assert.equal(verifySessionSecretDigest(dg, "AAECAw=="), false);
+  assert.equal(verifySessionSecretDigest("", secret), false);
+  assert.equal(verifySessionSecretDigest("***", secret), false);
+  assert.equal(verifySessionSecretDigest(dg + "=", secret), false);
 });
 
 const ccResult = (cert: X509Certificate, extra: Record<string, unknown> = {}) =>

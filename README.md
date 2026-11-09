@@ -407,7 +407,7 @@ certificate-choice хүчингүй / хуучирсан / ашиглагдса�
 таарахгүй.
 
 ```ts
-const cc = await eid.sign.certificateChoiceByEtsi("PNOMN-12345678"); // эсвэл certificateChoiceDeviceLink() (зөвхөн QR)
+const cc = await eid.sign.certificateChoiceByEtsi("PNOMN-12345678"); // эсвэл certificateChoiceDeviceLink() (QR; callbackUrl өгвөл Web2App/App2App ч)
 const signer = eid.validator.validateCertificateChoice(await eid.session.waitForResult(cc.sessionId), cc.sessionId);
 const dtbs = myCmsBuilder.dtbs(signer.certificate); // таных: SHA-256(signedAttrs), 32 байт, стандарт base64 (PDF бол /pades prepare)
 const ix = [{ type: "displayTextAndPIN" as const, displayText60: "Гэрээнд гарын үсэг зурах" }];
@@ -425,6 +425,31 @@ const sig = eid.validator.validateSign(r, s.sign!.digest, {
 `digestForSigner` / `deviceLinkForSigner`-ийн анхдагч: `sha256WithRSAEncryption` + `SHA-256` (CA SplitKey RSA нь хүссэн
 алгоритмаар, PKCS#1 v1.5; хуучин threshold-ECDSA credential нь үргэлж `ecdsa-with-SHA256` — `expectedAlgorithm` үүнийг
 зөвхөн EC P-256 гэрчилгээтэй үед зөвшөөрнө). Digest-ийн урт hash-тай таарахгүй бол хүсэлт явахгүй.
+
+#### Утсан дээр linked signing (буцах URL-тай)
+
+`certificateChoiceDeviceLink({ callbackUrl })` — нэг session-оос desktop-д QR, утсан дээр Web2App товч гаргана.
+`callbackUrl` нь RP-ийн `callback_hosts` жагсаалтад байх `https` URL (CA зам нь `/auth/eid/callback` болгон
+хэвийн болгоно); жагсаалтад байхгүй бол CA хаяж, session зөвхөн QR болно. Утас linked SIGN дууссаны дараа л callback-ийг
+нээнэ: RP-ийн өөрийн query (ж: `value=<санамсаргүй>`) хэвээр + `sessionSecretDigest` + `sessionId` (certificate-choice-ийн).
+
+```ts
+// 1) cert-choice-ийг callback-тай эхлүүл; `value`-г эхэлсэн браузерийн cookie-д хадгал
+const cc = await eid.sign.certificateChoiceDeviceLink({ callbackUrl: `${origin}/auth/eid/callback?value=${value}` });
+const qr = buildDeviceLink(deviceLinkInput(cc, "QR", "mon"));        // desktop (секунд тутам шинэчил)
+const w2a = buildDeviceLink(deviceLinkInput(cc, "Web2App", "mon"));  // утсан дээрх товч (нэг session)
+// 2) validateCertificateChoice → 3) digestForSigner(signer, …) — дээрх linked sign
+const signer = eid.validator.validateCertificateChoice(await eid.session.waitForResult(cc.sessionId), cc.sessionId);
+const s = await eid.sign.digestForSigner(signer, dtbs, ix);
+
+// 4) /auth/eid/callback дээр
+const ok = q.value === cookieValue && verifySessionSecretDigest(q.sessionSecretDigest, cc.sessionSecret!);
+// ok бол session-ийг ЗӨВХӨН НЭГ УДАА хүлээн зөвшөөр (дахин ашиглахгүй), дараа нь linked SIGN-ий үр дүнг уншина:
+const r = await eid.session.waitForResult(s.sessionId);
+```
+
+Linked SIGN session өөрөө callback-гүй. `sessionSecretDigest` = BASE64URL(SHA-256(base64-decode(`sessionSecret`))),
+`userChallengeVerifier` ирэхгүй. `sessionSecret`/`sessionToken` зөвхөн backend-д.
 
 ## 3a. Байгууллагын нэрийн өмнөөс гарын үсэг (onBehalfOf)
 

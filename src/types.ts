@@ -179,6 +179,11 @@ export interface DeviceLinkSession {
   receivedAt: number;
   /** auth | sign | cert ({@link deviceLinkInput}-д). Хуучин хадгалсан session-д undefined = auth. */
   sessionType?: "auth" | "sign" | "cert";
+  /**
+   * Зөвхөн cert (certificate-choice) session: эхлүүлэхэд илгээсэн түүхий `initialCallbackUrl` (linked signing буцах
+   * URL). Web2App/App2App authCode-д орно ({@link deviceLinkInput}); байхгүй бол QR-only.
+   */
+  initialCallbackUrl?: string;
   /** Sign session-д ({@link deviceLinkInput}, `validateSign`); бусад үед undefined. */
   sign?: SignContext;
   /** Certificate-choice session-ий хүсэлтэд илгээсэн нэр (cert холбоосын authCode-д). */

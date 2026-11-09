@@ -157,7 +157,10 @@ export function deviceLinkInput(s: DeviceLinkSession, deviceLinkType: DeviceLink
     };
   }
   if (s.sessionType === "cert") {
-    return { ...base, sessionType: "cert", relyingPartyName: s.relyingPartyName ?? "", interactions: "" };
+    return {
+      ...base, sessionType: "cert", relyingPartyName: s.relyingPartyName ?? "", interactions: "",
+      initialCallbackUrl: s.initialCallbackUrl ?? "",
+    };
   }
   return {
     ...base, sessionType: "auth", rpChallenge: s.acsp?.rpChallenge ?? s.rpChallenge, relyingPartyName: s.acsp?.relyingPartyName ?? "",
