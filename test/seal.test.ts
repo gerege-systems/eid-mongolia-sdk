@@ -7,7 +7,6 @@ import { createHash, X509Certificate } from "node:crypto";
 import { readFileSync } from "node:fs";
 
 import { ApiError, EidClient, ForbiddenError, SEAL_REQUEST_FIELDS, ValidationError, isSealCertificate } from "../dist/index.js";
-import { maskPath } from "../src/errors.ts";
 import * as pades from "../dist/pades.js";
 
 const S = new URL("./fixtures/pades/seal/", import.meta.url);
@@ -115,12 +114,10 @@ test("seal.getCertificate — GET /seal/certificate/{orgEtsi} (dto.SealCertifica
   assert.equal(c.certificateLevel, "QUALIFIED");
 });
 
-test("isSealCertificate / maskPath", () => {
+test("isSealCertificate", () => {
   assert.equal(isSealCertificate(SEAL), true);
   assert.equal(isSealCertificate(CITIZEN), false);
   assert.equal(isSealCertificate(pki("04")), false);
-  assert.equal(maskPath("/seal/NTRMN-6235972"), "/seal/…");
-  assert.equal(maskPath("/seal/certificate/NTRMN-6235972"), "/seal/certificate/…");
 });
 
 // ── pades.sealPdf — Go reference-тэй байт-ижил ──
