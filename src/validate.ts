@@ -130,6 +130,7 @@ export async function validatePdf(pdf: Uint8Array | ArrayBuffer, opts: ValidateP
  * key_medium (CA !377): CA нь бүртгэлээс (pdf_signatures.medium / certificates.key_medium) тогтооно. Локал шалгалтад
  * зөвхөн гэрчилгээнээс: eID-ийн олгосон SIGN гэрчилгээ qcStatements QcCompliance-тэй (QUALIFIED/QSCD) бол «phone»
  * (USB токены P-CITIZEN-SIGN-TOKEN нь qcStatements-гүй); бусад (токен ба хуучин утасны гэрчилгээг ялгах боломжгүй) «unknown».
+ * Байгууллагын тамганы «server_software» / «server_hsm»-ийг зөвхөн CA бүртгэлээсээ тавина (2026-11-12) — энд «unknown».
  */
 function keyMedium(s: SignatureReport): SignatureReport["key_medium"] {
   const c = s.certificate;

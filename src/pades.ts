@@ -805,7 +805,9 @@ function isSealCert(c: Certificate): boolean {
  * @throws {PadesError} SIGNER_INVALID (гэрчилгээ e-Seal биш, эсвэл тамгалах хооронд гэрчилгээ солигдсон — дахин оролд),
  *   prepare/complete-ийн бусад код (SIGNATURE_INVALID, TSA_UNAVAILABLE, LTV_UNAVAILABLE …). RP-API-ийн алдаа
  *   (ForbiddenError — SEAL эрхгүй; ApiError 429 — `retryable`; SealServiceDisabledError 503 `SEAL_SERVICE_DISABLED` —
- *   оператор тамгалалтыг унтраасан, давтахгүй) хэвээр шидэгдэнэ; `sealPdf` өөрөө дахин оролдохгүй.
+ *   оператор тамгалалтыг унтраасан, давтахгүй; 409 OrgNotActiveError / SealNotIssuedError / SealCertRevokedError /
+ *   SealKeyUnavailableError / SealCertExpiredError / SealCertNotYetValidError) хэвээр шидэгдэнэ; `sealPdf` өөрөө дахин
+ *   оролдохгүй.
  */
 export async function sealPdf(sealer: PadesSealer, orgEtsi: string, pdf: Uint8Array | ArrayBuffer, opts: PadesSealOptions = {}): Promise<PadesCompleted> {
   if (!sealer || typeof sealer.getCertificate !== "function" || typeof sealer.seal !== "function") {

@@ -952,8 +952,9 @@ try {
 - Итгэлгүй PDF: задлахын өмнө массив/толийн давхарлалт > 256 → `PDF_INVALID` (`prepare` ч мөн; `complete` —
   `STATE_INVALID`). Хамгаалалтын нэг давхарга л — хэмжээ (≤ 10 MiB) ба хугацааг хязгаарла.
 - Options: `roots`, `intermediates`, `issuers` (DER, тест), `time`, `offline`, `fetch`, `signal`.
-- `key_medium` — гэрчилгээнээс л: qcStatements-тэй иргэний SIGN → `phone`, бусад `unknown` (CA өөрийн бүртгэлээс `token`
-  ч тогтооно). `session_id`, `doc_id`, `on_behalf_of_*` нь CA-ийн бүртгэлээс — локал тайланд байхгүй.
+- `key_medium` — гэрчилгээнээс л: qcStatements-тэй иргэний SIGN → `phone`, бусад `unknown`. CA (`POST /v3/validate/pdf`)
+  өөрийн бүртгэлээс `token`, мөн eID-ийн олгосон байгууллагын тамганд `server_software` / `server_hsm`-ийг (түлхүүр сервер
+  талд; QSCD гэсэн мэдэгдэл биш) тогтооно — төрөл (`SignatureReport["key_medium"]`, 0.45.0) таван утгатай. `session_id`, `doc_id`, `on_behalf_of_*` нь CA-ийн бүртгэлээс — локал тайланд байхгүй.
 - Хөтчийн bundle (минифай): ~253 KB, gzip ~137 KB (`npm run size:validate`, хязгаар 300 KB).
 
 ## 3h. «Миний QR» — биечлэн шалгах (`eid.qr`, 0.37.0)
@@ -1009,9 +1010,9 @@ KeyUsage contentCommitment, QUALIFIED (qcStatements), issuer allowlist (анхд
 ## 3i. Байгууллагын цахим тамга (e-Seal) — `eid.seal`, `sealPdf` (0.42.0)
 
 Байгууллагын нэрийн өмнөөс **хүнгүй, автомат** систем баримт тамгална (нэхэмжлэх, тодорхойлолт, хуулга): түлхүүр eID-ийн
-серверт, иргэн/PIN/апп оролцохгүй, хариу шууд (session-гүй). RP-д тухайн байгууллагын **`SEAL:<orgEtsi>`** эрх хэрэгтэй
-(eID-ийн оператор олгоно; эрхгүй бол `ForbiddenError` 403). Иргэн байгууллагын нэрийн өмнөөс зурах бол §3a (тамга биш).
-Зөвхөн backend (RP secret).
+серверт, иргэн/PIN/апп оролцохгүй, хариу шууд (session-гүй). RP-д тухайн байгууллагын **`SEAL:<orgEtsi>`** эрх хэрэгтэй —
+эрхийг **байгууллага өөрөө зөвшөөрнө** (доорх «Тамганы эрх, түлхүүр, хүчинтэй хугацаа»); эрхгүй бол `ForbiddenError` 403.
+Иргэн байгууллагын нэрийн өмнөөс зурах бол §3a (тамга биш). Зөвхөн backend (RP secret).
 
 ```ts
 import { sealPdf, PadesError } from "@gerege-systems/eid-mongolia-sdk/pades";
@@ -1033,11 +1034,62 @@ writeFileSync("sealed.pdf", done.pdf); // PAdES-BASELINE-LT, байгуулла�
   `hashAlgorithm`: `SHA-256` (анхдагч) | `SHA-384` | `SHA-512`.
 - Алдаа: `PadesError` `SIGNER_INVALID` (cert e-Seal биш, эсвэл тамгалах хооронд cert солигдсон — дахин оролд),
   `SIGNATURE_INVALID`, `TSA_UNAVAILABLE` / `LTV_UNAVAILABLE` (`retryable`); RP-API-ийн алдаа хэвээр: **429
-  `RATE_LIMITED`** → `ApiError` (`retryable`, `retryAfterMs`-ийн дараа дахин), 404 — байгууллага олдсонгүй, 409 —
-  байгууллага ACTIVE биш эсвэл идэвхтэй тамганы гэрчилгээ алга/цуцлагдсан, **503 `SEAL_SERVICE_DISABLED`** →
-  `SealServiceDisabledError` (доорх «Үйлчилгээ унтраалттай»).
+  `RATE_LIMITED`** → `ApiError` (`retryable`, `retryAfterMs`-ийн дараа дахин; RP-д минутад 300 тамгалалт), 404 —
+  байгууллага олдсонгүй, **409** — code бүр өөрийн алдааны ангитай (доорх хүснэгт, 0.45.0), **503
+  `SEAL_SERVICE_DISABLED`** → `SealServiceDisabledError` (доорх «Үйлчилгээ унтраалттай»).
 - `eid.seal.getCertificate(org)` нь байгууллагын **одоогийн (олгогдсон, идэвхтэй)** тамганы гэрчилгээг буцаана — шинээр
-  олгохгүй; идэвхтэй cert алга / цуцлагдсан бол 409. Go: `pades.SealPDF`; .NET: `EidPades.SealAsync`.
+  олгохгүй; олгогдоогүй / цуцлагдсан / хугацааны гадна бол **409** (`SealNotIssuedError` | `SealCertRevokedError` |
+  `SealCertExpiredError` | `SealCertNotYetValidError`) — 200-аар хүчингүй гэрчилгээ буцаахгүй. Go: `pades.SealPDF`; .NET:
+  `EidPades.SealAsync`.
+
+### Тамганы эрх, түлхүүр, хүчинтэй хугацаа (0.45.0)
+
+- **Эрх (`SEAL:<orgEtsi>`) — байгууллагын зөвшөөрлөөр.** eID-ийн оператор танай RP-д эрхийн **хүсэлт** үүсгэнэ; тухайн
+  байгууллагын **улсын бүртгэлээр баталгаажсан ADMIN** eID аппдаа RP-ийн нэр, домэйн, байгууллагын нэр, регистрийн дугаарыг
+  харж **PIN2**-оор зөвшөөрсний дараа л эрх үүснэ. Зөвшөөрөх хүртэл (татгалзсан, хугацаа дууссан үед ч) тамгалалт ба
+  гэрчилгээний хүсэлт (`seal`, `sealPdf`, `requestCertificate`, `getCertificateRequest`) `ForbiddenError` 403
+  (`getCertificate` эрх шаардахгүй). Оператор эрхийг хассан эсвэл байгууллага цуцлагдсан бол эрх хүчингүй болно (403). Эрхтэй
+  байх хугацаанд RP-ийн нэр, callback host, mTLS гэрчилгээний subject өөрчлөгдөхгүй (операторын талын дүрэм — өөрчлөх бол
+  эрхийг дахин авна).
+- **Түлхүүр.** Тамганы түлхүүр нь ECDSA P-256, eID-ийн серверт хадгалагдах **программын түлхүүр** (HSM-ийн түлхүүрээр
+  боогдсон) — **QSCD биш**. Гэрчилгээний түвшин `QUALIFIED` (Монгол Улсын хуулиар; QcSSCD-гүй) — ЕХ-ны qualified биш.
+- **Хүчинтэй хугацаа, сунгалт.** Гэрчилгээ 3 жил хүчинтэй. Сунгалт = шинэ хүсэлт (`requestCertificate`): шинэ түлхүүр, шинэ
+  гэрчилгээ гарч, өмнөх нь цуцлагдана (superseded). Өмнөх гэрчилгээгээр тамгалсан баримт цагийн тэмдэгтэй бол хүчинтэй
+  хэвээр — `sealPdf`-ийн гаралт (PAdES-BASELINE-LT) үүнийг хангана.
+- **Цуцлалт.** Цуцлагдсаны дараа `seal` / `sealPdf` / `getCertificate` → `SealCertRevokedError`; цуцлалтаас ӨМНӨ
+  тамгалсан баримт шалгалтад хүчинтэй хэвээр (`revoked_after_signing`).
+- **Гуравдагч шалгагч.** Гинж Монгол Улсын үндэсний Root CA хүртэл; OCSP / CRL хаяг гэрчилгээнд бий. Үндэсний Root-ийг
+  гараар итгэмжлээгүй бол Adobe болон ЕХ-ны шалгагчид тамгыг итгэмжлэгдсэн / qualified гэж харуулахгүй.
+
+| HTTP `code` | Алдаа | Хаана | Юу хийх |
+|---|---|---|---|
+| 409 `ORG_NOT_ACTIVE` | `OrgNotActiveError` | `seal`, `sealPdf`, `requestCertificate` | байгууллага ACTIVE биш — сэргэтэл давтахгүй |
+| 409 `SEAL_NOT_ISSUED` | `SealNotIssuedError` | `seal`, `sealPdf`, `getCertificate` | гэрчилгээ олгогдоогүй — `requestCertificate` |
+| 409 `SEAL_CERT_REVOKED` | `SealCertRevokedError` | `seal`, `sealPdf`, `getCertificate` | цуцлагдсан — шинэ гэрчилгээ хүснэ |
+| 409 `SEAL_CERT_EXPIRED` | `SealCertExpiredError` | `seal`, `sealPdf`, `getCertificate` | хугацаа дууссан — шинэ гэрчилгээ хүснэ |
+| 409 `SEAL_CERT_NOT_YET_VALID` | `SealCertNotYetValidError` | `seal`, `sealPdf`, `getCertificate` | хүчинтэй хугацаа эхлээгүй |
+| 409 `SEAL_KEY_UNAVAILABLE` | `SealKeyUnavailableError` | `seal`, `sealPdf` | түлхүүр серверийн тохиргоонд алга — eID-ийн тусламжид хандана |
+| 409 `SEAL_APPROVER_UNAVAILABLE` | `SealApproverUnavailableError` | `requestCertificate` | идэвхтэй eID-тэй ADMIN алга |
+| 404 `SEAL_REQUEST_NOT_FOUND` | `SealRequestNotFoundError` | `getCertificateRequest`, `waitForCertificate` | хүсэлтийн id буруу |
+| 503 `SEAL_SERVICE_DISABLED` | `SealServiceDisabledError` | `seal`, `sealPdf`, `requestCertificate` | оператор унтраасан — давтахгүй |
+
+Бүгд `ApiError`-ийн дэд анги (`status`, `code`, `body` хэвээр; `retryable` false) — өмнөх `instanceof ApiError` /
+`e.code` салаалалт хэвээр ажиллана. Кодын жагсаалт: `SEAL_ERROR_CODES` (`SealErrorCode`). 403 → `ForbiddenError`, 429
+`RATE_LIMITED` → `ApiError` (`retryable`).
+
+```ts
+import { SealCertRevokedError, SealCertExpiredError, SealNotIssuedError, OrgNotActiveError } from "@gerege-systems/eid-mongolia-sdk";
+
+try {
+  await sealPdf(eid.seal, org, pdfBytes);
+} catch (e) {
+  if (e instanceof SealNotIssuedError || e instanceof SealCertRevokedError || e instanceof SealCertExpiredError) {
+    // идэвхтэй тамганы гэрчилгээ алга → eid.seal.requestCertificate(org) (байгууллагын ADMIN PIN2-оор батална)
+  } else if (e instanceof OrgNotActiveError) {
+    // байгууллага түр зогссон / цуцлагдсан — давтахгүй
+  } else throw e;
+}
+```
 
 ### Тамганы гэрчилгээ олгуулах (0.43.0)
 
@@ -1071,7 +1123,8 @@ try {
   буцаана; REJECTED / EXPIRED / FAILED / хугацаа дууссан → `SealCertificateRequestError` (`outcome`, `requestId`,
   `failure`). 429/503 + Retry-After (`ApiError.retryable`) — Retry-After-ийг хүлээгээд үргэлжилнэ; `signal` тасрахад
   `signal.reason`.
-- Алдаа: **409 `SEAL_APPROVER_UNAVAILABLE`** → `SealApproverUnavailableError`; 409 (code-гүй) — байгууллага ACTIVE биш;
+- Алдаа: **409 `SEAL_APPROVER_UNAVAILABLE`** → `SealApproverUnavailableError`; **409 `ORG_NOT_ACTIVE`** →
+  `OrgNotActiveError` (0.45.0; өмнө code-гүй 409) — байгууллага ACTIVE биш;
   **404 `SEAL_REQUEST_NOT_FOUND`** → `SealRequestNotFoundError` (өөр байгууллагын id ч мөн); 403 → `ForbiddenError`
   (`SEAL:<orgEtsi>` эрхгүй); **429 `RATE_LIMITED`** → `ApiError` (`retryAfterMs`) — байгууллагад цагт 5 хүсэлт (PIN2 push
   спамаас хамгаална). Хүсэлтийн төлөвийн poll тооцоонд орохгүй; **503 `SEAL_SERVICE_DISABLED`** →
