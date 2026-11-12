@@ -845,7 +845,7 @@ if (isWordFile(file)) {
 - Удаан CPU (0.21.0): upstream `soffice.js`-ийн `pthreadPoolSize=4` нь удаан компьютер дээр баримт ачаалахад
   гацдаг (deadlock) тул `eid-mongolia-convert-assets` үүнийг 8 болгоно (`manifest.json`-д `"pthreadPoolSize": 8`;
   зөвхөн JS). `soffice.js`-ийн sha256 мэдэгдэж буй 2.7.2-тэй таарахгүй бол хуулалт унана — asset-ийг дахин хуул.
-- Эхний хувиргалтын ~80 с удаашрал (0.44.0): upstream glue LibreOffice-ийн `main()`-ийг LibreOfficeKit-ийн init-тэй
+- Эхний хувиргалтын ~80 с удаашрал (≥ 0.44.1; 0.44.0-д ороогүй): upstream glue LibreOffice-ийн `main()`-ийг LibreOfficeKit-ийн init-тэй
   зэрэг эхлүүлдэг тул pool 8-тай ч хүйтэн асаалтын нэг хэсэгт эхний хувиргалт (эсвэл init) ~80 с удааширдаг байсан.
   `eid-mongolia-convert-assets` одоо `soffice.js`-д `main()`-ийг эхлүүлэхгүй болгоно (`shouldRunNow=false` —
   `Module.noInitialRun`-тай ижил; `manifest.json`-д `"noInitialRun": true`; зөвхөн JS; PDF-ийн текст, байрлал, растер ижил). Pool 8
