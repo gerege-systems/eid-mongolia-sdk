@@ -845,6 +845,14 @@ if (isWordFile(file)) {
 - Удаан CPU (0.21.0): upstream `soffice.js`-ийн `pthreadPoolSize=4` нь удаан компьютер дээр баримт ачаалахад
   гацдаг (deadlock) тул `eid-mongolia-convert-assets` үүнийг 8 болгоно (`manifest.json`-д `"pthreadPoolSize": 8`;
   зөвхөн JS). `soffice.js`-ийн sha256 мэдэгдэж буй 2.7.2-тэй таарахгүй бол хуулалт унана — asset-ийг дахин хуул.
+- Эхний хувиргалтын ~80 с удаашрал (0.44.0): upstream glue LibreOffice-ийн `main()`-ийг LibreOfficeKit-ийн init-тэй
+  зэрэг эхлүүлдэг тул pool 8-тай ч хүйтэн асаалтын нэг хэсэгт эхний хувиргалт (эсвэл init) ~80 с удааширдаг байсан.
+  `eid-mongolia-convert-assets` одоо `soffice.js`-д `main()`-ийг эхлүүлэхгүй болгоно (`shouldRunNow=false` —
+  `Module.noInitialRun`-тай ижил; `manifest.json`-д `"noInitialRun": true`; зөвхөн JS; PDF-ийн текст, байрлал, растер ижил). Pool 8
+  хэвээр — `main()`-гүй ч pool 4 нь ≤ 2 цөмтэй төхөөрөмж дээр хадгалах үед гацдаг. Upstream:
+  [issue #19](https://github.com/matbeedotcom/libreoffice-document-converter/issues/19) (PR #20, #21) — хоёулаа орсон
+  release гармагц хоёр patch хасагдана. SDK шинэчилсний дараа asset-ийг дахин хуул (хавтасны нэр, `rev` солигдоно;
+  `soffice.wasm` / `.data`-ийн агуулга өөрчлөгдөөгүй ч шинэ хавтсаас нэг удаа дахин татагдана).
 - MPL-2.0: `<хувилбар>/NOTICE.txt` (эх код, лицензийн холбоос) asset-уудтай хамт үйлчилгээнд байна — хэрэглэгчийн
   нүүрэнд (тусламж/лиценз хэсэгт) LibreOffice-ийг дурд.
 
