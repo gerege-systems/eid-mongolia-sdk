@@ -9,7 +9,13 @@ import {
   CertChoiceInvalidError,
   RequestInvalidError,
   QrTokenInvalidError,
+  OrgNotActiveError,
   SealApproverUnavailableError,
+  SealCertExpiredError,
+  SealCertNotYetValidError,
+  SealCertRevokedError,
+  SealKeyUnavailableError,
+  SealNotIssuedError,
   SealRequestNotFoundError,
   SealServiceDisabledError,
   NetworkError,
@@ -17,6 +23,23 @@ import {
   maskPath,
   parseRetryAfter,
 } from "./errors.js";
+
+/** Серверийн `code` → `ApiError`-ийн дэд анги (401/403-аас бусад статус). Танигдаагүй code → `ApiError`. */
+const TYPED_API_ERRORS: ReadonlyMap<string, typeof ApiError> = new Map<string, typeof ApiError>([
+  ["NO_SIGNING_CERTIFICATE", NoSigningCertificateError],
+  ["CERT_CHOICE_INVALID", CertChoiceInvalidError],
+  ["REQUEST_INVALID", RequestInvalidError],
+  ["QR_TOKEN_INVALID", QrTokenInvalidError],
+  ["ORG_NOT_ACTIVE", OrgNotActiveError],
+  ["SEAL_NOT_ISSUED", SealNotIssuedError],
+  ["SEAL_CERT_REVOKED", SealCertRevokedError],
+  ["SEAL_KEY_UNAVAILABLE", SealKeyUnavailableError],
+  ["SEAL_CERT_EXPIRED", SealCertExpiredError],
+  ["SEAL_CERT_NOT_YET_VALID", SealCertNotYetValidError],
+  ["SEAL_APPROVER_UNAVAILABLE", SealApproverUnavailableError],
+  ["SEAL_REQUEST_NOT_FOUND", SealRequestNotFoundError],
+  ["SEAL_SERVICE_DISABLED", SealServiceDisabledError],
+]);
 
 export interface HttpConfig {
   /** RP-API-ийн бүтэн суурь URL. Ж: https://rp.eidmongolia.mn */
@@ -128,22 +151,7 @@ export class Http {
         { headers, retryAfterMs },
       );
     }
-    const Typed =
-      code === "NO_SIGNING_CERTIFICATE"
-        ? NoSigningCertificateError
-        : code === "CERT_CHOICE_INVALID"
-          ? CertChoiceInvalidError
-          : code === "REQUEST_INVALID"
-            ? RequestInvalidError
-            : code === "QR_TOKEN_INVALID"
-              ? QrTokenInvalidError
-              : code === "SEAL_APPROVER_UNAVAILABLE"
-                ? SealApproverUnavailableError
-                : code === "SEAL_REQUEST_NOT_FOUND"
-                  ? SealRequestNotFoundError
-                  : code === "SEAL_SERVICE_DISABLED"
-                    ? SealServiceDisabledError
-                    : ApiError;
+    const Typed = (code !== undefined && TYPED_API_ERRORS.get(code)) || ApiError;
     throw new Typed(res.status, text, code, { headers, retryAfterMs });
   }
 }

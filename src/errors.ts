@@ -124,6 +124,75 @@ export class SealApproverUnavailableError extends ApiError {}
  */
 export class SealRequestNotFoundError extends ApiError {}
 
+/**
+ * 409 `ORG_NOT_ACTIVE` (`eid.seal.seal` / `sealPdf`, `eid.seal.requestCertificate`) — байгууллага eID-д `ACTIVE` биш (түр
+ * зогссон / цуцлагдсан). Тамганы гэрчилгээ ба RP-ийн тамганы эрх түр зогсолтод хэвээр — байгууллага сэргэмэгц үргэлжилнэ;
+ * давтахгүй. (`onBehalfOf` урсгалын 403 `ORG_NOT_ACTIVE` нь {@link ForbiddenError}-ийн `code` хэвээр.)
+ */
+export class OrgNotActiveError extends ApiError {}
+
+/**
+ * 409 `SEAL_NOT_ISSUED` (`eid.seal.seal` / `sealPdf`, `eid.seal.getCertificate`) — байгууллагад тамганы гэрчилгээ
+ * олгогдоогүй. `eid.seal.requestCertificate`-ээр хүсэлт үүсгэнэ (байгууллагын ADMIN PIN2-оор батална).
+ */
+export class SealNotIssuedError extends ApiError {}
+
+/**
+ * 409 `SEAL_CERT_REVOKED` (`eid.seal.seal` / `sealPdf`, `eid.seal.getCertificate`) — байгууллагын тамганы гэрчилгээ
+ * цуцлагдсан. Цуцлалтаас өмнө (цагийн тэмдэгтэй) тамгалсан баримт хүчинтэй хэвээр; цааш тамгалахад шинэ гэрчилгээ
+ * (`eid.seal.requestCertificate`) хэрэгтэй.
+ */
+export class SealCertRevokedError extends ApiError {}
+
+/**
+ * 409 `SEAL_KEY_UNAVAILABLE` (`eid.seal.seal` / `sealPdf`) — тамганы түлхүүр eID-ийн одоогийн тохиргоонд алга (серверийн
+ * тал). RP засах зүйлгүй — eID-ийн тусламжид хандана; шаардлагатай бол тамгыг дахин олгуулна.
+ */
+export class SealKeyUnavailableError extends ApiError {}
+
+/**
+ * 409 `SEAL_CERT_EXPIRED` (`eid.seal.seal` / `sealPdf`, `eid.seal.getCertificate`) — тамганы гэрчилгээний хугацаа
+ * дууссан. Шинэ гэрчилгээ (`eid.seal.requestCertificate`) хүснэ.
+ */
+export class SealCertExpiredError extends ApiError {}
+
+/**
+ * 409 `SEAL_CERT_NOT_YET_VALID` (`eid.seal.seal` / `sealPdf`, `eid.seal.getCertificate`) — тамганы гэрчилгээний хүчинтэй
+ * хугацаа эхлээгүй (`notBefore` ирээдүйд).
+ */
+export class SealCertNotYetValidError extends ApiError {}
+
+/**
+ * Тамганы замуудын (`/seal/*`) CA алдааны тогтвортой кодууд — `ApiError.code` (CA 2026-11-12-оос 409 бүр code-той; HTTP
+ * статус хэвээр). 409: ORG_NOT_ACTIVE, SEAL_NOT_ISSUED, SEAL_CERT_REVOKED, SEAL_KEY_UNAVAILABLE, SEAL_CERT_EXPIRED,
+ * SEAL_CERT_NOT_YET_VALID, SEAL_APPROVER_UNAVAILABLE; 404: SEAL_REQUEST_NOT_FOUND; 503: SEAL_SERVICE_DISABLED. Код бүр
+ * өөрийн `ApiError` дэд ангитай. 429 `RATE_LIMITED` ({@link RETRYABLE_ERROR_CODES}) ба 403 ({@link ForbiddenError} — RP-д
+ * `SEAL:<orgEtsi>` эрхгүй / байгууллага зөвшөөрөөгүй) энд орохгүй.
+ */
+export type SealErrorCode =
+  | "ORG_NOT_ACTIVE"
+  | "SEAL_NOT_ISSUED"
+  | "SEAL_CERT_REVOKED"
+  | "SEAL_KEY_UNAVAILABLE"
+  | "SEAL_CERT_EXPIRED"
+  | "SEAL_CERT_NOT_YET_VALID"
+  | "SEAL_APPROVER_UNAVAILABLE"
+  | "SEAL_REQUEST_NOT_FOUND"
+  | "SEAL_SERVICE_DISABLED";
+
+/** {@link SealErrorCode}-ийн бүх утга (runtime шалгалтад). */
+export const SEAL_ERROR_CODES: readonly SealErrorCode[] = [
+  "ORG_NOT_ACTIVE",
+  "SEAL_NOT_ISSUED",
+  "SEAL_CERT_REVOKED",
+  "SEAL_KEY_UNAVAILABLE",
+  "SEAL_CERT_EXPIRED",
+  "SEAL_CERT_NOT_YET_VALID",
+  "SEAL_APPROVER_UNAVAILABLE",
+  "SEAL_REQUEST_NOT_FOUND",
+  "SEAL_SERVICE_DISABLED",
+];
+
 /** Унтраалттай тамганы үйлчилгээ (CA `{"service"}`): `issuance` — гэрчилгээ олголт, `sealing` — тамгалалт. */
 export type SealService = "issuance" | "sealing";
 

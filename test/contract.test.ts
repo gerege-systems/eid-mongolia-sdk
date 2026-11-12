@@ -4,7 +4,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { DEFAULT_BASE_URL, PDF_REGISTER_ERROR_CODES } from "../dist/index.js";
+import { DEFAULT_BASE_URL, PDF_REGISTER_ERROR_CODES, SEAL_ERROR_CODES } from "../dist/index.js";
 import { PDF_SIGNATURE_REGISTER_FIELDS, RP_ROUTES, RP_ROUTES_UNDISCOVERED, SHARE_FORM_FIELDS } from "../src/contract.ts";
 
 const EID_DISCOVERY = "https://rp.eidmongolia.mn/.well-known/eid";
@@ -140,6 +140,22 @@ test("Seal: discovery-ийн seal блок (issuanceEnabled / sealingEnabled / d
   lead("certificate_request", RP_ROUTES.sealCertificateRequestStatus);
   lead("certificate_get", RP_ROUTES.sealCertificate);
   lead("seal", RP_ROUTES.seal);
+
+  // CA 2026-11-12 (!496): тамганы 409 бүр тогтвортой code-той; GET /seal/certificate идэвхтэй гэрчилгээгүй бол 409.
+  // Discovery-ийн тайлбарт нэрлэсэн code бүрийг SDK таних ёстой (SEAL_ERROR_CODES → http.ts-ийн typed алдаа).
+  const codesIn = (key: string) => String(eps[key] ?? "").match(/\b(?:ORG_NOT_ACTIVE|SEAL_[A-Z_]+)\b/g) ?? [];
+  for (const key of ["certificate_issue", "certificate_request", "certificate_get", "seal"]) {
+    for (const c of codesIn(key)) assert.ok((SEAL_ERROR_CODES as readonly string[]).includes(c), `endpoints.seal.${key}: SDK-д танигдаагүй code ${c}`);
+  }
+  for (const c of ["ORG_NOT_ACTIVE", "SEAL_NOT_ISSUED", "SEAL_CERT_REVOKED", "SEAL_KEY_UNAVAILABLE", "SEAL_CERT_EXPIRED", "SEAL_CERT_NOT_YET_VALID", "SEAL_SERVICE_DISABLED"]) {
+    assert.ok(codesIn("seal").includes(c), `endpoints.seal.seal-д ${c} алга`);
+  }
+  for (const c of ["SEAL_NOT_ISSUED", "SEAL_CERT_REVOKED", "SEAL_CERT_EXPIRED", "SEAL_CERT_NOT_YET_VALID"]) {
+    assert.ok(codesIn("certificate_get").includes(c), `endpoints.seal.certificate_get-д ${c} алга`);
+  }
+  for (const c of ["ORG_NOT_ACTIVE", "SEAL_APPROVER_UNAVAILABLE", "SEAL_SERVICE_DISABLED"]) {
+    assert.ok(codesIn("certificate_issue").includes(c), `endpoints.seal.certificate_issue-д ${c} алга`);
+  }
 });
 
 test("TokenCertificate: discovery-ийн tokenCertificate блок TokenCertInfo-тэй ижил (scopeLockedOnRenewal)", async () => {

@@ -78,8 +78,13 @@ export interface SignatureReport {
   chain: string[];
   certificate?: CertInfo;
   civil_id?: string;
-  /** Зурагчийн түлхүүрийн байршил (CA !377): "token" | "phone" | "unknown". */
-  key_medium: "token" | "phone" | "unknown";
+  /**
+   * Зурагчийн түлхүүрийн байршил (CA !377): "token" (USB токен) | "phone" (eID апп) | "server_software" | "server_hsm"
+   * (eID-ийн олгосон байгууллагын тамга: түлхүүр сервер талд — программын түлхүүр / HSM; QSCD гэсэн мэдэгдэл биш; CA
+   * 2026-11-12) | "unknown". Сервер талын хоёр утгыг зөвхөн CA (`POST /v3/validate/pdf`) бүртгэлээсээ тавина — локал
+   * `validatePdf` "phone" | "unknown" л буцаана.
+   */
+  key_medium: "token" | "phone" | "server_software" | "server_hsm" | "unknown";
   claimed_roles?: string[];
   signature_level?: "PAdES-BASELINE-B" | "PAdES-BASELINE-T" | "PAdES-BASELINE-LT";
   ltv?: LTVInfo;

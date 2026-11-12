@@ -10,9 +10,16 @@ import {
   ApiError,
   EidClient,
   ForbiddenError,
+  OrgNotActiveError,
+  SEAL_ERROR_CODES,
   SEAL_REQUEST_FIELDS,
   SealApproverUnavailableError,
+  SealCertExpiredError,
+  SealCertNotYetValidError,
+  SealCertRevokedError,
   SealCertificateRequestError,
+  SealKeyUnavailableError,
+  SealNotIssuedError,
   SealRequestNotFoundError,
   SealServiceDisabledError,
   ValidationError,
@@ -310,6 +317,76 @@ test("seal — бусад 503 хэвээр ApiError (SealServiceDisabledError б
   );
 });
 
+// ── Тогтвортой code-ууд (CA 2026-11-12): тамганы 409 бүр {"error","code"} — статус хэвээр; GET /seal/certificate 409 ──
+
+/** code → ApiError-ийн дэд анги (409). */
+const SEAL_409 = [
+  ["ORG_NOT_ACTIVE", OrgNotActiveError],
+  ["SEAL_NOT_ISSUED", SealNotIssuedError],
+  ["SEAL_CERT_REVOKED", SealCertRevokedError],
+  ["SEAL_KEY_UNAVAILABLE", SealKeyUnavailableError],
+  ["SEAL_CERT_EXPIRED", SealCertExpiredError],
+  ["SEAL_CERT_NOT_YET_VALID", SealCertNotYetValidError],
+] as const;
+const conflict = (code: string) => () => ({ status: 409, body: { error: "тамгалах боломжгүй", code } });
+const is409 = (Cls: (typeof SEAL_409)[number][1], code: string) => (e: unknown) =>
+  e instanceof Cls &&
+  e instanceof ApiError &&
+  e.constructor === Cls &&
+  e.status === 409 &&
+  e.code === code &&
+  !e.retryable &&
+  SEAL_409.every(([, Other]) => Other === Cls || !(e instanceof Other));
+
+test("seal.seal — 409 code бүр өөрийн ApiError дэд анги; давтахгүй", async () => {
+  for (const [code, Cls] of SEAL_409) {
+    const { eid, calls } = client(conflict(code));
+    await assert.rejects(eid.seal.seal(ORG, DTBS), is409(Cls, code), code);
+    assert.equal(calls.length, 1, `${code}: нэг л хүсэлт`);
+    assert.equal(calls[0]!.url, "https://rp.eidmongolia.mn/seal/NTRMN-6235972");
+  }
+});
+
+test("seal.getCertificate — идэвхтэй гэрчилгээгүй бол 409 (SEAL_NOT_ISSUED | SEAL_CERT_REVOKED | SEAL_CERT_EXPIRED | SEAL_CERT_NOT_YET_VALID)", async () => {
+  for (const [code, Cls] of SEAL_409.filter(([c]) => c.startsWith("SEAL_CERT_") || c === "SEAL_NOT_ISSUED")) {
+    const { eid, calls } = client(conflict(code));
+    await assert.rejects(eid.seal.getCertificate(ORG), is409(Cls, code), code);
+    assert.equal(calls[0]!.method, "GET");
+    assert.equal(calls[0]!.url, "https://rp.eidmongolia.mn/seal/certificate/NTRMN-6235972");
+  }
+});
+
+test("seal.requestCertificate — 409 ORG_NOT_ACTIVE → OrgNotActiveError; code-гүй 409 хэвээр ApiError", async () => {
+  await assert.rejects(client(conflict("ORG_NOT_ACTIVE")).eid.seal.requestCertificate(ORG), is409(OrgNotActiveError, "ORG_NOT_ACTIVE"));
+  await assert.rejects(
+    client(() => ({ status: 409, body: { error: "байгууллага ACTIVE биш" } })).eid.seal.requestCertificate(ORG),
+    (e: unknown) => e instanceof ApiError && e.constructor === ApiError && e.code === undefined && SEAL_409.every(([, C]) => !(e instanceof C)),
+  );
+  // Танигдаагүй code — ApiError хэвээр, code дамжина.
+  await assert.rejects(
+    client(conflict("SEAL_SOMETHING_NEW")).eid.seal.seal(ORG, DTBS),
+    (e: unknown) => e instanceof ApiError && e.constructor === ApiError && e.code === "SEAL_SOMETHING_NEW",
+  );
+});
+
+test("seal — 403 (эрхгүй / байгууллага зөвшөөрөөгүй / onBehalfOf ORG_NOT_ACTIVE) хэвээр ForbiddenError", async () => {
+  await assert.rejects(
+    client(() => ({ status: 403, body: { error: "SEAL эрхгүй", code: "PERMISSION_DENIED" } })).eid.seal.seal(ORG, DTBS),
+    (e: unknown) => e instanceof ForbiddenError && e.code === "PERMISSION_DENIED",
+  );
+  await assert.rejects(
+    client(() => ({ status: 403, body: { error: "идэвхгүй", code: "ORG_NOT_ACTIVE" } })).eid.seal.seal(ORG, DTBS),
+    (e: unknown) => e instanceof ForbiddenError && !(e instanceof ApiError) && e.code === "ORG_NOT_ACTIVE",
+  );
+});
+
+test("SEAL_ERROR_CODES — тамганы замуудын тогтвортой code-ууд", () => {
+  assert.deepEqual(
+    [...SEAL_ERROR_CODES].sort(),
+    [...SEAL_409.map(([c]) => c), "SEAL_APPROVER_UNAVAILABLE", "SEAL_REQUEST_NOT_FOUND", "SEAL_SERVICE_DISABLED"].sort(),
+  );
+});
+
 test("seal.waitForCertificate — SEAL_SERVICE_DISABLED: 503 шууд шидэгдэнэ (poll давтахгүй); FAILED + failure", async () => {
   // Retry-After-тай байсан ч хүлээхгүй, дахин асуухгүй.
   const off = client(() => disabled("issuance", { "Retry-After": "1" }));
@@ -411,6 +488,22 @@ test("sealPdf — татгалзалт", async () => {
   const err = new ApiError(429, "{}", "RATE_LIMITED");
   await assert.rejects(pades.sealPdf(sealer({ err }).s, "NTRMN-6235972", input, sealOpts()), (e: unknown) => e === err);
   await assert.rejects(pades.sealPdf(undefined as unknown as pades.PadesSealer, "NTRMN-6235972", input), code("REQUEST_INVALID"));
+});
+
+test("sealPdf — 409 SEAL_CERT_REVOKED: гэрчилгээ татахад SealCertRevokedError, тамгалах хүсэлт явахгүй", async () => {
+  const input = new Uint8Array(readFileSync(new URL("input/quartz-pdf13.pdf", G)));
+  const { eid, calls } = client(conflict("SEAL_CERT_REVOKED"));
+  await assert.rejects(pades.sealPdf(eid.seal, ORG, input, sealOpts()), is409(SealCertRevokedError, "SEAL_CERT_REVOKED"));
+  assert.deepEqual(calls.map((c) => c.method), ["GET"]);
+
+  // Гэрчилгээ татсаны дараа цуцлагдсан: POST /seal 409 — хэвээр дамжина, давтахгүй.
+  const late = client((_url, method) =>
+    method === "GET"
+      ? { body: { orgEtsi: ORG, certificate: b64(SEAL), serialNumber: "88001", certificateLevel: "QUALIFIED" } }
+      : conflict("SEAL_CERT_REVOKED")(),
+  );
+  await assert.rejects(pades.sealPdf(late.eid.seal, ORG, input, sealOpts()), is409(SealCertRevokedError, "SEAL_CERT_REVOKED"));
+  assert.deepEqual(late.calls.map((c) => c.method), ["GET", "POST"]);
 });
 
 test("sealPdf — 503 SEAL_SERVICE_DISABLED: SealServiceDisabledError хэвээр, дахин оролдохгүй", async () => {

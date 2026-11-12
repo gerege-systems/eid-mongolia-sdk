@@ -1,7 +1,11 @@
-// Байгууллагын цахим тамга (e-Seal): байгууллагын HSM дэх түлхүүрээр digest тамгална. Интерактив биш (иргэн, PIN, апп
-// оролцохгүй) — хариу шууд, session-гүй. RP-д тухайн байгууллагын `SEAL:<orgEtsi>` эрх хэрэгтэй (үгүй бол ForbiddenError
-// 403); хэт олон хүсэлтэд 429 → ApiError (`retryable`, `retryAfterMs`). Оператор тамгалалт / гэрчилгээ олголтыг унтраасан
-// үед 503 `SEAL_SERVICE_DISABLED` → SealServiceDisabledError (`service`, давтахгүй).
+// Байгууллагын цахим тамга (e-Seal): eID-ийн серверт хадгалагдах байгууллагын түлхүүрээр digest тамгална. Интерактив биш
+// (иргэн, PIN, апп оролцохгүй) — хариу шууд, session-гүй. RP-д тухайн байгууллагын `SEAL:<orgEtsi>` эрх хэрэгтэй (үгүй бол
+// ForbiddenError 403) — эрхийг байгууллагын улсын бүртгэлээр баталгаажсан ADMIN eID аппаараа PIN2-оор зөвшөөрсний дараа л
+// авна (CA 2026-11-12; хүсэлтийг eID-ийн оператор үүсгэнэ). Хэт олон хүсэлтэд 429 → ApiError (`retryable`,
+// `retryAfterMs`). Оператор тамгалалт / гэрчилгээ олголтыг унтраасан үед 503 `SEAL_SERVICE_DISABLED` →
+// SealServiceDisabledError (`service`, давтахгүй). 409 бүр тогтвортой code-той (SEAL_ERROR_CODES) — код бүр өөрийн ApiError
+// дэд ангитай: OrgNotActiveError, SealNotIssuedError, SealCertRevokedError, SealKeyUnavailableError, SealCertExpiredError,
+// SealCertNotYetValidError, SealApproverUnavailableError.
 //
 // PDF-ийг тамгалах: `@gerege-systems/eid-mongolia-sdk/pades`-ийн `sealPdf(eid.seal, orgEtsi, pdf)` (PAdES-BASELINE-LT,
 // RFC 3161 timestamp заавал).
@@ -179,7 +183,9 @@ export class SealApi {
 
   /**
    * `GET /seal/certificate/{orgEtsi}` — байгууллагын одоогийн (хамгийн сүүлд олгогдсон, идэвхтэй) тамганы гэрчилгээ
-   * (PAdES-ийн signerCert). Шинээр олгохгүй — олголт {@link requestCertificate}. Идэвхтэй cert алга / цуцлагдсан бол 409.
+   * (PAdES-ийн signerCert). Шинээр олгохгүй — олголт {@link requestCertificate}. Идэвхтэй гэрчилгээ алга бол 409 (200 биш,
+   * CA 2026-11-12): {@link SealNotIssuedError} (олгогдоогүй), {@link SealCertRevokedError} (цуцлагдсан), {@link
+   * SealCertExpiredError} / {@link SealCertNotYetValidError} (хугацааны гадна).
    */
   async getCertificate(orgEtsi: string): Promise<SealCertificate> {
     return parseSealCertificate(await this.http.get(routePath(RP_ROUTES.sealCertificate, orgEtsi)), orgEtsi);
@@ -189,7 +195,7 @@ export class SealApi {
    * `POST /seal/certificate/{orgEtsi}` — тамганы гэрчилгээний ХҮСЭЛТ (202, `status: "PENDING"`). Байгууллагын ADMIN
    * төлөөлөгч(ид) eID аппаараа PIN2-оор батална; {@link waitForCertificate} / {@link getCertificateRequest}-ээр асууна.
    * Байгууллагад PENDING хүсэлт байвал CA түүнийг буцаана (шинэ push үгүй). Алдаа: 409 {@link
-   * SealApproverUnavailableError} (идэвхтэй төхөөрөмжтэй ADMIN алга), 409 `ApiError` (байгууллага ACTIVE биш), 403
+   * SealApproverUnavailableError} (идэвхтэй төхөөрөмжтэй ADMIN алга), 409 {@link OrgNotActiveError} (байгууллага ACTIVE биш), 403
    * `ForbiddenError` (`SEAL:<orgEtsi>` эрхгүй), 404 (байгууллага олдсонгүй), 429 `RATE_LIMITED` (байгууллагад 5/цаг;
    * `retryAfterMs`), 503 {@link SealServiceDisabledError} (`service: "issuance"` — оператор гэрчилгээ олголтыг унтраасан;
    * Retry-After-гүй, давтахгүй).
@@ -242,7 +248,10 @@ export class SealApi {
    * SHA-512; digest-ийн урт таарахгүй бол сүлжээнд гарахгүй. Хариуны гарын үсгийг хариуны гэрчилгээгээр digest дээр
    * шалгаж, гэрчилгээ e-Seal ({@link isSealCertificate}) эсэхийг тулгана — эс бөгөөс ValidationError. Гинж/цуцлалтыг
    * `sealPdf` (OCSP/CRL) шалгана. Оператор тамгалалтыг унтраасан үед 503 {@link SealServiceDisabledError} (`service:
-   * "sealing"`; Retry-After-гүй, давтахгүй).
+   * "sealing"`; Retry-After-гүй, давтахгүй). 409: {@link OrgNotActiveError}, {@link SealNotIssuedError}, {@link
+   * SealCertRevokedError}, {@link SealKeyUnavailableError}, {@link SealCertExpiredError}, {@link
+   * SealCertNotYetValidError}; 403 `ForbiddenError` — RP-д `SEAL:<orgEtsi>` эрхгүй (байгууллага зөвшөөрөөгүй / эрх хасагдсан);
+   * 429 `RATE_LIMITED` (RP-д минутад 300; `retryAfterMs`).
    */
   async seal(orgEtsi: string, digest: Uint8Array, hashAlgorithm: HashAlgorithm = "SHA-256"): Promise<SealResult> {
     if (!["SHA-256", "SHA-384", "SHA-512"].includes(hashAlgorithm)) throw new ValidationError(`seal: дэмжигдээгүй hashAlgorithm ${hashAlgorithm}`);
