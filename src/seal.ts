@@ -1,6 +1,7 @@
 // Байгууллагын цахим тамга (e-Seal): байгууллагын HSM дэх түлхүүрээр digest тамгална. Интерактив биш (иргэн, PIN, апп
 // оролцохгүй) — хариу шууд, session-гүй. RP-д тухайн байгууллагын `SEAL:<orgEtsi>` эрх хэрэгтэй (үгүй бол ForbiddenError
-// 403); хэт олон хүсэлтэд 429 → ApiError (`retryable`, `retryAfterMs`).
+// 403); хэт олон хүсэлтэд 429 → ApiError (`retryable`, `retryAfterMs`). Оператор тамгалалт / гэрчилгээ олголтыг унтраасан
+// үед 503 `SEAL_SERVICE_DISABLED` → SealServiceDisabledError (`service`, давтахгүй).
 //
 // PDF-ийг тамгалах: `@gerege-systems/eid-mongolia-sdk/pades`-ийн `sealPdf(eid.seal, orgEtsi, pdf)` (PAdES-BASELINE-LT,
 // RFC 3161 timestamp заавал).
@@ -10,7 +11,7 @@
 // хүртэл асууна.
 
 import { X509Certificate } from "node:crypto";
-import { RP_ROUTES, RP_ROUTES_UNDISCOVERED, SEAL_REQUEST_FIELDS, routePath } from "./contract.js";
+import { RP_ROUTES, SEAL_REQUEST_FIELDS, routePath } from "./contract.js";
 import { hashLen } from "./crypto.js";
 import { ApiError, SealCertificateRequestError, ValidationError } from "./errors.js";
 import type { Http } from "./http.js";
@@ -29,6 +30,7 @@ export interface SealCertificate {
   /** RFC 3339. */
   notBefore: string;
   notAfter: string;
+  /** Гэрчилгээнээс өөрөөс нь (QcSSCD байвал `QSCD`, үгүй бол `QUALIFIED`) — CA-ийн одоогийн түлхүүрийн тохиргооноос биш. */
   certificateLevel: CertificateLevel | string;
   /** Серверийн түүхий JSON. */
   raw: unknown;
@@ -53,7 +55,10 @@ export interface SealCertificateRequest {
   decidedAt?: string;
   /** PIN2 push илгээсэн ADMIN-ийн тоо (шинэ/PENDING хариунд). */
   approvers?: number;
-  /** FAILED/EXPIRED үеийн машин код: `EXPIRED` | `SEAL_ISSUANCE_FAILED` | `PUSH_FAILED`. */
+  /**
+   * FAILED/EXPIRED үеийн машин код: `EXPIRED` | `SEAL_ISSUANCE_FAILED` | `PUSH_FAILED` | `SEAL_SERVICE_DISABLED` (ADMIN
+   * баталсан ч гэрчилгээ олголт унтраалттай байсан — гэрчилгээ гараагүй; олголт асмагц шинэ хүсэлт).
+   */
   failure?: string;
   /** ISSUED үед — {@link SealApi.getCertificate}-тэй ижил хэлбэр. */
   certificate?: SealCertificate;
@@ -84,6 +89,7 @@ export interface SealResult {
   signatureAlgorithm: string;
   /** Тамгалсан гэрчилгээ (DER). */
   certificate: Uint8Array;
+  /** Тамгалсан гэрчилгээнээс өөрөөс нь (QcSSCD байвал `QSCD`, үгүй бол `QUALIFIED`). */
   certificateLevel: CertificateLevel | string;
   /** RFC 3339. */
   sealedAt: string;
@@ -185,7 +191,8 @@ export class SealApi {
    * Байгууллагад PENDING хүсэлт байвал CA түүнийг буцаана (шинэ push үгүй). Алдаа: 409 {@link
    * SealApproverUnavailableError} (идэвхтэй төхөөрөмжтэй ADMIN алга), 409 `ApiError` (байгууллага ACTIVE биш), 403
    * `ForbiddenError` (`SEAL:<orgEtsi>` эрхгүй), 404 (байгууллага олдсонгүй), 429 `RATE_LIMITED` (байгууллагад 5/цаг;
-   * `retryAfterMs`).
+   * `retryAfterMs`), 503 {@link SealServiceDisabledError} (`service: "issuance"` — оператор гэрчилгээ олголтыг унтраасан;
+   * Retry-After-гүй, давтахгүй).
    */
   async requestCertificate(orgEtsi: string): Promise<SealCertificateRequest> {
     return parseSealRequest(await this.http.post(routePath(RP_ROUTES.sealCertificateRequest, orgEtsi), {}), orgEtsi);
@@ -196,7 +203,7 @@ export class SealApi {
    * (эсвэл өөр байгууллагынх) → {@link SealRequestNotFoundError} 404.
    */
   async getCertificateRequest(orgEtsi: string, requestId: string): Promise<SealCertificateRequest> {
-    const raw = await this.http.get(routePath(RP_ROUTES_UNDISCOVERED.sealCertificateRequestStatus, orgEtsi, requestId));
+    const raw = await this.http.get(routePath(RP_ROUTES.sealCertificateRequestStatus, orgEtsi, requestId));
     return parseSealRequest(raw, orgEtsi);
   }
 
@@ -204,7 +211,9 @@ export class SealApi {
    * Хүсэлт ISSUED болтол `intervalMs` тутамд асууж олгогдсон гэрчилгээг буцаана. REJECTED / EXPIRED / FAILED →
    * {@link SealCertificateRequestError} (`outcome`, `failure`; шинэ хүсэлт хэрэгтэй); `timeoutMs` дуусвал `outcome:
    * "TIMEOUT"` (хүсэлт серверт PENDING хэвээр — ижил `requestId`-аар дахин хүлээж болно). Түр алдаа (`ApiError.retryable`:
-   * 429/503 + Retry-After) — Retry-After-ийг хүлээгээд үргэлжилнэ; бусад алдаа шууд шидэгдэнэ.
+   * 429/503 + Retry-After) — Retry-After-ийг хүлээгээд үргэлжилнэ; бусад алдаа шууд шидэгдэнэ ({@link
+   * SealServiceDisabledError} ч мөн — давтахгүй). Хүсэлтийг батлах үед олголт унтраалттай байсан бол `FAILED` +
+   * `failure: "SEAL_SERVICE_DISABLED"`.
    */
   async waitForCertificate(orgEtsi: string, requestId: string, opts: SealWaitOptions = {}): Promise<SealCertificate> {
     const interval = opts.intervalMs !== undefined && opts.intervalMs > 0 ? opts.intervalMs : DEFAULT_SEAL_POLL_INTERVAL_MS;
@@ -232,7 +241,8 @@ export class SealApi {
    * `POST /seal/{orgEtsi}` — digest-ийг байгууллагын тамгаар тамгална. `hashAlgorithm`: SHA-256 (анхдагч) | SHA-384 |
    * SHA-512; digest-ийн урт таарахгүй бол сүлжээнд гарахгүй. Хариуны гарын үсгийг хариуны гэрчилгээгээр digest дээр
    * шалгаж, гэрчилгээ e-Seal ({@link isSealCertificate}) эсэхийг тулгана — эс бөгөөс ValidationError. Гинж/цуцлалтыг
-   * `sealPdf` (OCSP/CRL) шалгана.
+   * `sealPdf` (OCSP/CRL) шалгана. Оператор тамгалалтыг унтраасан үед 503 {@link SealServiceDisabledError} (`service:
+   * "sealing"`; Retry-After-гүй, давтахгүй).
    */
   async seal(orgEtsi: string, digest: Uint8Array, hashAlgorithm: HashAlgorithm = "SHA-256"): Promise<SealResult> {
     if (!["SHA-256", "SHA-384", "SHA-512"].includes(hashAlgorithm)) throw new ValidationError(`seal: дэмжигдээгүй hashAlgorithm ${hashAlgorithm}`);

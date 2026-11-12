@@ -124,13 +124,48 @@ export class SealApproverUnavailableError extends ApiError {}
  */
 export class SealRequestNotFoundError extends ApiError {}
 
+/** Унтраалттай тамганы үйлчилгээ (CA `{"service"}`): `issuance` — гэрчилгээ олголт, `sealing` — тамгалалт. */
+export type SealService = "issuance" | "sealing";
+
+/**
+ * 503 `SEAL_SERVICE_DISABLED` (`eid.seal.requestCertificate` → `service: "issuance"`; `eid.seal.seal` / `sealPdf` →
+ * `service: "sealing"`) — eID-ийн оператор тамганы үйлчилгээг платформ даяар унтраасан. Retry-After-гүй, хэзээ асахыг CA
+ * хэлэхгүй: `retryable` үргэлж `false` — автоматаар давтахгүй, хэрэглэгчид «үйлчилгээ түр унтраалттай» гэж харуулна.
+ * Гэрчилгээ татах (`getCertificate`), хүсэлтийн төлөв (`getCertificateRequest`), шалгалт унтардаггүй. Амьд төлөв:
+ * `/.well-known/eid`-ийн `seal.issuanceEnabled` / `seal.sealingEnabled`.
+ */
+export class SealServiceDisabledError extends ApiError {
+  /** Хариуны биеийн `service`; байхгүй / танигдаагүй утга бол undefined. */
+  readonly service: SealService | undefined;
+  constructor(status: number, body: string, code?: string, init?: HttpErrorInit) {
+    super(status, body, code, init);
+    this.service = sealServiceOf(body);
+  }
+
+  /** Үргэлж `false` — proxy Retry-After нэмсэн ч давтахгүй. */
+  override get retryable(): boolean {
+    return false;
+  }
+}
+
+function sealServiceOf(body: string): SealService | undefined {
+  try {
+    const v = JSON.parse(body) as unknown;
+    const s = v && typeof v === "object" ? (v as Record<string, unknown>).service : undefined;
+    return s === "issuance" || s === "sealing" ? s : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Тамганы гэрчилгээний хүсэлтийн төгсгөлийн (ISSUED биш) төлөв, эсвэл `waitForCertificate`-ийн хугацаа дууссан. */
 export type SealRequestOutcome = "REJECTED" | "EXPIRED" | "FAILED" | "TIMEOUT";
 
 /**
  * `eid.seal.waitForCertificate` — хүсэлт гэрчилгээгүй дууссан: `REJECTED` (ADMIN татгалзсан), `EXPIRED` (батлах хугацаа
- * дууссан), `FAILED` (`failure`: `SEAL_ISSUANCE_FAILED` | `PUSH_FAILED` г.м.) — бүгд шинэ хүсэлт (`requestCertificate`)
- * шаардана; `TIMEOUT` — `timeoutMs` дууссан ч хүсэлт серверт PENDING хэвээр (ижил `requestId`-аар дахин хүлээж болно).
+ * дууссан), `FAILED` (`failure`: `SEAL_ISSUANCE_FAILED` | `PUSH_FAILED` | `SEAL_SERVICE_DISABLED` — батлах үед олголт
+ * унтраалттай байсан, г.м.) — бүгд шинэ хүсэлт (`requestCertificate`) шаардана; `TIMEOUT` — `timeoutMs` дууссан ч хүсэлт
+ * серверт PENDING хэвээр (ижил `requestId`-аар дахин хүлээж болно).
  */
 export class SealCertificateRequestError extends EidError {
   constructor(

@@ -14,6 +14,7 @@ import {
   SealApproverUnavailableError,
   SealCertificateRequestError,
   SealRequestNotFoundError,
+  SealServiceDisabledError,
   ValidationError,
   isSealCertificate,
 } from "../dist/index.js";
@@ -248,6 +249,84 @@ test("seal.requestCertificate — алдаа: 409 SEAL_APPROVER_UNAVAILABLE, 409
   );
 });
 
+// ── Үйлчилгээний унтраалга (CA 2026-11-12): 503 {"error","code":"SEAL_SERVICE_DISABLED","service"} — Retry-After-гүй ──
+
+/** CA `sealServiceDisabled` хариу (бичлэг). */
+const disabled = (service?: unknown, headers?: Record<string, string>) => ({
+  status: 503,
+  body: { error: "үйлчилгээ түр унтраалттай байна", code: "SEAL_SERVICE_DISABLED", ...(service === undefined ? {} : { service }) },
+  ...(headers ? { headers } : {}),
+});
+const isDisabled = (service: string | undefined) => (e: unknown) =>
+  e instanceof SealServiceDisabledError &&
+  e instanceof ApiError &&
+  e.status === 503 &&
+  e.code === "SEAL_SERVICE_DISABLED" &&
+  e.service === service &&
+  e.retryable === false;
+
+test("seal.requestCertificate — 503 SEAL_SERVICE_DISABLED → SealServiceDisabledError (issuance), давтахгүй", async () => {
+  const { eid, calls } = client(() => disabled("issuance"));
+  await assert.rejects(
+    eid.seal.requestCertificate(ORG),
+    (e: unknown) => isDisabled("issuance")(e) && (e as ApiError).retryAfterMs === undefined && /SEAL_SERVICE_DISABLED/.test((e as ApiError).body),
+  );
+  assert.equal(calls.length, 1, "нэг л хүсэлт");
+  assert.equal(calls[0]!.method, "POST");
+  assert.equal(calls[0]!.url, "https://rp.eidmongolia.mn/seal/certificate/NTRMN-6235972");
+});
+
+test("seal.seal — 503 SEAL_SERVICE_DISABLED → SealServiceDisabledError (sealing), давтахгүй", async () => {
+  const { eid, calls } = client(() => disabled("sealing"));
+  await assert.rejects(eid.seal.seal(ORG, DTBS), isDisabled("sealing"));
+  assert.equal(calls.length, 1, "нэг л хүсэлт");
+  assert.equal(calls[0]!.method, "POST");
+  assert.equal(calls[0]!.url, "https://rp.eidmongolia.mn/seal/NTRMN-6235972");
+});
+
+test("SealServiceDisabledError — service алга/танигдаагүй → undefined; Retry-After байсан ч retryable биш", async () => {
+  await assert.rejects(client(() => disabled()).eid.seal.seal(ORG, DTBS), isDisabled(undefined));
+  await assert.rejects(client(() => disabled("other")).eid.seal.seal(ORG, DTBS), isDisabled(undefined));
+  await assert.rejects(client(() => disabled(7)).eid.seal.requestCertificate(ORG), isDisabled(undefined));
+  await assert.rejects(
+    client(() => disabled("sealing", { "Retry-After": "5" })).eid.seal.seal(ORG, DTBS),
+    (e: unknown) => isDisabled("sealing")(e) && (e as ApiError).retryAfterMs === 5000,
+  );
+});
+
+test("seal — бусад 503 хэвээр ApiError (SealServiceDisabledError биш)", async () => {
+  await assert.rejects(
+    client(() => ({ status: 503, body: { error: "түр", code: "STATE_UNAVAILABLE" }, headers: { "Retry-After": "5" } })).eid.seal.seal(ORG, DTBS),
+    (e: unknown) => e instanceof ApiError && !(e instanceof SealServiceDisabledError) && e.status === 503 && e.retryable && e.retryAfterMs === 5000,
+  );
+  await assert.rejects(
+    client(() => ({ status: 503, body: { error: "upstream" } })).eid.seal.requestCertificate(ORG),
+    (e: unknown) => e instanceof ApiError && !(e instanceof SealServiceDisabledError) && e.status === 503 && e.code === undefined && !e.retryable,
+  );
+  // 503 + Retry-After (code-гүй) — retryable хэвээр.
+  await assert.rejects(
+    client(() => ({ status: 503, body: { error: "upstream" }, headers: { "Retry-After": "2" } })).eid.seal.requestCertificate(ORG),
+    (e: unknown) => e instanceof ApiError && !(e instanceof SealServiceDisabledError) && e.retryable && e.retryAfterMs === 2000,
+  );
+});
+
+test("seal.waitForCertificate — SEAL_SERVICE_DISABLED: 503 шууд шидэгдэнэ (poll давтахгүй); FAILED + failure", async () => {
+  // Retry-After-тай байсан ч хүлээхгүй, дахин асуухгүй.
+  const off = client(() => disabled("issuance", { "Retry-After": "1" }));
+  const t0 = Date.now();
+  await assert.rejects(off.eid.seal.waitForCertificate(ORG, RID, { intervalMs: 1 }), isDisabled("issuance"));
+  assert.equal(off.calls.length, 1, "нэг л poll");
+  assert.ok(Date.now() - t0 < 900, "Retry-After хүлээгээгүй");
+
+  // ADMIN баталсан ч олголт унтраалттай → FAILED, failure = SEAL_SERVICE_DISABLED.
+  const { eid, calls } = client(seq([{ body: sealReq("PENDING") }, { body: sealReq("FAILED", { ...DECIDED, failure: "SEAL_SERVICE_DISABLED" }) }]));
+  await assert.rejects(
+    eid.seal.waitForCertificate(ORG, RID, { intervalMs: 1 }),
+    (e: unknown) => e instanceof SealCertificateRequestError && e.outcome === "FAILED" && e.requestId === RID && e.failure === "SEAL_SERVICE_DISABLED",
+  );
+  assert.equal(calls.length, 2);
+});
+
 test("isSealCertificate", () => {
   assert.equal(isSealCertificate(SEAL), true);
   assert.equal(isSealCertificate(CITIZEN), false);
@@ -332,4 +411,24 @@ test("sealPdf — татгалзалт", async () => {
   const err = new ApiError(429, "{}", "RATE_LIMITED");
   await assert.rejects(pades.sealPdf(sealer({ err }).s, "NTRMN-6235972", input, sealOpts()), (e: unknown) => e === err);
   await assert.rejects(pades.sealPdf(undefined as unknown as pades.PadesSealer, "NTRMN-6235972", input), code("REQUEST_INVALID"));
+});
+
+test("sealPdf — 503 SEAL_SERVICE_DISABLED: SealServiceDisabledError хэвээр, дахин оролдохгүй", async () => {
+  const input = new Uint8Array(readFileSync(new URL("input/quartz-pdf13.pdf", G)));
+  // Орлуулсан sealer: яг тэр алдаа, seal нэг л удаа.
+  const err = new SealServiceDisabledError(503, JSON.stringify({ error: "x", code: "SEAL_SERVICE_DISABLED", service: "sealing" }), "SEAL_SERVICE_DISABLED");
+  assert.equal(err.service, "sealing");
+  const fake = sealer({ err });
+  await assert.rejects(pades.sealPdf(fake.s, ORG, input, sealOpts()), (e: unknown) => e === err);
+  assert.equal(fake.calls.length, 1);
+
+  // Жинхэнэ EidClient.seal: гэрчилгээ татна (унтардаггүй) → POST /seal 503 → нэг GET + нэг POST.
+  const { eid, calls } = client((_url, method) =>
+    method === "GET"
+      ? { body: { orgEtsi: ORG, certificate: b64(SEAL), serialNumber: "88001", certificateLevel: "QUALIFIED" } }
+      : disabled("sealing"),
+  );
+  await assert.rejects(pades.sealPdf(eid.seal, ORG, input, sealOpts()), isDisabled("sealing"));
+  assert.deepEqual(calls.map((c) => c.method), ["GET", "POST"]);
+  assert.equal(calls[1]!.url, "https://rp.eidmongolia.mn/seal/NTRMN-6235972");
 });

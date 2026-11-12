@@ -39,6 +39,8 @@ export const RP_ROUTES = {
   sealCertificate: { method: "GET", path: "/seal/certificate/{orgEtsi}" },
   /** Тамганы гэрчилгээний хүсэлт (CA !483): 202 `dto.SealCertificateRequestResponse` (PENDING, ADMIN PIN2-оор батална). */
   sealCertificateRequest: { method: "POST", path: "/seal/certificate/{orgEtsi}" },
+  /** Тамганы гэрчилгээний хүсэлтийн төлөв (CA !483, ORG_ONBOARDING §4.3) — ISSUED үед `certificate`-тэй. */
+  sealCertificateRequestStatus: { method: "GET", path: "/seal/certificate/{orgEtsi}/requests/{requestId}" },
   /** Байгууллагын тамга (CA `dto.SealRequest` `{digest, hashType}` → `dto.SealResponse`). */
   seal: { method: "POST", path: "/seal/{orgEtsi}" },
 } as const satisfies Record<string, RpRoute>;
@@ -47,10 +49,7 @@ export const RP_ROUTES = {
  * CA-ийн гэрээнд (код + docs) байгаа ч live `/.well-known/eid`-д хараахан жагсаагдаагүй замууд. Гэрээний тест эдгээрийг
  * WARN болгоно (fail биш); discovery-д нэмэгдмэгц {@link RP_ROUTES} руу шилжүүлнэ.
  */
-export const RP_ROUTES_UNDISCOVERED = {
-  /** Тамганы гэрчилгээний хүсэлтийн төлөв (CA !483, ORG_ONBOARDING §4.3) — ISSUED үед `certificate`-тэй. */
-  sealCertificateRequestStatus: { method: "GET", path: "/seal/certificate/{orgEtsi}/requests/{requestId}" },
-} as const satisfies Record<string, RpRoute>;
+export const RP_ROUTES_UNDISCOVERED = {} as const satisfies Record<string, RpRoute>;
 
 /**
  * `POST /pdf/signatures`-ийн биеийн талбарууд — CA `server/internal/dto/pdf.go` `PDFSignatureRegisterRequest`-ийн JSON

@@ -185,6 +185,7 @@ export {
   QrTokenInvalidError,
   SealApproverUnavailableError,
   SealRequestNotFoundError,
+  SealServiceDisabledError,
   SealCertificateRequestError,
   NetworkError,
   SessionFailedError,
@@ -200,6 +201,7 @@ export {
   type PdfRegisterErrorCode,
   type RetryableErrorCode,
   type SealRequestOutcome,
+  type SealService,
   type HttpErrorInit,
 } from "./errors.js";
 export { DEFAULT_SIGN_SESSION_TTL_MS, sessionExpiry, startExpiry, parseExpiresAt } from "./types.js";
