@@ -1,4 +1,13 @@
 # Changelog
+## 0.44.0 — 2026-11-12
+
+### Added — тамганы үйлчилгээ унтраалттай: `SealServiceDisabledError` (503 `SEAL_SERVICE_DISABLED`)
+
+- **Юу:** `SealServiceDisabledError` (`ApiError`-ийн дэд анги) + `SealService` төрөл (`"issuance" | "sealing"`): `eid.seal.requestCertificate` (`service: "issuance"`), `eid.seal.seal` / `sealPdf` (`service: "sealing"`) нь CA-ийн `503 {"error","code":"SEAL_SERVICE_DISABLED","service"}` хариуг энэ алдаагаар шиднэ; `service` хариуны биеэс (алга / танигдаагүй бол `undefined`), `retryable` үргэлж `false` — `waitForCertificate`, `sealPdf` давтахгүй, шууд шиднэ. Бусад 503 (`STATE_UNAVAILABLE` + Retry-After г.м.) хэвээр `ApiError`. Хүсэлтийн `failure`-д `SEAL_SERVICE_DISABLED` (ADMIN баталсан ч олголт унтраалттай → `FAILED`) баримтжсан. `sealCertificateRequestStatus` зам `RP_ROUTES_UNDISCOVERED`-оос `RP_ROUTES` руу шилжсэн (`RP_ROUTES_UNDISCOVERED` одоо хоосон). `certificateLevel`-ийн тайлбар: гэрчилгээнээс өөрөөс нь (QcSSCD → `QSCD`, үгүй бол `QUALIFIED`).
+- **Яагаад:** CA 2026-11-12 — оператор тамганы гэрчилгээ олголт ба тамгалалтыг платформ даяар тус тусад нь унтраах унтраалгатай болсон (Retry-After-гүй 503); discovery-д `seal: {issuanceEnabled, sealingEnabled, disabledCode}` блок нэмэгдсэн. Live discovery `endpoints.seal.certificate_request`-ийг 2026-11-09-өөс зарладаг.
+- **Хаана:** `src/errors.ts`, `src/http.ts`, `src/index.ts`, `src/contract.ts`, `src/seal.ts`, `src/pades.ts` (зөвхөн JSDoc); тест `test/seal.test.ts` (бичлэгт хариу: хоёр зам, `service`, давтахгүй, бусад 503, `FAILED` + `failure`, `sealPdf`), `test/sdk.test.ts` (замын жагсаалт), `test/contract.test.ts` (discovery `seal` блок + `endpoints.seal.*`); README §3i.
+- **Шалгасан:** GitHub Actions CI (`npm run lint`, `npm test`, `npm run test:contract` — live discovery-ийн `seal` блок, CA прод-д 2026-11-12); локалд ажиллуулаагүй.
+
 ## 0.43.0 — 2026-11-09
 
 ### Added — тамганы гэрчилгээ олгуулах: `requestCertificate` / `getCertificateRequest` / `waitForCertificate`
