@@ -17,6 +17,10 @@
 // pthread-ийн MEMFS syscall нь LO worker руу sync proxy, worker нь pthread хүлээж хаагдсан); 5+ ажиллана. Hash эсвэл
 // солилт таарахгүй бол build унана (patch-гүй asset гацаж болзошгүй).
 //
+// soffice.js: LibreOffice-ийн C main()-ийг эхлүүлэхгүй (MAIN_PATCH, ЗААВАЛ): pool 8-тай ч хүйтэн асаалтын ихэнхэд эхний
+// хувиргалт ~80 с удааширдаг байсан (main() ба LibreOfficeKit-ийн init нэг түгжээний төлөө уралдана). POOL_PATCH-тай
+// хамт л бүрэн: main()-гүй ч pool 4 нь ≤ 2 цөмд documentSaveAs-д гацна. Доорх MAIN_PATCH-ийн тайлбарыг үз.
+//
 // soffice.data-г багасгана (DATA_TRIM, ЗААВАЛ): Writer → PDF-д хэрэггүй фонт, Calc/Impress/Draw/Math-ийн UI тохиргоо,
 // дүрсний сан (99.7 MB → 43.2 MB). Emscripten file_packager-ийн хүснэгт (`loadPackage({files:[…],remote_package_size:N`)
 // soffice.js дотор — offset-уудыг дахин бичнэ. soffice.data эсвэл soffice.js-ийн sha256 мэдэгдэж буй 2.7.2 биш бол
@@ -137,14 +141,45 @@ const POOL_PATCH = {
 };
 const PTHREAD_POOL_SIZE = 8;
 
-function pool(buf) {
+/**
+ * soffice.js — LibreOffice-ийн C main()-ийг эхлүүлэхгүй (POOL_PATCH-тай нэг файл, нэг sha256).
+ *
+ * Яагаад: wasm нь PROXY_TO_PTHREAD-тэй, upstream 2.7.2 `Module.noInitialRun`-ыг тавьдаггүй тул Emscripten-ий `run()`
+ * LibreOffice-ийн main()-ийг pthread дээр эхлүүлж, тэр нь хувиргагчийн дууддаг LibreOfficeKit-ийн init-тэй зэрэг явна.
+ * main() түгжээг аваад фонт скан хийх зуур эхний LOK дуудлага (init эсвэл documentLoad) ~80 с «мөлхөнө»; pool дүүрвэл
+ * бүр гацна. LOK өөрөө бүрэн init хийдэг — main() (splash, AutoRecovery, event loop) толгойгүй хувиргалтад хэрэггүй.
+ * Хэмжилт (2026-11-12, 8 vCPU Xeon Gold 6138, Chromium, хүйтэн асаалт). Upstream asset, WorkerBrowserConverter:
+ * pool 8 + main() — 10-аас 7 нь ~80 с; pool 8 + main()-гүй — 10/10 ~4 с; pool 4 + main()-гүй — ≤ 2 цөмд
+ * documentSaveAs-д гацна (тиймээс POOL_PATCH хэвээр). Энэ скриптийн гаралт + wordToPdf: өмнө нь 5-аас 4 нь ~65 с
+ * (1 CPU-д 5/5 ~75 с), MAIN_PATCH-тай 5/5 ~3.5 с (1 CPU-д ~13 с). PDF-ийн хуудас, текст, байрлал, растер ижил
+ * (шингээсэн фонтын объектын дараалал л асаалт бүрд өөр байж болно — main()-тай ч мөн).
+ *
+ * Яагаад glue-д (worker-ийн `self.Module`-д `noInitialRun` нэмэхийн оронд): soffice.js-ийг ачаалдаг бүх зам (worker,
+ * worker-гүй BrowserConverter) хамрагдана; soffice.js аль хэдийн sha256-аар бэхлэгдсэн, таарахгүй бол build унадаг
+ * (worker-ийн QUIET_PATCH таарахгүй бол чимээгүй алгасдаг). `shouldRunNow` зөвхөн `if(shouldRunNow)callMain(args)`-д
+ * хэрэглэгдэнэ — `Module.noInitialRun = true`-тай ижил үр дүн.
+ *
+ * Upstream: https://github.com/matbeedotcom/libreoffice-document-converter/issues/19, PR #21 (noInitialRun),
+ * PR #20 (pthreadPoolSize 8, тохируулж болдог).
+ * Хасах нөхцөл: #20 ба #21 ХОЁУЛАА орсон upstream release гармагц — POOL_PATCH, MAIN_PATCH хоёрыг хасаж, peerDependency
+ * хувилбар ба sha256-уудыг (DATA_TRIM, QUIET_PATCH) шинэ build дээр дахин бэхэл. Зөвхөн нэг нь орсон бол нөгөөг үлдээ.
+ */
+const MAIN_PATCH = {
+  from: 'var shouldRunNow=true;if(Module["noInitialRun"])shouldRunNow=false;run();',
+  to: 'var shouldRunNow=false;if(Module["noInitialRun"])shouldRunNow=false;run();',
+};
+
+/** POOL_PATCH + MAIN_PATCH: мэдэгдэж буй upstream soffice.js → солилт тус бүр яг нэг удаа; эс бөгөөс build унана. */
+function patchGlue(buf) {
   const got = sha256(buf);
-  const s = buf.toString("utf8");
-  if (got !== POOL_PATCH.sha256 || s.split(POOL_PATCH.from).length !== 2) {
-    console.error(`${PKG}/wasm/${POOL_PATCH.file} sha256 ${got} — мэдэгдэж буй ${POOL_PATCH.sha256} биш (эсвэл «${POOL_PATCH.from}» яг нэг биш); pthreadPoolSize patch-гүйгээр хувиргалт удаан CPU дээр гацдаг тул зогсов — SDK-ийн peerDependency хувилбарыг суулга`);
+  let s = buf.toString("utf8");
+  const patches = [POOL_PATCH, MAIN_PATCH];
+  if (got !== POOL_PATCH.sha256 || patches.some((p) => s.split(p.from).length !== 2)) {
+    console.error(`${PKG}/wasm/${POOL_PATCH.file} sha256 ${got} — мэдэгдэж буй ${POOL_PATCH.sha256} биш (эсвэл «${POOL_PATCH.from}», «${MAIN_PATCH.from}» тус бүр яг нэг биш); pthreadPoolSize / main() (shouldRunNow) patch-гүйгээр хувиргалт удаан CPU дээр гацдаг, удааширдаг тул зогсов — SDK-ийн peerDependency хувилбарыг суулга`);
     process.exit(1);
   }
-  return Buffer.from(s.replace(POOL_PATCH.from, () => POOL_PATCH.to), "utf8");
+  for (const p of patches) s = s.replace(p.from, () => p.to);
+  return Buffer.from(s, "utf8");
 }
 
 /**
@@ -155,7 +190,7 @@ function pool(buf) {
  *   - registry/*.xcd бүгд — жишээ нь math.xcd-гүй бол .docx-ийн OMML томьёо PDF-ээс алга болдог.
  */
 const DATA_TRIM = {
-  // @matbee/libreoffice-converter@2.7.2 wasm/soffice.data ба wasm/soffice.js (POOL_PATCH-аас өмнө)
+  // @matbee/libreoffice-converter@2.7.2 wasm/soffice.data ба wasm/soffice.js (POOL_PATCH, MAIN_PATCH-аас өмнө)
   data: "8f4e98aa67e108e161cecc7906d7ac0dd3941ef9347f999c3b9dbc049f165020",
   js: "b67acadcb30171e6ec018754fcbe5b527443a3ef1c84f352e29aecff6d210e43",
   drop: [
@@ -220,7 +255,7 @@ function dropped(name, seen) {
 
 /**
  * Upstream soffice.js (patch-аас өмнө — `upstream`) ба soffice.data-г sha256-аар шалгаж хасах төлөвлөгөө гаргана;
- * хүснэгтийг `patched` (POOL_PATCH-тай) js-д дахин бичнэ — гаралт нэг soffice.js.
+ * хүснэгтийг `patched` (POOL_PATCH, MAIN_PATCH-тай) js-д дахин бичнэ — гаралт нэг soffice.js.
  */
 async function trimPlan(upstream, patched, dataPath) {
   const [gotJs, gotData] = [sha256(upstream), await sha256File(dataPath)];
@@ -263,10 +298,10 @@ function writeTrimmed(from, to, keep) {
   }
 }
 
-// soffice.js (POOL_PATCH + DATA_TRIM-ийн хүснэгт) — хавтасны нэрийг агуулгаар нь тогтооно: soffice.js/.data-г
+// soffice.js (POOL_PATCH + MAIN_PATCH + DATA_TRIM-ийн хүснэгт) — хавтасны нэрийг агуулгаар нь тогтооно: soffice.js/.data-г
 // `<хувилбар>/` дор immutable кэшлэдэг тул агуулга солигдвол (хуучин хүснэгт + шинэ data) URL ч солигдох ёстой.
 const upstreamJs = readFileSync(join(src, FILES["soffice.js"]));
-const plan = await trimPlan(upstreamJs, pool(upstreamJs), join(src, FILES["soffice.data"]));
+const plan = await trimPlan(upstreamJs, patchGlue(upstreamJs), join(src, FILES["soffice.data"]));
 const sofficeJs = plan.js;
 const dir = `${version}-${sha256(sofficeJs).slice(0, 12)}/`;
 mkdirSync(join(out, dir), { recursive: true });
@@ -307,7 +342,7 @@ writeFileSync(join(out, dir, "NOTICE.txt"),
   `${PKG}@${version} (${license}) — LibreOffice WebAssembly build.\n` +
   `Source: https://github.com/matbeedotcom/libreoffice-document-converter (tag v${version}); LibreOffice: https://www.libreoffice.org/about-us/source-code/\n` +
   `License text: https://www.mozilla.org/MPL/2.0/\n`);
-writeFileSync(join(out, "manifest.json"), JSON.stringify({ format: 1, converter: PKG, version, dir, rev: rev.digest("hex").slice(0, 16), patched, pthreadPoolSize: PTHREAD_POOL_SIZE, files }, null, 2) + "\n");
+writeFileSync(join(out, "manifest.json"), JSON.stringify({ format: 1, converter: PKG, version, dir, rev: rev.digest("hex").slice(0, 16), patched, pthreadPoolSize: PTHREAD_POOL_SIZE, noInitialRun: true, files }, null, 2) + "\n");
 const sum = (k) => Object.values(files).reduce((s, f) => s + f[k], 0);
 console.log(`${PKG}@${version} → ${join(out, dir)} (${(sum("bytes") / 1e6).toFixed(1)} MB, gzip ${(sum("gzip") / 1e6).toFixed(1)} MB, br ${(sum("br") / 1e6).toFixed(1)} MB — шахалт ${Math.round((Date.now() - t0) / 1000)} с)` +
   `, soffice.data ${plan.keep.length}/${plan.files} файл${patched ? ", лог чимээгүй (patch)" : ""}`);

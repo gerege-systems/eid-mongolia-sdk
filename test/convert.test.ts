@@ -2,7 +2,7 @@
 // хуудас/фонт/хэмжээний анхааруулга. Жинхэнэ LibreOffice-ийг scripts/convert-e2e.mjs (Chromium) шалгана.
 import { test, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync, copyFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync, copyFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
@@ -355,15 +355,22 @@ test("convert-assets: мэдэгдэж буй upstream → patch («+ALL» үг�
     assert.equal(r.m.files["browser.worker.global.js"].bytes, r.worker.length);
     assert.notEqual(r.worker.length, readFileSync(join(UPSTREAM, "dist/browser.worker.global.js")).length);
     assert.match(r.stdout, /лог чимээгүй/);
-    // pthreadPoolSize 4 → 8 (удаан CPU-ийн documentLoad deadlock) ба soffice.data-ийн хүснэгт — өөр солилтгүй.
+    // pthreadPoolSize 4 → 8 (удаан CPU-ийн deadlock), main()-ийг эхлүүлэхгүй (shouldRunNow=false — ~80 с удаашрал) ба
+    // soffice.data-ийн хүснэгт — өөр солилтгүй.
     const so = r.soffice.toString("utf8");
     const up = readFileSync(join(UPSTREAM, "wasm/soffice.js"), "utf8");
     assert.equal(so.split("var pthreadPoolSize=8;").length, 2);
     assert.ok(!so.includes("var pthreadPoolSize=4;"));
     const t = packageTable(so);
     const u = packageTable(up);
-    assert.equal(t.rest, u.rest.replace("var pthreadPoolSize=4;", "var pthreadPoolSize=8;"));
+    assert.equal(so.split("var shouldRunNow=false;").length, 2);
+    assert.ok(!so.includes("var shouldRunNow=true;"));
+    // shouldRunNow-ийн ганц хэрэглээ — main()-ийг дуудах эсэх.
+    assert.equal(so.split("shouldRunNow").length, 4);
+    assert.equal(so.split("if(shouldRunNow)callMain(args)").length, 2);
+    assert.equal(t.rest, u.rest.replace("var pthreadPoolSize=4;", "var pthreadPoolSize=8;").replace("var shouldRunNow=true;", "var shouldRunNow=false;"));
     assert.equal(r.m.pthreadPoolSize, 8);
+    assert.equal(r.m.noInitialRun, true);
     assert.equal(r.m.files["soffice.js"].bytes, r.soffice.length);
     // Хавтас = хувилбар + soffice.js hash (хүснэгт солигдвол immutable URL ч солигдоно).
     assert.equal(r.m.dir, `2.7.2-${sha(r.soffice).slice(0, 12)}/`);
@@ -432,7 +439,7 @@ test("convert-assets: upstream hash таарахгүй → patch-гүй хуул
   }
 });
 
-test("convert-assets: soffice.js hash таарахгүй → pthreadPoolSize patch-гүй тул build унана (exit 1)", () => {
+test("convert-assets: soffice.js hash таарахгүй → pthreadPoolSize / main() patch-гүй тул build унана (exit 1)", () => {
   const proj = mkdtempSync(join(tmpdir(), "eid-assets-proj-"));
   try {
     const pkg = join(proj, "node_modules/@matbee/libreoffice-converter");
@@ -441,11 +448,13 @@ test("convert-assets: soffice.js hash таарахгүй → pthreadPoolSize pat
     writeFileSync(join(proj, "package.json"), "{}");
     writeFileSync(join(pkg, "package.json"), JSON.stringify({ name: "@matbee/libreoffice-converter", version: "2.7.2", license: "MPL-2.0" }));
     for (const f of ["soffice.wasm", "soffice.data", "soffice.worker.js"]) writeFileSync(join(pkg, "wasm", f), "x");
-    writeFileSync(join(pkg, "wasm/soffice.js"), "var pthreadPoolSize=4;//өөр build");
+    writeFileSync(join(pkg, "wasm/soffice.js"), 'var pthreadPoolSize=4;var shouldRunNow=true;if(Module["noInitialRun"])shouldRunNow=false;run();//өөр build');
     copyFileSync(join(UPSTREAM, "dist/browser.worker.global.js"), join(pkg, "dist/browser.worker.global.js"));
     const r = spawnSync(process.execPath, [BIN, join(proj, "out")], { cwd: proj, encoding: "utf8", env: binEnv });
     assert.equal(r.status, 1);
     assert.match(r.stderr, /pthreadPoolSize/);
+    assert.match(r.stderr, /shouldRunNow/);
+    assert.ok(!existsSync(join(proj, "out", "manifest.json")));
   } finally {
     rmSync(proj, { recursive: true, force: true });
   }
