@@ -1026,7 +1026,8 @@ writeFileSync("sealed.pdf", done.pdf); // PAdES-BASELINE-LT, байгуулла�
 - Алдаа: `PadesError` `SIGNER_INVALID` (cert e-Seal биш, эсвэл тамгалах хооронд cert солигдсон — дахин оролд),
   `SIGNATURE_INVALID`, `TSA_UNAVAILABLE` / `LTV_UNAVAILABLE` (`retryable`); RP-API-ийн алдаа хэвээр: **429
   `RATE_LIMITED`** → `ApiError` (`retryable`, `retryAfterMs`-ийн дараа дахин), 404 — байгууллага олдсонгүй, 409 —
-  байгууллага ACTIVE биш эсвэл идэвхтэй тамганы гэрчилгээ алга/цуцлагдсан.
+  байгууллага ACTIVE биш эсвэл идэвхтэй тамганы гэрчилгээ алга/цуцлагдсан, **503 `SEAL_SERVICE_DISABLED`** →
+  `SealServiceDisabledError` (доорх «Үйлчилгээ унтраалттай»).
 - `eid.seal.getCertificate(org)` нь байгууллагын **одоогийн (олгогдсон, идэвхтэй)** тамганы гэрчилгээг буцаана — шинээр
   олгохгүй; идэвхтэй cert алга / цуцлагдсан бол 409. Go: `pades.SealPDF`; .NET: `EidPades.SealAsync`.
 
@@ -1057,7 +1058,7 @@ try {
   "PENDING"`, `createdAt`, `expiresAt`, `approvers`). Байгууллагад PENDING хүсэлт байвал CA түүнийг буцаана (шинэ push үгүй).
 - `getCertificateRequest(org, requestId)` — `GET /seal/certificate/{orgEtsi}/requests/{requestId}`: `status` = `PENDING` |
   `APPROVED` (олгогдож байна) | `ISSUED` (`certificate` бөглөгдсөн) | `REJECTED` | `EXPIRED` | `FAILED` (`failure`:
-  `SEAL_ISSUANCE_FAILED` | `PUSH_FAILED`). Нэг удаагийн шалгалт (өөрийн UI poll).
+  `SEAL_ISSUANCE_FAILED` | `PUSH_FAILED` | `SEAL_SERVICE_DISABLED`). Нэг удаагийн шалгалт (өөрийн UI poll).
 - `waitForCertificate(org, requestId, { timeoutMs = 15 мин, intervalMs = 3 с, signal })` — ISSUED болтол асууж гэрчилгээг
   буцаана; REJECTED / EXPIRED / FAILED / хугацаа дууссан → `SealCertificateRequestError` (`outcome`, `requestId`,
   `failure`). 429/503 + Retry-After (`ApiError.retryable`) — Retry-After-ийг хүлээгээд үргэлжилнэ; `signal` тасрахад
@@ -1065,7 +1066,43 @@ try {
 - Алдаа: **409 `SEAL_APPROVER_UNAVAILABLE`** → `SealApproverUnavailableError`; 409 (code-гүй) — байгууллага ACTIVE биш;
   **404 `SEAL_REQUEST_NOT_FOUND`** → `SealRequestNotFoundError` (өөр байгууллагын id ч мөн); 403 → `ForbiddenError`
   (`SEAL:<orgEtsi>` эрхгүй); **429 `RATE_LIMITED`** → `ApiError` (`retryAfterMs`) — байгууллагад цагт 5 хүсэлт (PIN2 push
-  спамаас хамгаална). Хүсэлтийн төлөвийн poll тооцоонд орохгүй.
+  спамаас хамгаална). Хүсэлтийн төлөвийн poll тооцоонд орохгүй; **503 `SEAL_SERVICE_DISABLED`** →
+  `SealServiceDisabledError` (доорх).
+
+### Үйлчилгээ унтраалттай — `SealServiceDisabledError` (503 `SEAL_SERVICE_DISABLED`)
+
+eID-ийн оператор тамганы хоёр үйлчилгээг платформ даяар тус тусад нь унтрааж чадна. Унтраалттай үед CA
+`503 {"error", "code": "SEAL_SERVICE_DISABLED", "service"}` буцаана (Retry-After-гүй) — SDK `SealServiceDisabledError`
+(`ApiError`-ийн дэд анги; `status: 503`, `code`, `service`) шиднэ:
+
+| `service` | Хаана | Утга |
+|---|---|---|
+| `"issuance"` | `eid.seal.requestCertificate` | гэрчилгээ олголт унтраалттай — шинэ хүсэлт авахгүй |
+| `"sealing"` | `eid.seal.seal`, `sealPdf` | тамгалалт унтраалттай |
+
+```ts
+import { SealServiceDisabledError } from "@gerege-systems/eid-mongolia-sdk";
+
+try {
+  await sealPdf(eid.seal, "NTRMN-6235972", pdfBytes);
+} catch (e) {
+  if (e instanceof SealServiceDisabledError) {
+    // e.service: "issuance" | "sealing" | undefined — хэрэглэгчид «үйлчилгээ түр унтраалттай»; автоматаар давтахгүй
+  } else throw e;
+}
+```
+
+- `retryable` үргэлж `false`: хэзээ асахыг CA хэлэхгүй тул SDK (`sealPdf`, `waitForCertificate`) давтахгүй, шууд шиднэ.
+  Бусад 503 (ж: `STATE_UNAVAILABLE` + Retry-After) хэвээр `ApiError` (`retryable`).
+- Хүлээгдэж буй хүсэлтийг ADMIN баталсан ч олголт унтраалттай бол хүсэлт `FAILED`, `failure: "SEAL_SERVICE_DISABLED"`
+  (гэрчилгээ гарахгүй) — `waitForCertificate` → `SealCertificateRequestError` (`outcome: "FAILED"`, `failure`); олголт
+  асмагц шинэ хүсэлт үүсгэнэ.
+- Хэзээ ч унтардаггүй: `getCertificate`, `getCertificateRequest` / `waitForCertificate`-ийн poll, шалгалт
+  (`validatePdf`, CA `/v3/validate/*`), OCSP/CRL — өмнө тамгалсан баримт хүчинтэй хэвээр.
+- Амьд төлөв: [`/.well-known/eid`](https://rp.eidmongolia.mn/.well-known/eid)-ийн `seal` блок — `{issuanceEnabled,
+  sealingEnabled, disabledCode: "SEAL_SERVICE_DISABLED"}`.
+- `certificateLevel` (`getCertificate`, `seal`-ийн хариу) нь гэрчилгээнээс өөрөөс нь: QcSSCD байвал `QSCD`, үгүй бол
+  `QUALIFIED`.
 
 ## 4. QR ба ижил төхөөрөмж — device link v3
 

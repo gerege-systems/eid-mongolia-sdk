@@ -119,6 +119,29 @@ test("Share: endpoints.share-ийн талбарууд ба discovery-ийн sha
   assert.ok(Array.isArray(s.formats) && s.formats.length > 0, "share.formats");
 });
 
+// CA 2026-11-12 (тамганы үйлчилгээний унтраалга)-аас discovery-д заавал — алга бол унана.
+test("Seal: discovery-ийн seal блок (issuanceEnabled / sealingEnabled / disabledCode) ба endpoints.seal.*", async () => {
+  const d = await getJson(EID_DISCOVERY);
+  const base = String(d.rp_api_base);
+  const s = d.seal as Record<string, unknown> | undefined;
+  assert.ok(s && typeof s === "object", "discovery-д seal блок алга");
+  assert.equal(typeof s.issuanceEnabled, "boolean", "seal.issuanceEnabled");
+  assert.equal(typeof s.sealingEnabled, "boolean", "seal.sealingEnabled");
+  // SDK http.ts энэ code-оор SealServiceDisabledError руу буулгана.
+  assert.equal(s.disabledCode, "SEAL_SERVICE_DISABLED", "seal.disabledCode");
+
+  const eps = (((d.endpoints ?? {}) as Record<string, unknown>).seal ?? {}) as Record<string, unknown>;
+  const lead = (key: string, r: { method: string; path: string }) => {
+    const desc = String(eps[key] ?? "");
+    const want = `${r.method} ${base}${r.path}`;
+    assert.ok(desc === want || desc.startsWith(want + " "), `endpoints.seal.${key}: ${desc}`);
+  };
+  lead("certificate_issue", RP_ROUTES.sealCertificateRequest);
+  lead("certificate_request", RP_ROUTES.sealCertificateRequestStatus);
+  lead("certificate_get", RP_ROUTES.sealCertificate);
+  lead("seal", RP_ROUTES.seal);
+});
+
 test("TokenCertificate: discovery-ийн tokenCertificate блок TokenCertInfo-тэй ижил (scopeLockedOnRenewal)", async () => {
   const d = await getJson(EID_DISCOVERY);
   const base = String(d.rp_api_base);

@@ -34,7 +34,7 @@ import {
   parseSubject,
 } from "../dist/index.js";
 import * as browser from "../dist/browser.js";
-import { RP_ROUTES, routePath } from "../src/contract.ts";
+import { RP_ROUTES, RP_ROUTES_UNDISCOVERED, routePath } from "../src/contract.ts";
 
 // Smart-ID RP-API v3 docs (signature_protocols.html)-ийн албан ёсны вектор — сервер, iOS,
 // Android, TS дөрвүүлээ ЭНЭ digest-ийг гаргах ёстой.
@@ -758,4 +758,15 @@ test("routePath — {param}-ийг encodeURIComponent-аар бөглөнө; т�
   assert.equal(routePath(RP_ROUTES.authDeviceLinkAnonymous), "/authentication/device-link/anonymous");
   assert.throws(() => routePath(RP_ROUTES.session));
   assert.throws(() => routePath(RP_ROUTES.session, "x", "y"));
+});
+
+test("contract — sealCertificateRequestStatus нь RP_ROUTES-д (discovery endpoints.seal.certificate_request), UNDISCOVERED-д үгүй", () => {
+  assert.deepEqual(RP_ROUTES.sealCertificateRequestStatus, { method: "GET", path: "/seal/certificate/{orgEtsi}/requests/{requestId}" });
+  assert.equal(routePath(RP_ROUTES.sealCertificateRequestStatus, "NTRMN-6235972", "r 1"), "/seal/certificate/NTRMN-6235972/requests/r%201");
+  assert.equal("sealCertificateRequestStatus" in RP_ROUTES_UNDISCOVERED, false);
+  // Нэг зам хоёр жагсаалтад зэрэг байхгүй.
+  const discovered = new Set(Object.values(RP_ROUTES).map((r) => `${r.method} ${r.path}`));
+  for (const r of Object.values(RP_ROUTES_UNDISCOVERED) as { method: string; path: string }[]) {
+    assert.equal(discovered.has(`${r.method} ${r.path}`), false, `${r.method} ${r.path}`);
+  }
 });

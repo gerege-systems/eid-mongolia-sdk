@@ -11,6 +11,7 @@ import {
   QrTokenInvalidError,
   SealApproverUnavailableError,
   SealRequestNotFoundError,
+  SealServiceDisabledError,
   NetworkError,
   ResponseTooLargeError,
   maskPath,
@@ -140,7 +141,9 @@ export class Http {
                 ? SealApproverUnavailableError
                 : code === "SEAL_REQUEST_NOT_FOUND"
                   ? SealRequestNotFoundError
-                  : ApiError;
+                  : code === "SEAL_SERVICE_DISABLED"
+                    ? SealServiceDisabledError
+                    : ApiError;
     throw new Typed(res.status, text, code, { headers, retryAfterMs });
   }
 }
