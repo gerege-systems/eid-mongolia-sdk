@@ -38,7 +38,10 @@ const fixture = (k: string): Uint8Array => {
   return read(new URL(hit[0]![1], G));
 };
 const LEAF_OCSP_DER = read(new URL(M.http[`${LEAF_OCSP} 3d432940c5514c0a`]!, G));
-const CA04_OCSP_DER = fixture(CA04_OCSP);
+// golden v11-д CA-ийн OCSP хүсэлт алга тул 04-ийн (ocsp.pki.test/03) хариуг тамганы бичлэгээс (ижил тестийн PKI, ижил хүсэлт).
+const SEAL = new URL("./fixtures/pades/seal/", import.meta.url);
+const SEAL_HTTP = (JSON.parse(readFileSync(new URL("manifest.json", SEAL), "utf8")) as { http: Record<string, string> }).http;
+const CA04_OCSP_DER = read(new URL(SEAL_HTTP[`${CA04_OCSP} 368c2ac3ced09cd6`]!, SEAL));
 const CRLS = ["04", "03", "02", "root"].map((n) => fixture(`GET http://crl.pki.test/${n}.crl`));
 
 // src/pades-ийн дотоод модулийг нэг ESM болгон (NodeNext .js импорттой) багцлана.
