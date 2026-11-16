@@ -139,6 +139,11 @@ export interface PersonSummary {
   firstName?: string;
   lastName?: string;
   familyName?: string;
+  /**
+   * Иргэний харьяалал — гурван том латин үсэг (ISO 3166-1 alpha-3, ICAO 9303; жишээ `MNG`). Гэрчилгээний `country`-той
+   * ӨӨР ойлголт. Мэдэгдэхгүй бол алга. SDK утгыг шалгахгүй.
+   */
+  nationality?: string;
   certificates: CertCounts;
   activity: ActivityCounts;
   devicesActive: number;
