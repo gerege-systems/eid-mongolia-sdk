@@ -254,10 +254,11 @@ export interface DSSMaterial {
 }
 
 /**
- * Хүчинтэй CRL-тэй гэрчилгээний OCSP-г цуглуулалт эхэлснээс хойш хамгийн ихдээ ийм хугацаа хүлээгээд цуцална (LT-г CRL
- * хангана). Хүчинтэй CRL-гүй бол OCSP нь Fetcher-ийн энгийн timeout-ыг бүтнээр авна (fail-closed хэвээр). TCP хүлээж аваад
- * хариулдаггүй responder (үндэсний CA-ийн гэрчилгээнүүдийн AIA OCSP) гэрчилгээ бүрт 10 с идэхгүй. .NET SDK 0.15.0
- * `Ltv.OcspGrace`-тэй ижил.
+ * Хүчинтэй CRL-тэй CA гэрчилгээний (гинжийн эхнийхээс бусад) OCSP-г цуглуулалт эхэлснээс хойш хамгийн ихдээ ийм хугацаа
+ * хүлээгээд цуцална (LT-г CRL хангана). Гинжийн эхний (навч: иргэн, TSA) гэрчилгээний OCSP ба хүчинтэй CRL-гүй гэрчилгээний
+ * OCSP нь Fetcher-ийн энгийн timeout-ыг бүтнээр авна — шинэхэн цуцлагдсан навч дахин гаргаагүй CRL-ээр гарахгүй,
+ * «timestamp-аас хожуу» дүрэм бүтэн цонхтой, fail-closed хэвээр. TCP хүлээж аваад хариулдаггүй responder (үндэсний CA-ийн
+ * гэрчилгээнүүдийн AIA OCSP) гэрчилгээ бүрт 10 с идэхгүй.
  */
 export const OCSP_GRACE_MS = 3000;
 
@@ -307,7 +308,8 @@ interface LTVJob {
   issuer: Certificate | undefined;
   /** Олгогч хайхад гарсан алдаа — гинжийн дарааллаар (энэ гэрчилгээний ээлжинд) шидэгдэнэ. */
   issuerErr?: { e: unknown };
-  /** Гинжийн эхний (навч) гэрчилгээ: OCSP thisUpdate нь timestamp-аас хожуу байх ёстой. */
+  /** Гинжийн эхний (навч) гэрчилгээ: OCSP thisUpdate нь timestamp-аас хожуу байх ёстой; OCSP-д цонх үгүй. */
+  leaf: boolean;
   fresh: PreciseTime | undefined;
   ctl?: AbortController;
   ocsp?: Promise<OCSPOutcome>;
@@ -317,7 +319,8 @@ interface LTVJob {
 /**
  * Go collectLTV: chains (leaf → … root-оос өмнөх) бүрийн гэрчилгээнд OCSP (AIA) ба CRL (CDP). Бүх гэрчилгээний OCSP-г
  * зэрэг эхлүүлж, CRL-ийг гинжийн дарааллаар татна; үр дүнг гинжийн дарааллаар DSS-д нэмнэ — DSS-ийн агуулга/дараалал ба
- * алдааны давуу эрэмбэ дараалсан хувилбартай ижил. Хүчинтэй CRL-тэй гэрчилгээний OCSP — {@link OCSP_GRACE_MS} хүртэл.
+ * алдааны давуу эрэмбэ дараалсан хувилбартай ижил. Хүчинтэй CRL-тэй CA гэрчилгээний OCSP — {@link OCSP_GRACE_MS} хүртэл
+ * (навчных — бүрэн timeout).
  */
 export async function collectLTV(
   f: Fetcher,
@@ -345,7 +348,7 @@ export async function collectLTV(
       const k = toHex(c.raw);
       if (seen.has(k) || isRoot(c)) continue;
       seen.add(k);
-      const j: LTVJob = { c, issuer: undefined, fresh: i === 0 ? fresh : undefined, settled: false };
+      const j: LTVJob = { c, issuer: undefined, leaf: i === 0, fresh: i === 0 ? fresh : undefined, settled: false };
       try {
         j.issuer = await issuerOf(c);
       } catch (e) {
@@ -390,8 +393,8 @@ export async function collectLTV(
         if (e instanceof CertificateRevokedError) throw e;
         crlErr = { e };
       }
-      if (ok && !crlErr && !j.settled) {
-        // Хүчинтэй CRL бий — OCSP-г цонхны үлдсэн хугацаанд л хүлээнэ (цонх дууссан бол одоо цуцална).
+      if (ok && !crlErr && !j.leaf && !j.settled) {
+        // CA гэрчилгээ, хүчинтэй CRL бий — OCSP-г цонхны үлдсэн хугацаанд л хүлээнэ (цонх дууссан бол одоо цуцална).
         const left = OCSP_GRACE_MS - (clock.now() - started);
         if (left > 0) cancels.push(clock.after(left, () => ctl.abort()));
         else ctl.abort();

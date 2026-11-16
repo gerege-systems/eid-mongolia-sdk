@@ -1,6 +1,6 @@
-// complete-ийн DSS цуглуулалтын OCSP цонх (src/pades/ltv.ts collectLTV, .NET SDK 0.15.0 Ltv.OcspGrace-ийн порт): гинжийн
-// OCSP-ууд зэрэг; хүчинтэй CRL-тэй гэрчилгээний OCSP цуглуулалт эхэлснээс хойш OCSP_GRACE_MS л. Golden тестийн PKI/HTTP
-// fixture дээр, src-ийг esbuild-ээр багцалж хуурамч цаг (GraceClock)-аар — бодит секундын хүлээлтгүй.
+// complete-ийн DSS цуглуулалтын OCSP цонх (src/pades/ltv.ts collectLTV): гинжийн OCSP-ууд зэрэг; хүчинтэй CRL-тэй CA
+// гэрчилгээний (гинжийн эхнийхээс бусад) OCSP цуглуулалт эхэлснээс хойш OCSP_GRACE_MS л, навчных — бүрэн timeout. Golden
+// тестийн PKI/HTTP fixture дээр, src-ийг esbuild-ээр багцалж хуурамч цаг (GraceClock)-аар — бодит секундын хүлээлтгүй.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash, X509Certificate } from "node:crypto";
@@ -160,13 +160,14 @@ async function until(cond: () => boolean, what: string): Promise<void> {
 
 async function setup(freshShiftMs = -1000) {
   const L = await load();
-  const chain = ["citizen", "04", "03", "02"].map((n) => L.parseCertificate(pem(n)));
+  const cert = (n: string) => L.parseCertificate(pem(n));
+  const chain = ["citizen", "04", "03", "02"].map(cert);
   const roots = [L.parseCertificate(pem("root"))];
   // timestamp = иргэний OCSP-ийн thisUpdate − 1 с (healthy) — навчны «timestamp-аас хожуу» дүрэм биелнэ.
   const tu = (await L.parseOCSP(LEAF_OCSP_DER, L.intValue(chain[0]!.serial), undefined)).thisUpdate;
   const fresh = { date: new Date(tu.date.getTime() + freshShiftMs), nanos: tu.nanos };
-  const run = (fetchFn: unknown, clock: ReturnType<typeof fakeClock>, signal?: AbortSignal) =>
-    L.collectLTV(new L.Fetcher(fetchFn, false, signal), new Date(M.now), fresh, roots, [chain], clock);
+  const run = (fetchFn: unknown, clock: ReturnType<typeof fakeClock>, signal?: AbortSignal, order?: string[]) =>
+    L.collectLTV(new L.Fetcher(fetchFn, false, signal), new Date(M.now), fresh, roots, [order ? order.map(cert) : chain], clock);
   return { L, chain, run };
 }
 
@@ -186,55 +187,73 @@ test("LTV: эрүүл гинж — DSS-ийн агуулга/дараалал д
   assert.equal(clock.timers.length, 0);
 });
 
-test("LTV: хариугүй иргэний OCSP + хүчинтэй CRL → цонх (OCSP_GRACE_MS) дуусахад цуцлаад CRL-ээр", async () => {
+test("LTV: хариугүй CA (04) OCSP + хүчинтэй CRL → цонх (OCSP_GRACE_MS) дуусахад цуцлаад CRL-ээр", async () => {
   const { L, run } = await setup();
   const clock = fakeClock();
-  const f = fakeFetch({ [LEAF_OCSP]: "hang" });
+  const f = fakeFetch({ [CA04_OCSP]: "hang" });
   const p = run(f.fn, clock);
   await until(() => clock.timers.length === 1, "цонхны таймер");
-  // 04-ийн (эрүүл) OCSP зэрэг эхэлсэн — дуусах хугацаа өгнө (цонх дуусахад хариугүй OCSP цуцлагдана).
-  await new Promise((r) => setTimeout(r, 100));
   assert.equal(L.OCSP_GRACE_MS, 3000);
   assert.equal(clock.timers[0]!.at, L.OCSP_GRACE_MS);
   clock.advanceTo(L.OCSP_GRACE_MS);
   const d = await p;
-  assert.deepEqual(d.ocsps, [CA04_OCSP_DER]);
+  assert.deepEqual(d.ocsps, [LEAF_OCSP_DER]);
   assert.deepEqual(d.crls, CRLS);
-  assert.ok(f.signalsOf(LEAF_OCSP).every((s) => s.aborted));
+  assert.ok(f.signalsOf(CA04_OCSP).every((s) => s.aborted));
+  assert.ok(f.signalsOf(LEAF_OCSP).every((s) => !s.aborted));
   assert.equal(clock.t, L.OCSP_GRACE_MS);
 });
 
-test("LTV: хоёр хариугүй OCSP → нийт НЭГ цонх (цуглуулалт эхэлснээс)", async () => {
+// Цонх гинжийн байрлалаар (эхнийхээс бусад). Fixture PKI-д OCSP-тэй CA ганц (04) тул гинжийг root талаас нь өгч OCSP-тэй
+// хоёр гэрчилгээг (04, иргэн) эхний байрлалаас хойш байрлуулна.
+test("LTV: хоёр хариугүй CA OCSP + хүчинтэй CRL → нийт НЭГ цонх (цуглуулалт эхэлснээс)", async () => {
   const { L, run } = await setup();
   const clock = fakeClock();
   const f = fakeFetch({ [LEAF_OCSP]: "hang", [CA04_OCSP]: "hang" });
-  const p = run(f.fn, clock);
+  const p = run(f.fn, clock, undefined, ["02", "03", "04", "citizen"]);
   await until(() => clock.timers.length === 1, "цонхны таймер");
   assert.equal(clock.timers[0]!.at, L.OCSP_GRACE_MS);
-  // Хоёр OCSP зэрэг явж байна (дараалсан хувилбарт 04-ийнх иргэнийхийг хүлээнэ).
-  await until(() => f.signalsOf(CA04_OCSP).length === 1, "04-ийн OCSP зэрэг");
+  // Хоёр OCSP зэрэг явж байна (дараалсан хувилбарт иргэнийх 04-ийнхийг хүлээнэ).
+  await until(() => f.signalsOf(LEAF_OCSP).length === 1, "иргэний OCSP зэрэг");
   assert.equal(clock.t, 0);
   clock.advanceTo(L.OCSP_GRACE_MS);
   const d = await p;
   assert.deepEqual(d.ocsps, []);
-  assert.deepEqual(d.crls, CRLS);
-  assert.equal(clock.afterCalls, 1, "04-ийн OCSP-д дахин цонх өгсөн");
+  assert.deepEqual(d.crls, [...CRLS].reverse());
+  assert.equal(clock.afterCalls, 1, "хоёр дахь OCSP-д дахин цонх өгсөн");
   assert.equal(clock.t, L.OCSP_GRACE_MS);
   assert.ok([...f.signalsOf(LEAF_OCSP), ...f.signalsOf(CA04_OCSP)].every((s) => s.aborted));
 });
 
-test("LTV: цонх дотор ирсэн удаан OCSP — OCSP ба CRL хоёулаа DSS-д", async () => {
+test("LTV: цонх дотор ирсэн удаан CA OCSP — OCSP ба CRL хоёулаа DSS-д", async () => {
+  const { run } = await setup();
+  const clock = fakeClock();
+  const slow = deferred();
+  const f = fakeFetch({ [CA04_OCSP]: slow.behaviour });
+  const p = run(f.fn, clock);
+  await until(() => clock.timers.length === 1, "цонхны таймер");
+  clock.advanceTo(2999);
+  slow.resolve(CA04_OCSP_DER);
+  const d = await p;
+  assert.deepEqual(d.ocsps, [LEAF_OCSP_DER, CA04_OCSP_DER]);
+  assert.deepEqual(d.crls, CRLS);
+});
+
+test("LTV: навчны удаан OCSP (> цонх), хүчинтэй CRL-тэй → цонхгүй, хүлээгээд OCSP ба CRL хоёулаа DSS-д", async () => {
   const { run } = await setup();
   const clock = fakeClock();
   const slow = deferred();
   const f = fakeFetch({ [LEAF_OCSP]: slow.behaviour });
   const p = run(f.fn, clock);
-  await until(() => clock.timers.length === 1, "цонхны таймер");
-  clock.advanceTo(2999);
+  await until(() => f.log.some((x) => x.key === LEAF_CRL), "04 CRL");
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(clock.afterCalls, 0, "навчны OCSP-д цонх өгсөн");
+  clock.advanceTo(60_000);
   slow.resolve(LEAF_OCSP_DER);
   const d = await p;
   assert.deepEqual(d.ocsps, [LEAF_OCSP_DER, CA04_OCSP_DER]);
   assert.deepEqual(d.crls, CRLS);
+  assert.ok(f.signalsOf(LEAF_OCSP).every((s) => !s.aborted));
 });
 
 test("LTV: удаан боловч эрүүл OCSP, хүчинтэй CRL-гүй → цонхгүй, бүрэн хүлээнэ", async () => {
@@ -254,16 +273,31 @@ test("LTV: удаан боловч эрүүл OCSP, хүчинтэй CRL-гүй 
   assert.ok(f.signalsOf(LEAF_OCSP).every((s) => !s.aborted));
 });
 
-test("LTV: цонх дотор ирсэн «revoked» OCSP — хатуу алдаа (CRL хүчинтэй байсан ч)", async () => {
+test("LTV: навчны «revoked» OCSP цонхноос хойш ирсэн ч — хатуу алдаа (CRL хүчинтэй байсан ч)", async () => {
   const { L, run } = await setup();
   const clock = fakeClock();
   const slow = deferred();
   const f = fakeFetch({ [LEAF_OCSP]: slow.behaviour, [CA04_OCSP]: "hang" });
   const p = run(f.fn, clock);
-  await until(() => clock.timers.length === 1, "цонхны таймер");
+  await until(() => f.log.some((x) => x.key === LEAF_CRL), "04 CRL");
+  await new Promise((r) => setTimeout(r, 20));
+  clock.advanceTo(60_000);
   slow.resolve(read(new URL("http/online-revoked-0.der", V)));
   await assert.rejects(p, (e: unknown) => e instanceof L.CertificateRevokedError);
   assert.ok(f.signalsOf(CA04_OCSP).every((s) => s.aborted), "үлдсэн OCSP цуцлагдаагүй");
+});
+
+test("LTV: CA байрлалын цонх дотор ирсэн «revoked» OCSP — хатуу алдаа (CRL хүчинтэй байсан ч)", async () => {
+  const { L, run } = await setup();
+  const clock = fakeClock();
+  const slow = deferred();
+  const f = fakeFetch({ [LEAF_OCSP]: slow.behaviour });
+  const p = run(f.fn, clock, undefined, ["02", "03", "04", "citizen"]);
+  await until(() => f.log.some((x) => x.key === LEAF_CRL) && clock.timers.length > 0, "цонхны таймер");
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(clock.t, 0);
+  slow.resolve(read(new URL("http/online-revoked-0.der", V)));
+  await assert.rejects(p, (e: unknown) => e instanceof L.CertificateRevokedError);
 });
 
 for (const [name, b] of [
