@@ -1,4 +1,23 @@
 # Changelog
+## 0.46.1 — 2026-11-16
+
+### Fixed — `complete`: CA гэрчилгээний OCSP responder-ийг хүчинтэй CRL байхад асуухгүй (хариугүй responder ~20 с саатуулахаа больсон)
+
+- **Юу:** PAdES LTV (DSS) цуглуулалт гэрчилгээний үүргээр: гинжийн эхний (навч: иргэн, TSA) гэрчилгээ — эхлээд OCSP
+  (энгийн timeout, «timestamp-аас хожуу» дүрэм, retry хэвээр), дараа нь CRL (хоёулаа хүчинтэй бол хоёулаа DSS-д — өмнөхтэй
+  ижил); CA гэрчилгээ (бусад бүх) — эхлээд CRL (ижил шалгалт, ижил толин хуулбар), хүчинтэй CRL авсан бол OCSP хүсэлт
+  илгээхгүй, алга бол л OCSP (энгийн timeout). Хост нэр кодлоогүй — зөвхөн гинжийн байрлал. Fail-closed, OCSP/CRL-ийн
+  «revoked» хатуу алдаа, шалгалтын код, `signal`-ын цуцлалт хэвээр. **DSS өөрчлөгдөнө:** CA гэрчилгээнд зөвхөн CRL (өмнө нь
+  OCSP + CRL) — conformance fixture-ийг Go reference `pades-golden-v11` (d5a68ae)-тай синк хийсэн (`GO_SDK_COMMIT`;
+  DSS-ийн /OCSPs 3 → 2, хоёр дахь гарын үсгийн 14 тохиолдол шинэ TSA fixture-тэй, validate-ийн 4 тохиолдолд TSA serial;
+  `PROFILE_VERSION` хэвээр `pades-client/1`); тамганы fixture-ийг Go `SealPDF`-ээр дахин бичсэн.
+- **Яагаад:** eID гинжийн үндэсний CA-ийн хоёр гэрчилгээний AIA OCSP responder холболт хүлээж аваад хариулдаггүй —
+  гарын үсэг зурах бүр CRL руу шилжихээс өмнө 2 × 10 с хүлээдэг байв (2026-11-16-нд продакшнд оношилсон). Шаардлагагүй
+  үед CA-ийн OCSP руу огт хандахгүй (бүх SDK-д ижил дүрэм).
+- **Хаана:** `src/pades/ltv.ts` (`collectLTV`); тест `test/pades-ltv-order.test.ts`; README §LTV retry. `validatePdf`
+  (`evaluate.ts`) өөрчлөгдөөгүй: онлайн цуцлалтыг зөвхөн eID-ийн 04/05-ийн гэрчилгээнд асуудаг.
+- **Шалгасан:** GitHub Actions CI — локалд ажиллуулаагүй.
+
 ## 0.46.0 — 2026-11-16
 
 ### Added — `person.nationality` (session) ба `PersonSummary.nationality`

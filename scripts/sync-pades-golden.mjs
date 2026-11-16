@@ -16,8 +16,8 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const GO_SDK_REPO = "https://github.com/gerege-systems/eid-mongolia-sdk-go";
-// Go #41 (golden v9: prepare verifyPagePosition — PAGE_SPEC §8a, PLACEMENT_SPEC §1b; v0.15.0).
-export const GO_SDK_COMMIT = "9e76888016596e9d9c22199f49749690d37f2d6b";
+// Go #61 (tag pades-golden-v11: LTV — навч OCSP → CRL, CA CRL → (хүчинтэй CRL алга бол л) OCSP; DSS-ээс 04-ийн OCSP хасагдсан).
+export const GO_SDK_COMMIT = "d5a68ae90582609e3aea8ae8afe4dc0b6bf8093d";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const check = process.argv.includes("--check");

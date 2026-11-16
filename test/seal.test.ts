@@ -1,6 +1,8 @@
 // Байгууллагын цахим тамга: client.seal (CA dto.SealRequest / SealResponse / SealCertificateResponse) ба pades.sealPdf.
 // fixtures/pades/seal — Go reference (eid-mongolia-sdk-go v0.24.0 `pades.SealPDF`, golden PKI) бичсэн: тамганы cert (04-өөс,
-// KeyUsage = зөвхөн nonRepudiation), DTBS дээрх ECDSA гарын үсэг, TSA/OCSP/CRL хариу, Go-ийн гаралтын sha256.
+// KeyUsage = зөвхөн nonRepudiation), DTBS дээрх ECDSA гарын үсэг, TSA/OCSP/CRL хариу, Go-ийн гаралтын sha256. outSha256 —
+// Go d5a68ae (pades-golden-v11, CA-ийн OCSP хүсэлтгүй) `SealPDF`-ийн дахин бичлэг; `ocsp.pki.test/03` (http/08.der) нь
+// түүнээс хойш хүсэгддэггүй ч test/pades-ltv-order.test.ts-ийн CA OCSP fallback-д хэрэглэгдэнэ.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash, X509Certificate } from "node:crypto";

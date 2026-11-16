@@ -253,8 +253,14 @@ export interface DSSMaterial {
   crls: Uint8Array[];
 }
 
-/** Go collectLTV: chains (leaf → … root-оос өмнөх) бүрийн гэрчилгээнд OCSP (AIA) ба CRL (CDP). */
-async function collectLTV(f: Fetcher, now: Date, fresh: PreciseTime, roots: Certificate[], chains: Certificate[][]): Promise<DSSMaterial> {
+/**
+ * Go collectLTV: chains (leaf → … root-оос өмнөх) бүрийн гэрчилгээнд OCSP (AIA) ба CRL (CDP), гэрчилгээний үүргээр:
+ * - гинжийн эхний (навч: иргэн, TSA) гэрчилгээ — OCSP эхэлж (бүрэн timeout, «timestamp-аас хожуу» дүрэм), дараа нь CRL
+ *   (хоёулаа хүчинтэй бол хоёулаа DSS-д);
+ * - CA гэрчилгээ (эхнийхээс бусад) — CRL эхэлж; хүчинтэй CRL байвал OCSP хүсэлт ИЛГЭЭХГҮЙ, үгүй бол OCSP (бүрэн timeout).
+ * Хариугүй CA OCSP responder гарын үсгийг саатуулахгүй. Үр дүн гинжийн дарааллаар.
+ */
+export async function collectLTV(f: Fetcher, now: Date, fresh: PreciseTime, roots: Certificate[], chains: Certificate[][]): Promise<DSSMaterial> {
   const d: DSSMaterial = { certs: [], ocsps: [], crls: [] };
   const addTo = (list: Uint8Array[], der: Uint8Array): void => {
     if (!list.some((b) => equal(b, der))) list.push(der);
@@ -278,28 +284,35 @@ async function collectLTV(f: Fetcher, now: Date, fresh: PreciseTime, roots: Cert
       let ok = false;
       let freshErr: NotFresh | undefined;
       const fr = i === 0 ? fresh : undefined;
-      for (const u of c.ocspServers) {
-        try {
-          const [der, resp] = await fetchOCSP(f, u, c, issuer, now, fr);
-          addTo(d.ocsps, der);
-          if (resp.certificate && !equal(resp.certificate.raw, issuer.raw)) addTo(d.certs, resp.certificate.raw);
-          ok = true;
-          break;
-        } catch (e) {
-          if (e instanceof CertificateRevokedError) throw e;
-          if (e instanceof NotFresh) freshErr = e;
-        }
-      }
-      for (const u of c.crlDPs) {
-        let der: Uint8Array;
-        try {
-          der = await f.do("GET", u, "");
-        } catch {
+      // Навч: OCSP → CRL. CA: CRL → (хүчинтэй CRL алга бол л) OCSP.
+      for (const step of i === 0 ? (["ocsp", "crl"] as const) : (["crl", "ocsp"] as const)) {
+        if (step === "ocsp") {
+          if (i !== 0 && ok) continue;
+          for (const u of c.ocspServers) {
+            try {
+              const [der, resp] = await fetchOCSP(f, u, c, issuer, now, fr);
+              addTo(d.ocsps, der);
+              if (resp.certificate && !equal(resp.certificate.raw, issuer.raw)) addTo(d.certs, resp.certificate.raw);
+              ok = true;
+              break;
+            } catch (e) {
+              if (e instanceof CertificateRevokedError) throw e;
+              if (e instanceof NotFresh) freshErr = e;
+            }
+          }
           continue;
         }
-        if (await crlCovers(der, c, issuer, now)) {
-          addTo(d.crls, der);
-          ok = true;
+        for (const u of c.crlDPs) {
+          let der: Uint8Array;
+          try {
+            der = await f.do("GET", u, "");
+          } catch {
+            continue;
+          }
+          if (await crlCovers(der, c, issuer, now)) {
+            addTo(d.crls, der);
+            ok = true;
+          }
         }
       }
       if (!ok) {
