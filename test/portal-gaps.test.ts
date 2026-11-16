@@ -162,6 +162,26 @@ test("parseSessionResult — person блок, tokenCertificate, raw; personMatch
   assert.equal(empty.tokenCertificate, null);
 });
 
+test("parseSessionResult — person.nationality дамжина; алга / string биш бол үл тооно", () => {
+  const withIt = parseSessionResult({ state: "COMPLETE", person: { civilId: "1", nationality: "MNG" } });
+  assert.deepEqual(withIt.person, { civilId: "1", nationality: "MNG" });
+  assert.equal(parseSessionResult({ state: "COMPLETE", person: { nationality: "XXA" } }).person?.nationality, "XXA");
+  const absent = parseSessionResult({ state: "COMPLETE", person: { civilId: "1" } });
+  assert.equal(absent.person?.nationality, undefined);
+  assert.deepEqual(absent.person, { civilId: "1" });
+  for (const bad of [123, true, null, {}, ["MNG"], ""]) {
+    const r = parseSessionResult({ state: "COMPLETE", person: { civilId: "1", nationality: bad } });
+    assert.deepEqual(r.person, { civilId: "1" });
+  }
+});
+
+test("person.summary — nationality (байвал / алга)", async () => {
+  const { eid } = client({ body: { personEtsi: "PNOMN-1", nationality: "DEU", activity: {} } });
+  assert.equal((await eid.person.summary("PNOMN-1")).nationality, "DEU");
+  const { eid: eid2 } = client({ body: { personEtsi: "PNOMN-1", activity: {} } });
+  assert.equal((await eid2.person.summary("PNOMN-1")).nationality, undefined);
+});
+
 test("session.poll — person + raw", async () => {
   const { eid } = client({ body: { state: "COMPLETE", result: { endResult: "OK" }, person: { civilId: "1", geID: 42 } } });
   const r = await eid.session.poll("s1", 1000);

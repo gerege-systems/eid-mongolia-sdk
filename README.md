@@ -340,7 +340,8 @@ Session-ий `person` блок (CA бүртгэлээс — гэрчилгээн
 ```ts
 import { personMatchesCertificate } from "@gerege-systems/eid-mongolia-sdk";
 if (personMatchesCertificate(result.person, who.parsedSubject)) {
-  const { firstName, lastName /* ЭЦГИЙН нэр */, familyName /* УРГИЙН овог */, civilId, regNo, birthDate, gender, geID } = result.person!;
+  const { firstName, lastName /* ЭЦГИЙН нэр */, familyName /* УРГИЙН овог */, civilId, regNo, birthDate, gender, geID,
+    nationality /* «MNG» — ISO 3166-1 alpha-3, гэрчилгээний country биш; мэдэгдэхгүй бол undefined */ } = result.person!;
 }
 // result.raw — серверийн түүхий JSON (SDK задлаагүй талбарт)
 ```

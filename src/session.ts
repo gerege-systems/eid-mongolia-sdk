@@ -68,7 +68,7 @@ export function parseSessionResult(raw: unknown): SessionResult {
 }
 
 const PERSON_STRINGS = [
-  "firstName", "lastName", "familyName", "firstNameEn", "lastNameEn", "civilId", "regNo", "birthDate", "gender",
+  "firstName", "lastName", "familyName", "firstNameEn", "lastNameEn", "civilId", "regNo", "birthDate", "gender", "nationality",
 ] as const;
 
 /** `person` блок. Байхгүй / хоосон бол null. */

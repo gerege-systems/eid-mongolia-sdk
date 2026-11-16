@@ -264,6 +264,12 @@ export interface PersonBlock {
   birthDate?: string;
   /** M | F | X. */
   gender?: string;
+  /**
+   * Иргэний харьяалал — гурван том латин үсэг (ISO 3166-1 alpha-3, жуулчлалын бичиг баримт / ICAO 9303-ын код),
+   * жишээ нь `MNG`, `USA`, `DEU`; ICAO-ийн тусгай код (`XXA` г.м.) тохиолдож болно. Гэрчилгээний `country`-той
+   * ӨӨР ойлголт. Мэдэгдэхгүй бол алга (undefined). SDK утгыг шалгаж/хувиргахгүй.
+   */
+  nationality?: string;
   /** core.gerege.mn-ий дотоод дугаар; байхгүй = тулгагдаагүй. */
   geID?: number;
 }
