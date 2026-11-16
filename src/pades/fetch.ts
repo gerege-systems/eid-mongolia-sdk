@@ -43,7 +43,8 @@ export class Fetcher {
     return u.toString();
   }
 
-  async do(method: "GET" | "POST", raw: string, contentType: string, body?: Uint8Array): Promise<Uint8Array> {
+  /** `signal` — энэ таталтыг л тасална (ж: OCSP-ийн цонх дууссан); дуудагчийн цуцлалт нь constructor-ийн signal. */
+  async do(method: "GET" | "POST", raw: string, contentType: string, body?: Uint8Array, signal?: AbortSignal): Promise<Uint8Array> {
     const target = this.target(raw);
     if (method === "GET") {
       const hit = this.cache.get(target);
@@ -51,10 +52,12 @@ export class Fetcher {
     }
     const outer = this.signal;
     if (outer?.aborted) throw outer.reason ?? new Error("aborted");
+    if (signal?.aborted) throw signal.reason ?? new Error("aborted");
     const ctl = typeof AbortController !== "undefined" ? new AbortController() : undefined;
     const timer = ctl ? setTimeout(() => ctl.abort(), HTTP_TIMEOUT_MS) : undefined;
     const onAbort = (): void => ctl?.abort();
     outer?.addEventListener("abort", onAbort, { once: true });
+    signal?.addEventListener("abort", onAbort, { once: true });
     try {
       const res = await this.fetchFn(target, {
         method,
@@ -70,6 +73,7 @@ export class Fetcher {
     } finally {
       if (timer) clearTimeout(timer);
       outer?.removeEventListener("abort", onAbort);
+      signal?.removeEventListener("abort", onAbort);
     }
   }
 }

@@ -747,6 +747,14 @@ TSA timestamp-аар өөрөө **2 удаа** дахин оролдоно (ни
 оролдохгүй (өмнө нь revoked OCSP-г алгасаад CRL-ээр DSS угсардаг байв). OCSP/CRL-д мөн CertID/олгогч/шинэлэг байдлын
 дүрэм (§ validate).
 
+**Хариугүй OCSP responder (0.46.1).** `complete` нь гинжийн бүх гэрчилгээний OCSP-г зэрэг эхлүүлж, CRL-ийг гинжийн
+дарааллаар татна. Гэрчилгээ хүчинтэй CRL-тэй бол түүний OCSP-г цуглуулалт эхэлснээс хойш **3 с** л хүлээгээд тасална (LT-г
+CRL хангана); хүчинтэй CRL-гүй бол OCSP нь энгийн 10 с-ийн timeout-тай (fail-closed хэвээр). Өмнө нь холболт хүлээж аваад
+хариулдаггүй responder (үндэсний CA-ийн гэрчилгээнүүдийн AIA OCSP) гэрчилгээ бүрт 10 с саатуулдаг байв (eID гинжид ~20 с);
+одоо нийт ≤ 3 с. Хугацаандаа ирсэн OCSP өмнөх шигээ: «good» нь CRL-ийн хамт DSS-д (эрүүл гинжийн DSS байт-ижил),
+«revoked» нь `CertificateRevokedError`. `validatePdf`-ийн онлайн цуцлалт өөрчлөгдөөгүй (зөвхөн eID-ийн 04/05-ийн
+гэрчилгээнд, OCSP → CRL).
+
 `PadesError.code` (тогтвортой, бүх платформд ижил): `PDF_INVALID`, `PDF_ENCRYPTED`, `PDF_LOCKED` (DocMDP P=1),
 `PDF_TOO_LARGE`, `PDF_TOO_MANY_SIGNATURES`, `PDF_PRIOR_SIGNATURE_INVALID`, `PDF_FOREIGN_SIGNATURE`, `SIGNER_INVALID`,
 `REQUEST_INVALID`, `SIGNATURE_INVALID` (state хэвээр — дахин зуруулж болно), `TSA_UNAVAILABLE`, `LTV_UNAVAILABLE`
