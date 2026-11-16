@@ -110,6 +110,7 @@ function fakeFetch(over: Record<string, Behaviour>) {
     if (typeof b === "number") return Promise.resolve({ status: b, arrayBuffer: async () => new ArrayBuffer(0) });
     if (b instanceof Uint8Array) return Promise.resolve(ok(b));
     const file = M.http[`${key} ${sha16(init.body ?? new Uint8Array())}`];
+    if (!file && key === CA04_OCSP) return Promise.resolve(ok(CA04_OCSP_DER));
     if (!file) return Promise.resolve({ status: 404, arrayBuffer: async () => new ArrayBuffer(0) });
     return Promise.resolve(ok(read(new URL(file, G))));
   };

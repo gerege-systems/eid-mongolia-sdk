@@ -12,7 +12,7 @@
     "POST http://tsa.pki.test/ e745b8bc436d48fe": "http/05.der"
   },
   "now": "2026-10-14T12:00:30+08:00",
-  "outSha256": "b4aaafec2f4536c91b9f3d0a7b46584c97d6512fb46595bcc5e63b78c0b7de22",
+  "outSha256": "347533cc485e1b5a4903c73e37af9fae44dc382218581113ffcb863c1cfe8fb3",
   "reason": "Байгууллагын тамга",
   "signature": "MEQCIEjAMPt9n6iXZyhtbJz0w7WOkcdWY5AI8qc3kLK/ATo0AiBujKp+HQcak71xegdyf08nHePXBbq/kFTzvCNVacY8XQ==",
   "signingTime": "2026-10-14T12:00:00+08:00"
