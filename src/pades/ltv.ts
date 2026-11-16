@@ -223,8 +223,8 @@ export function ocspFreshAt(resp: OCSPResp, at: GoTime, now: GoTime): boolean {
  * Go fetchOCSP: SHA-1 CertID (RFC 5019) = энэ гэрчилгээ + олгогч, олгогч (эсвэл delegated) зурсан, good, одоо шинэлэг
  * (freshAt), fresh өгвөл thisUpdate > fresh. revoked → CertificateRevokedError. Алдааны мессежид гэрчилгээний нэр (PII) үгүй.
  */
-async function fetchOCSP(f: Fetcher, url: string, c: Certificate, issuer: Certificate, now: Date, fresh: PreciseTime | undefined, signal?: AbortSignal): Promise<[Uint8Array, OCSPResp]> {
-  const der = await f.do("POST", url, "application/ocsp-request", await ocspRequest(c, issuer), signal);
+async function fetchOCSP(f: Fetcher, url: string, c: Certificate, issuer: Certificate, now: Date, fresh: PreciseTime | undefined): Promise<[Uint8Array, OCSPResp]> {
+  const der = await f.do("POST", url, "application/ocsp-request", await ocspRequest(c, issuer));
   const resp = await parseOCSPForCert(der, c, issuer);
   if (!responderOK(resp, issuer)) throw new Error("OCSP responder-ийн EKU OCSPSigning биш");
   if (!(await ocspCertIDMatches(der, c, issuer))) throw new Error("OCSP CertID энэ гэрчилгээ/олгогчийнх биш");
@@ -254,82 +254,13 @@ export interface DSSMaterial {
 }
 
 /**
- * Хүчинтэй CRL-тэй CA гэрчилгээний (гинжийн эхнийхээс бусад) OCSP-г цуглуулалт эхэлснээс хойш хамгийн ихдээ ийм хугацаа
- * хүлээгээд цуцална (LT-г CRL хангана). Гинжийн эхний (навч: иргэн, TSA) гэрчилгээний OCSP ба хүчинтэй CRL-гүй гэрчилгээний
- * OCSP нь Fetcher-ийн энгийн timeout-ыг бүтнээр авна — шинэхэн цуцлагдсан навч дахин гаргаагүй CRL-ээр гарахгүй,
- * «timestamp-аас хожуу» дүрэм бүтэн цонхтой, fail-closed хэвээр. TCP хүлээж аваад хариулдаггүй responder (үндэсний CA-ийн
- * гэрчилгээнүүдийн AIA OCSP) гэрчилгээ бүрт 10 с идэхгүй.
+ * Go collectLTV: chains (leaf → … root-оос өмнөх) бүрийн гэрчилгээнд OCSP (AIA) ба CRL (CDP), гэрчилгээний үүргээр:
+ * - гинжийн эхний (навч: иргэн, TSA) гэрчилгээ — OCSP эхэлж (бүрэн timeout, «timestamp-аас хожуу» дүрэм), дараа нь CRL
+ *   (хоёулаа хүчинтэй бол хоёулаа DSS-д);
+ * - CA гэрчилгээ (эхнийхээс бусад) — CRL эхэлж; хүчинтэй CRL байвал OCSP хүсэлт ИЛГЭЭХГҮЙ, үгүй бол OCSP (бүрэн timeout).
+ * Хариугүй CA OCSP responder гарын үсгийг саатуулахгүй. Үр дүн гинжийн дарааллаар.
  */
-export const OCSP_GRACE_MS = 3000;
-
-/** OCSP-ийн цонхны цаг — тестэд хуурамч цаг. `after` нь цуцлах функц буцаана. */
-export interface GraceClock {
-  now(): number;
-  after(ms: number, fn: () => void): () => void;
-}
-
-const REAL_CLOCK: GraceClock = {
-  now: () => Date.now(),
-  after: (ms, fn) => {
-    const h = setTimeout(fn, ms);
-    return () => clearTimeout(h);
-  },
-};
-
-/** Нэг гэрчилгээний OCSP-ийн үр дүн. revoked — гинжийн дарааллаар шидэгдэнэ. */
-interface OCSPOutcome {
-  der?: Uint8Array;
-  resp?: OCSPResp;
-  freshErr?: NotFresh;
-  revoked?: CertificateRevokedError;
-}
-
-/**
- * Нэг гэрчилгээний AIA OCSP-ууд дарааллаар (эхний хүчинтэй хариу) — шалгалт fetchOCSP-д өөрчлөлтгүй. Хэзээ ч reject
- * хийхгүй (unhandled rejection үгүй): revoked нь outcome-д. `signal` (цонх) цуцлагдсан бол үлдсэн URL-ийг асуухгүй.
- */
-async function ocspOutcome(f: Fetcher, c: Certificate, issuer: Certificate, now: Date, fresh: PreciseTime | undefined, signal: AbortSignal): Promise<OCSPOutcome> {
-  let freshErr: NotFresh | undefined;
-  for (const u of c.ocspServers) {
-    try {
-      const [der, resp] = await fetchOCSP(f, u, c, issuer, now, fresh, signal);
-      return { der, resp };
-    } catch (e) {
-      if (e instanceof CertificateRevokedError) return { revoked: e };
-      if (e instanceof NotFresh) freshErr = e;
-      if (signal.aborted) break;
-    }
-  }
-  return { freshErr };
-}
-
-interface LTVJob {
-  c: Certificate;
-  issuer: Certificate | undefined;
-  /** Олгогч хайхад гарсан алдаа — гинжийн дарааллаар (энэ гэрчилгээний ээлжинд) шидэгдэнэ. */
-  issuerErr?: { e: unknown };
-  /** Гинжийн эхний (навч) гэрчилгээ: OCSP thisUpdate нь timestamp-аас хожуу байх ёстой; OCSP-д цонх үгүй. */
-  leaf: boolean;
-  fresh: PreciseTime | undefined;
-  ctl?: AbortController;
-  ocsp?: Promise<OCSPOutcome>;
-  settled: boolean;
-}
-
-/**
- * Go collectLTV: chains (leaf → … root-оос өмнөх) бүрийн гэрчилгээнд OCSP (AIA) ба CRL (CDP). Бүх гэрчилгээний OCSP-г
- * зэрэг эхлүүлж, CRL-ийг гинжийн дарааллаар татна; үр дүнг гинжийн дарааллаар DSS-д нэмнэ — DSS-ийн агуулга/дараалал ба
- * алдааны давуу эрэмбэ дараалсан хувилбартай ижил. Хүчинтэй CRL-тэй CA гэрчилгээний OCSP — {@link OCSP_GRACE_MS} хүртэл
- * (навчных — бүрэн timeout).
- */
-export async function collectLTV(
-  f: Fetcher,
-  now: Date,
-  fresh: PreciseTime,
-  roots: Certificate[],
-  chains: Certificate[][],
-  clock: GraceClock = REAL_CLOCK,
-): Promise<DSSMaterial> {
+export async function collectLTV(f: Fetcher, now: Date, fresh: PreciseTime, roots: Certificate[], chains: Certificate[][]): Promise<DSSMaterial> {
   const d: DSSMaterial = { certs: [], ocsps: [], crls: [] };
   const addTo = (list: Uint8Array[], der: Uint8Array): void => {
     if (!list.some((b) => equal(b, der))) list.push(der);
@@ -341,42 +272,36 @@ export async function collectLTV(
   };
   const isRoot = (c: Certificate): boolean => roots.some((r) => equal(r.raw, c.raw));
   const seen = new Set<string>();
-  const jobs: LTVJob[] = [];
   for (const ch of chains) {
     for (let i = 0; i < ch.length; i++) {
       const c = ch[i]!;
       const k = toHex(c.raw);
       if (seen.has(k) || isRoot(c)) continue;
       seen.add(k);
-      const j: LTVJob = { c, issuer: undefined, leaf: i === 0, fresh: i === 0 ? fresh : undefined, settled: false };
-      try {
-        j.issuer = await issuerOf(c);
-      } catch (e) {
-        j.issuerErr = { e };
-      }
-      jobs.push(j);
-    }
-  }
-  const started = clock.now();
-  for (const j of jobs) {
-    if (!j.issuer) continue;
-    const ctl = new AbortController();
-    j.ctl = ctl;
-    j.ocsp = ocspOutcome(f, j.c, j.issuer, now, j.fresh, ctl.signal);
-    void j.ocsp.then(() => (j.settled = true));
-  }
-  const cancels: (() => void)[] = [];
-  try {
-    for (const j of jobs) {
-      const c = j.c;
       addTo(d.certs, c.raw);
-      if (j.issuerErr) throw j.issuerErr.e;
-      const { issuer, ocsp, ctl } = j;
-      if (!issuer || !ocsp || !ctl) throw new LTVError(`гинжийн гэрчилгээний олгогч олдсонгүй`);
+      const issuer = await issuerOf(c);
+      if (!issuer) throw new LTVError(`гинжийн гэрчилгээний олгогч олдсонгүй`);
       let ok = false;
-      // CRL-ийн revoked — тэр дор нь (OCSP-ийн revoked-тэй ижил алдаа). Бусад алдааг OCSP-ийн revoked давна (өмнөх эрэмбэ).
-      let crlErr: { e: unknown } | undefined;
-      try {
+      let freshErr: NotFresh | undefined;
+      const fr = i === 0 ? fresh : undefined;
+      // Навч: OCSP → CRL. CA: CRL → (хүчинтэй CRL алга бол л) OCSP.
+      for (const step of i === 0 ? (["ocsp", "crl"] as const) : (["crl", "ocsp"] as const)) {
+        if (step === "ocsp") {
+          if (i !== 0 && ok) continue;
+          for (const u of c.ocspServers) {
+            try {
+              const [der, resp] = await fetchOCSP(f, u, c, issuer, now, fr);
+              addTo(d.ocsps, der);
+              if (resp.certificate && !equal(resp.certificate.raw, issuer.raw)) addTo(d.certs, resp.certificate.raw);
+              ok = true;
+              break;
+            } catch (e) {
+              if (e instanceof CertificateRevokedError) throw e;
+              if (e instanceof NotFresh) freshErr = e;
+            }
+          }
+          continue;
+        }
         for (const u of c.crlDPs) {
           let der: Uint8Array;
           try {
@@ -389,35 +314,13 @@ export async function collectLTV(
             ok = true;
           }
         }
-      } catch (e) {
-        if (e instanceof CertificateRevokedError) throw e;
-        crlErr = { e };
       }
-      if (ok && !crlErr && !j.leaf && !j.settled) {
-        // CA гэрчилгээ, хүчинтэй CRL бий — OCSP-г цонхны үлдсэн хугацаанд л хүлээнэ (цонх дууссан бол одоо цуцална).
-        const left = OCSP_GRACE_MS - (clock.now() - started);
-        if (left > 0) cancels.push(clock.after(left, () => ctl.abort()));
-        else ctl.abort();
-      }
-      const o = await ocsp;
-      if (o.revoked) throw o.revoked;
-      if (crlErr) throw crlErr.e;
-      if (o.der && o.resp) {
-        addTo(d.ocsps, o.der);
-        if (o.resp.certificate && !equal(o.resp.certificate.raw, issuer.raw)) addTo(d.certs, o.resp.certificate.raw);
-        ok = true;
-      }
-      const freshErr = o.freshErr;
       if (!ok) {
         if (freshErr) throw freshErr;
         throw new LTVError(`гинжийн гэрчилгээнд хүчинтэй OCSP/CRL алга`);
       }
-      if (j.fresh && freshErr && c.ocspServers.length > 0 && !(await hasFreshOCSP(d.ocsps, c, issuer, fresh))) throw freshErr;
+      if (i === 0 && freshErr && c.ocspServers.length > 0 && !(await hasFreshOCSP(d.ocsps, c, issuer, fresh))) throw freshErr;
     }
-  } finally {
-    // Алдаагаар гарвал үлдсэн OCSP-г цуцална (ocspOutcome хэзээ ч reject хийхгүй).
-    for (const x of cancels) x();
-    for (const j of jobs) j.ctl?.abort();
   }
   return d;
 }
