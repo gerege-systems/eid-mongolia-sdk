@@ -1051,11 +1051,73 @@ writeFileSync("sealed.pdf", done.pdf); // PAdES-BASELINE-LT, байгуулла�
   `SealCertExpiredError` | `SealCertNotYetValidError`) — 200-аар хүчингүй гэрчилгээ буцаахгүй. Go: `pades.SealPDF`; .NET:
   `EidPades.SealAsync`.
 
+### Тамганы эрх хүсэх — RP-ийн санаачилсан (0.47.0)
+
+Операторгүйгээр: танай системд байгууллагын **Гүйцэтгэх захирал**-ыг eID-ээр нэвтрүүлж (AUTHENTICATION session), тэр
+session-оор эрхийн хүсэлт илгээнэ. Захирал eID аппдаа RP-ийн нэр, байгууллагыг харж **PIN2**-оор зөвшөөрнө. Биллинг
+тооцохгүй; `SEAL:<orgEtsi>` эрх урьдчилж шаардахгүй.
+
+```ts
+import {
+  ForbiddenError, AuthSessionTooOldError, AuthSessionAlreadyUsedError, SealGrantRequestError,
+} from "@gerege-systems/eid-mongolia-sdk";
+import { sealPdf } from "@gerege-systems/eid-mongolia-sdk/pades";
+
+// 1. Захирлыг нэвтрүүлнэ (танай RP-ийн auth session, OK-оор дууссан) — sessionId-г хадгална.
+const session = await eid.auth.notificationByEtsi("PNOMN-12345678", [{ type: "displayTextAndPIN", displayText60: "Нэвтрэх" }]);
+const result = await eid.session.waitForResult(session.sessionId, { expiresAt: session.expiresAt });
+eid.validator.validateAuth(result, session.acsp!); // нэвтрэлт OK байх ёстой
+
+// 2. Нэвтрэлтээс хойш 5 минутын дотор хүсэлт илгээнэ — push зөвхөн тэр захирал руу очно.
+try {
+  const g = await eid.seal.requestGrant("NTRMN-6235972", session.sessionId); // 202 {grantId, status: "PENDING", expiresAt}
+  // 3. Захирал PIN2-оор зөвшөөрөх хүртэл хүлээнэ.
+  await eid.seal.waitForGrant(g.grantId, { timeoutMs: 10 * 60_000 });
+  // 4. Одоо /seal/{orgEtsi} ажиллана.
+  const sealed = await sealPdf(eid.seal, "NTRMN-6235972", pdfBytes);
+} catch (e) {
+  if (e instanceof ForbiddenError && e.code === "NOT_ORG_CEO") {
+    // нэвтэрсэн хүн байгууллагын улсын бүртгэлээр баталгаажсан Гүйцэтгэх захирал биш
+  } else if (e instanceof AuthSessionTooOldError || e instanceof AuthSessionAlreadyUsedError) {
+    // захирлыг дахин нэвтрүүлж шинэ session-оор хүснэ
+  } else if (e instanceof SealGrantRequestError) {
+    // e.outcome: "REJECTED" | "EXPIRED" | "FAILED" | "REVOKED" → шинэ нэвтрэлт + хүсэлт; "TIMEOUT" → ижил grantId-аар дахин хүлээж болно
+  } else throw e;
+}
+```
+
+- `requestGrant(orgEtsi, sessionId)` — `POST /seal/grants` `{orgEtsi, sessionId}` → `SealGrantRequest` (`grantId`,
+  `status: "PENDING"`, `expiresAt`). `sessionId` — танай RP-ийн эхлүүлсэн, сүүлийн **5 минутад** OK-оор дууссан
+  AUTHENTICATION session; түүний хүн байгууллагын улсын бүртгэлээр баталгаажсан **Гүйцэтгэх захирал** байх ёстой, push
+  зөвхөн түүн рүү. **Нэг session — нэг хүсэлт**; ижил session-ээр дахин дуудвал ижил PENDING хүсэлтийг буцаана.
+- `grantStatus(grantId)` — `GET /seal/grants/{grantId}`: `status` = `PENDING` | `APPROVED` | `REJECTED` | `EXPIRED` |
+  `FAILED` | `REVOKED`; `approvedAt`, `revokedAt`, `failure`. Зөвхөн хүсэлтийн эзэн RP (бусад нь `SealGrantNotFoundError`).
+  Эрх **цуцлагдтал хүчинтэй** (захирал eID аппаас, эсвэл оператор цуцална → `REVOKED`; `expiresAt` нь зөвхөн PENDING
+  хүсэлтийг зөвшөөрөх хугацаа).
+- `waitForGrant(grantId, { timeoutMs = 15 мин, intervalMs = 3 с, signal })` — APPROVED болтол асууж буцаана;
+  REJECTED / EXPIRED / FAILED / REVOKED / хугацаа дууссан → `SealGrantRequestError` (`outcome`, `grantId`, `failure`).
+  429/503 + Retry-After-ийг `waitForCertificate`-тэй адил хүлээнэ.
+- `eid.organization.sealGrants(personEtsi)` — `GET /organization/seal-grants/etsi/{personEtsi}` (PKI_READ; иргэн сүүлийн
+  24 цагт танай RP-ээр нэвтэрсэн): иргэн улсын бүртгэлээр Гүйцэтгэх захирал байгаа байгууллага бүр
+  (`orgEtsi`, `orgName`, `orgStatus`) ба тэдгээрийн эрхүүд (`grants[]`: `grantId`, `rpName`, `rpDomain?`, `status`,
+  `createdAt`, `decidedAt?`, `expiresAt?`, `approverName?`, `sealCount`, `sealCount30d`, `lastSealedAt`). Энгийн RP зөвхөн
+  өөрийн эрхийг харна. Зөвхөн унших.
+- Алдаа (`requestGrant`): **400 `REQUEST_INVALID`** → `RequestInvalidError`; **403 `RP_NOT_REGISTERED` | `NOT_ORG_CEO`** →
+  `ForbiddenError` (`e.code`); **404 `AUTH_SESSION_NOT_FOUND`** → `AuthSessionNotFoundError` (өөр RP-ийн session ч мөн),
+  **404 `ORG_NOT_FOUND`** → `ApiError`; **409** `AUTH_SESSION_WRONG_FLOW` / `AUTH_SESSION_NOT_COMPLETED` /
+  `AUTH_SESSION_TOO_OLD` / `AUTH_SESSION_ALREADY_USED` → `AuthSessionWrongFlowError` / `AuthSessionNotCompletedError` /
+  `AuthSessionTooOldError` / `AuthSessionAlreadyUsedError`; `ORG_NOT_ACTIVE` → `OrgNotActiveError`; `RP_NOT_ACTIVE` →
+  `RpNotActiveError`; `SEAL_GRANT_ALREADY_APPROVED` → `SealGrantAlreadyApprovedError`; `RP_PERMISSIONS_FULL` →
+  `RpPermissionsFullError`; `SEAL_APPROVER_UNAVAILABLE` → `SealApproverUnavailableError`; **429 `RATE_LIMITED`** →
+  `ApiError` (`retryAfterMs`). Кодын жагсаалт: `SEAL_GRANT_ERROR_CODES`. Go: `Seal.RequestGrant` / `GrantStatus` /
+  `Organization.SealGrants`.
+
 ### Тамганы эрх, түлхүүр, хүчинтэй хугацаа (0.45.0)
 
-- **Эрх (`SEAL:<orgEtsi>`) — байгууллагын зөвшөөрлөөр.** eID-ийн оператор танай RP-д эрхийн **хүсэлт** үүсгэнэ; тухайн
-  байгууллагын **улсын бүртгэлээр баталгаажсан ADMIN** eID аппдаа RP-ийн нэр, домэйн, байгууллагын нэр, регистрийн дугаарыг
-  харж **PIN2**-оор зөвшөөрсний дараа л эрх үүснэ. Зөвшөөрөх хүртэл (татгалзсан, хугацаа дууссан үед ч) тамгалалт ба
+- **Эрх (`SEAL:<orgEtsi>`) — байгууллагын зөвшөөрлөөр.** Эрхийг **танай RP өөрөө хүсч** болно (дээрх «Тамганы эрх хүсэх»,
+  0.47.0), эсвэл eID-ийн оператор хүсэлт үүсгэнэ. Хоёр замд ч тухайн байгууллагын **улсын бүртгэлээр баталгаажсан**
+  Гүйцэтгэх захирал/ADMIN eID аппдаа RP-ийн нэр, домэйн, байгууллагын нэр, регистрийн дугаарыг харж **PIN2**-оор зөвшөөрсний
+  дараа л эрх үүснэ. Зөвшөөрөх хүртэл (татгалзсан, хугацаа дууссан үед ч) тамгалалт ба
   гэрчилгээний хүсэлт (`seal`, `sealPdf`, `requestCertificate`, `getCertificateRequest`) `ForbiddenError` 403
   (`getCertificate` эрх шаардахгүй). Оператор эрхийг хассан эсвэл байгууллага цуцлагдсан бол эрх хүчингүй болно (403). Эрхтэй
   байх хугацаанд RP-ийн нэр, callback host, mTLS гэрчилгээний subject өөрчлөгдөхгүй (операторын талын дүрэм — өөрчлөх бол

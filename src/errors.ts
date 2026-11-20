@@ -125,6 +125,36 @@ export class SealApproverUnavailableError extends ApiError {}
 export class SealRequestNotFoundError extends ApiError {}
 
 /**
+ * Тамганы эрхийн хүсэлтийн (`eid.seal.requestGrant`) 409 `AUTH_SESSION_WRONG_FLOW` — `sessionId` AUTHENTICATION session
+ * биш («Миний QR» ч биш). Програмын алдаа.
+ */
+export class AuthSessionWrongFlowError extends ApiError {}
+
+/** 409 `AUTH_SESSION_NOT_COMPLETED` (`requestGrant`) — session дуусаагүй эсвэл OK-оос өөр үр дүнтэй. Иргэнийг дахин нэвтрүүлнэ. */
+export class AuthSessionNotCompletedError extends ApiError {}
+
+/** 409 `AUTH_SESSION_TOO_OLD` (`requestGrant`) — session дууссанаас хойш 5 минутаас их. Иргэнийг дахин нэвтрүүлж шууд хүснэ. */
+export class AuthSessionTooOldError extends ApiError {}
+
+/** 409 `AUTH_SESSION_ALREADY_USED` (`requestGrant`) — энэ session өөр тамганы эрхийн хүсэлтийн үндэс болсон (нэг session — нэг хүсэлт). */
+export class AuthSessionAlreadyUsedError extends ApiError {}
+
+/** 404 `AUTH_SESSION_NOT_FOUND` (`requestGrant`) — session байхгүй, эсвэл өөр RP-ийнх (ялгахгүй). */
+export class AuthSessionNotFoundError extends ApiError {}
+
+/** 409 `SEAL_GRANT_ALREADY_APPROVED` (`requestGrant`) — энэ RP тухайн байгууллагад тамганы эрхтэй аль хэдийн. */
+export class SealGrantAlreadyApprovedError extends ApiError {}
+
+/** 404 `SEAL_GRANT_NOT_FOUND` (`eid.seal.grantStatus` / `waitForGrant`) — хүсэлт олдсонгүй (эсвэл өөр RP-ийнх). */
+export class SealGrantNotFoundError extends ApiError {}
+
+/** 409 `RP_NOT_ACTIVE` (`requestGrant`) — танай RP идэвхтэй биш (операторт хандана). */
+export class RpNotActiveError extends ApiError {}
+
+/** 409 `RP_PERMISSIONS_FULL` (`requestGrant`) — RP-ийн эрхийн жагсаалт дүүрсэн; шинэ байгууллагын эрх нэмэгдэхгүй. */
+export class RpPermissionsFullError extends ApiError {}
+
+/**
  * 409 `ORG_NOT_ACTIVE` (`eid.seal.seal` / `sealPdf`, `eid.seal.requestCertificate`) — байгууллага eID-д `ACTIVE` биш (түр
  * зогссон / цуцлагдсан). Тамганы гэрчилгээ ба RP-ийн тамганы эрх түр зогсолтод хэвээр — байгууллага сэргэмэгц үргэлжилнэ;
  * давтахгүй. (`onBehalfOf` урсгалын 403 `ORG_NOT_ACTIVE` нь {@link ForbiddenError}-ийн `code` хэвээр.)
@@ -193,6 +223,51 @@ export const SEAL_ERROR_CODES: readonly SealErrorCode[] = [
   "SEAL_SERVICE_DISABLED",
 ];
 
+/**
+ * Тамганы эрхийн хүсэлтийн (`/seal/grants`) CA алдааны тогтвортой кодууд — `ApiError.code` / `ForbiddenError.code`.
+ * 400 REQUEST_INVALID; 403 RP_NOT_REGISTERED | NOT_ORG_CEO ({@link ForbiddenError}); 404 AUTH_SESSION_NOT_FOUND |
+ * ORG_NOT_FOUND | SEAL_GRANT_NOT_FOUND; 409 AUTH_SESSION_WRONG_FLOW | AUTH_SESSION_NOT_COMPLETED | AUTH_SESSION_TOO_OLD |
+ * AUTH_SESSION_ALREADY_USED | ORG_NOT_ACTIVE | RP_NOT_ACTIVE | SEAL_GRANT_ALREADY_APPROVED | RP_PERMISSIONS_FULL |
+ * SEAL_APPROVER_UNAVAILABLE; 429 RATE_LIMITED.
+ */
+export type SealGrantErrorCode =
+  | "REQUEST_INVALID"
+  | "RP_NOT_REGISTERED"
+  | "NOT_ORG_CEO"
+  | "AUTH_SESSION_NOT_FOUND"
+  | "ORG_NOT_FOUND"
+  | "SEAL_GRANT_NOT_FOUND"
+  | "AUTH_SESSION_WRONG_FLOW"
+  | "AUTH_SESSION_NOT_COMPLETED"
+  | "AUTH_SESSION_TOO_OLD"
+  | "AUTH_SESSION_ALREADY_USED"
+  | "ORG_NOT_ACTIVE"
+  | "RP_NOT_ACTIVE"
+  | "SEAL_GRANT_ALREADY_APPROVED"
+  | "RP_PERMISSIONS_FULL"
+  | "SEAL_APPROVER_UNAVAILABLE"
+  | "RATE_LIMITED";
+
+/** {@link SealGrantErrorCode}-ийн бүх утга (runtime шалгалтад). */
+export const SEAL_GRANT_ERROR_CODES: readonly SealGrantErrorCode[] = [
+  "REQUEST_INVALID",
+  "RP_NOT_REGISTERED",
+  "NOT_ORG_CEO",
+  "AUTH_SESSION_NOT_FOUND",
+  "ORG_NOT_FOUND",
+  "SEAL_GRANT_NOT_FOUND",
+  "AUTH_SESSION_WRONG_FLOW",
+  "AUTH_SESSION_NOT_COMPLETED",
+  "AUTH_SESSION_TOO_OLD",
+  "AUTH_SESSION_ALREADY_USED",
+  "ORG_NOT_ACTIVE",
+  "RP_NOT_ACTIVE",
+  "SEAL_GRANT_ALREADY_APPROVED",
+  "RP_PERMISSIONS_FULL",
+  "SEAL_APPROVER_UNAVAILABLE",
+  "RATE_LIMITED",
+];
+
 /** Унтраалттай тамганы үйлчилгээ (CA `{"service"}`): `issuance` — гэрчилгээ олголт, `sealing` — тамгалалт. */
 export type SealService = "issuance" | "sealing";
 
@@ -244,6 +319,25 @@ export class SealCertificateRequestError extends EidError {
     readonly failure?: string,
   ) {
     super(`тамганы гэрчилгээний хүсэлт ${outcome}${failure ? ` (${failure})` : ""}`);
+  }
+}
+
+/** Тамганы эрхийн хүсэлтийн (APPROVED биш) төгсгөлийн төлөв, эсвэл `waitForGrant`-ийн хугацаа дууссан. */
+export type SealGrantOutcome = "REJECTED" | "EXPIRED" | "FAILED" | "REVOKED" | "TIMEOUT";
+
+/**
+ * `eid.seal.waitForGrant` — хүсэлт эрхгүй дууссан: `REJECTED` (захирал татгалзсан), `EXPIRED` (зөвшөөрөх хугацаа дууссан),
+ * `FAILED` (push илгээгдээгүй г.м.), `REVOKED` (эрх цуцлагдсан) — бүгд шинэ хүсэлт (шинэ нэвтрэлт + `requestGrant`) шаардана;
+ * `TIMEOUT` — `timeoutMs` дууссан ч хүсэлт серверт PENDING хэвээр (ижил `grantId`-аар дахин хүлээж болно).
+ */
+export class SealGrantRequestError extends EidError {
+  constructor(
+    readonly outcome: SealGrantOutcome,
+    readonly grantId: string,
+    /** Серверийн `failure` код (FAILED / EXPIRED / REVOKED үед), байхгүй бол undefined. */
+    readonly failure?: string,
+  ) {
+    super(`тамганы эрхийн хүсэлт ${outcome}${failure ? ` (${failure})` : ""}`);
   }
 }
 

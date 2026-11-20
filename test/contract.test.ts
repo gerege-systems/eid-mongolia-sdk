@@ -4,7 +4,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { DEFAULT_BASE_URL, PDF_REGISTER_ERROR_CODES, SEAL_ERROR_CODES } from "../dist/index.js";
+import { DEFAULT_BASE_URL, PDF_REGISTER_ERROR_CODES, SEAL_ERROR_CODES, SEAL_GRANT_ERROR_CODES } from "../dist/index.js";
 import { PDF_SIGNATURE_REGISTER_FIELDS, RP_ROUTES, RP_ROUTES_UNDISCOVERED, SHARE_FORM_FIELDS } from "../src/contract.ts";
 
 const EID_DISCOVERY = "https://rp.eidmongolia.mn/.well-known/eid";
@@ -140,6 +140,12 @@ test("Seal: discovery-ийн seal блок (issuanceEnabled / sealingEnabled / d
   lead("certificate_request", RP_ROUTES.sealCertificateRequestStatus);
   lead("certificate_get", RP_ROUTES.sealCertificate);
   lead("seal", RP_ROUTES.seal);
+  // CA V156 (RP-ийн санаачилсан тамганы эрх, 2026-11-20).
+  lead("grant_request", RP_ROUTES.sealGrantRequest);
+  lead("grant_status", RP_ROUTES.sealGrantStatus);
+  // Discovery-ийн grant_request / grant_status тайлбарт нэрлэсэн алдааны code бүрийг SDK таних ёстой (SEAL_GRANT_ERROR_CODES).
+  const grantText = `${eps.grant_request ?? ""} ${eps.grant_status ?? ""}`;
+  for (const c of SEAL_GRANT_ERROR_CODES) assert.ok(grantText.includes(c), `endpoints.seal.grant_*-д ${c} алга`);
 
   // CA 2026-11-12 (!496): тамганы 409 бүр тогтвортой code-той; GET /seal/certificate идэвхтэй гэрчилгээгүй бол 409.
   // Discovery-ийн тайлбарт нэрлэсэн code бүрийг SDK таних ёстой (SEAL_ERROR_CODES → http.ts-ийн typed алдаа).

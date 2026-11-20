@@ -21,6 +21,8 @@ export const RP_ROUTES = {
   certChoiceDeviceLink: { method: "POST", path: "/signature/certificate-choice/device-link/anonymous" },
   certChoiceEtsi: { method: "POST", path: "/signature/certificate-choice/notification/etsi/{semanticsIdentifier}" },
   orgRepresentations: { method: "GET", path: "/organization/representations/etsi/{personEtsi}" },
+  /** Иргэн улсын бүртгэлээр Гүйцэтгэх захирал байгаа байгууллага бүрийн RP тамганы эрхүүд (PKI_READ; CA V156). */
+  orgSealGrants: { method: "GET", path: "/organization/seal-grants/etsi/{personEtsi}" },
   session: { method: "GET", path: "/session/{sessionId}" },
   personCertificates: { method: "GET", path: "/certificates/etsi/{personEtsi}" },
   personDevices: { method: "GET", path: "/devices/etsi/{personEtsi}" },
@@ -41,6 +43,10 @@ export const RP_ROUTES = {
   sealCertificateRequest: { method: "POST", path: "/seal/certificate/{orgEtsi}" },
   /** Тамганы гэрчилгээний хүсэлтийн төлөв (CA !483, ORG_ONBOARDING §4.3) — ISSUED үед `certificate`-тэй. */
   sealCertificateRequestStatus: { method: "GET", path: "/seal/certificate/{orgEtsi}/requests/{requestId}" },
+  /** RP-ийн санаачилсан тамганы эрхийн хүсэлт (CA V156): `{orgEtsi, sessionId}` → 202 `{grantId, orgEtsi, status, expiresAt}`. */
+  sealGrantRequest: { method: "POST", path: "/seal/grants" },
+  /** Тамганы эрхийн хүсэлтийн төлөв (зөвхөн хүсэлтийн эзэн RP). */
+  sealGrantStatus: { method: "GET", path: "/seal/grants/{grantId}" },
   /** Байгууллагын тамга (CA `dto.SealRequest` `{digest, hashType}` → `dto.SealResponse`). */
   seal: { method: "POST", path: "/seal/{orgEtsi}" },
 } as const satisfies Record<string, RpRoute>;
@@ -83,6 +89,9 @@ export const PDF_SIGNATURE_REGISTER_FIELDS = [
  * JSON tag (`relyingPartyUUID`/`relyingPartyName` нь CA-д заавал биш). CA `DisallowUnknownFields`.
  */
 export const SEAL_REQUEST_FIELDS = ["digest", "hashType"] as const;
+
+/** `POST /seal/grants`-ийн биеийн талбарууд (CA `handlers_seal_grant_rp.go`). */
+export const SEAL_GRANT_REQUEST_FIELDS = ["orgEtsi", "sessionId"] as const;
 
 export const SHARE_FORM_FIELDS = ["file", "filename", "to", "subject", "message", "lang"] as const;
 
