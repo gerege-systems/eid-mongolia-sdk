@@ -19,7 +19,7 @@ export {
   registrationFromCompleted,
   buildRegisterBody,
 } from "./sign.js";
-export { PDF_SIGNATURE_REGISTER_FIELDS, SEAL_REQUEST_FIELDS, SHARE_FORM_FIELDS } from "./contract.js";
+export { PDF_SIGNATURE_REGISTER_FIELDS, SEAL_GRANT_REQUEST_FIELDS, SEAL_REQUEST_FIELDS, SHARE_FORM_FIELDS } from "./contract.js";
 export { SessionApi, parseSessionResult, personMatchesCertificate, DEFAULT_MAX_WAIT_MS, WAIT_GRACE_MS } from "./session.js";
 export { OrganizationApi } from "./organization.js";
 export {
@@ -30,6 +30,8 @@ export {
   type SealCertificate,
   type SealCertificateRequest,
   type SealCertificateRequestStatus,
+  type SealGrantRequest,
+  type SealGrantRequestStatus,
   type SealWaitOptions,
   type SealResult,
 } from "./seal.js";
@@ -193,6 +195,16 @@ export {
   SealRequestNotFoundError,
   SealServiceDisabledError,
   SealCertificateRequestError,
+  AuthSessionWrongFlowError,
+  AuthSessionNotCompletedError,
+  AuthSessionTooOldError,
+  AuthSessionAlreadyUsedError,
+  AuthSessionNotFoundError,
+  SealGrantAlreadyApprovedError,
+  SealGrantNotFoundError,
+  SealGrantRequestError,
+  RpNotActiveError,
+  RpPermissionsFullError,
   NetworkError,
   SessionFailedError,
   ValidationError,
@@ -203,11 +215,14 @@ export {
   PDF_REGISTER_ERROR_CODES,
   RETRYABLE_ERROR_CODES,
   SEAL_ERROR_CODES,
+  SEAL_GRANT_ERROR_CODES,
   parseRetryAfter,
   type OnBehalfErrorCode,
   type PdfRegisterErrorCode,
   type RetryableErrorCode,
   type SealErrorCode,
+  type SealGrantErrorCode,
+  type SealGrantOutcome,
   type SealRequestOutcome,
   type SealService,
   type HttpErrorInit,
@@ -233,6 +248,9 @@ export type {
   OrgResult,
   Representation,
   RepresentationsResponse,
+  PersonSealGrant,
+  PersonOrgSealGrants,
+  PersonSealGrantsResponse,
   PersonBlock,
   TokenCertStatus,
   TokenCertSessionBlock,

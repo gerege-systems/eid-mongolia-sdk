@@ -13,11 +13,16 @@
 // Тамганы гэрчилгээ олгох (CA !483, 2026-11-09): `requestCertificate` → 202 PENDING хүсэлт; байгууллагын ADMIN eID аппаараа
 // PIN2-оор батална; `getCertificateRequest` / `waitForCertificate`-ээр ISSUED (гэрчилгээтэй) / REJECTED / EXPIRED / FAILED
 // хүртэл асууна.
+//
+// Тамганы эрх (`SEAL:<orgEtsi>`)-ийг RP өөрөө хүсэх (CA V156, 2026-11-20): `requestGrant(orgEtsi, sessionId)` — sessionId нь
+// танай RP-ийн эхлүүлсэн, сүүлийн 5 минутад OK-оор дууссан AUTHENTICATION session; түүний хүн байгууллагын улсын
+// бүртгэлээр баталгаажсан Гүйцэтгэх захирал байх ёстой, push зөвхөн түүн рүү (PIN2). `grantStatus` / `waitForGrant`-ээр
+// APPROVED хүртэл асууна. Эрх цуцлагдтал (захирал eID аппаас, эсвэл оператор) хүчинтэй. Биллинг тооцохгүй.
 
 import { X509Certificate } from "node:crypto";
-import { RP_ROUTES, SEAL_REQUEST_FIELDS, routePath } from "./contract.js";
+import { RP_ROUTES, SEAL_GRANT_REQUEST_FIELDS, SEAL_REQUEST_FIELDS, routePath } from "./contract.js";
 import { hashLen } from "./crypto.js";
-import { ApiError, SealCertificateRequestError, ValidationError } from "./errors.js";
+import { ApiError, SealCertificateRequestError, SealGrantRequestError, ValidationError } from "./errors.js";
 import type { Http } from "./http.js";
 import type { CertificateLevel, HashAlgorithm } from "./types.js";
 import { verifyPrehashedSignature } from "./validator.js";
@@ -83,6 +88,28 @@ export interface SealWaitOptions {
 export const DEFAULT_SEAL_WAIT_TIMEOUT_MS = 15 * 60_000;
 /** `waitForCertificate`-ийн анхдагч poll зай (CA зөвлөмж 2–5 с). */
 export const DEFAULT_SEAL_POLL_INTERVAL_MS = 3_000;
+
+/** Тамганы эрхийн хүсэлтийн төлөв (CA `dto.RPSealGrantStatus.status`). */
+export type SealGrantRequestStatus = "PENDING" | "APPROVED" | "REJECTED" | "EXPIRED" | "FAILED" | "REVOKED";
+
+/**
+ * `POST /seal/grants` (202) ба `GET /seal/grants/{grantId}` (CA `dto.RPSealGrantStatus`). `APPROVED` үед `/seal/{orgEtsi}`
+ * ажиллана.
+ */
+export interface SealGrantRequest {
+  grantId: string;
+  orgEtsi: string;
+  /** PENDING — хүлээнэ; APPROVED — эрхтэй; REJECTED / EXPIRED / FAILED — шинэ хүсэлт; REVOKED — эрх цуцлагдсан. */
+  status: SealGrantRequestStatus | string;
+  /** RFC 3339 — PENDING хүсэлтийг зөвшөөрөх хугацааны төгсгөл (эрх өөрөө хугацаагүй). */
+  expiresAt: string;
+  /** RFC 3339 — захирал PIN2-оор зөвшөөрсөн цаг (APPROVED, эсвэл зөвшөөрсний дараа REVOKED). */
+  approvedAt?: string;
+  revokedAt?: string;
+  /** FAILED / EXPIRED / REVOKED-ийн машин код (ж: `EXPIRED`, `PUSH_FAILED`, `RP_NOT_ACTIVE`, `ORG_NOT_ACTIVE`, `CANCELLED`). */
+  failure?: string;
+  raw: unknown;
+}
 
 /** `POST /seal/{orgEtsi}` (CA `dto.SealResponse`). */
 export interface SealResult {
@@ -158,6 +185,23 @@ function parseSealRequest(raw: unknown, orgEtsi: string): SealCertificateRequest
     ...(typeof r.approvers === "number" ? { approvers: r.approvers } : {}),
     ...(typeof r.failure === "string" && r.failure ? { failure: r.failure } : {}),
     ...(r.certificate ? { certificate: parseSealCertificate(r.certificate, orgEtsi) } : {}),
+    raw,
+  };
+}
+
+function parseSealGrant(raw: unknown, orgEtsi?: string): SealGrantRequest {
+  const r = rec(raw);
+  if (typeof r.grantId !== "string" || r.grantId === "" || typeof r.status !== "string" || r.status === "") {
+    throw new ValidationError("seal: эрхийн хүсэлтийн хариунд grantId/status алга");
+  }
+  return {
+    grantId: r.grantId,
+    orgEtsi: String(r.orgEtsi ?? orgEtsi ?? ""),
+    status: r.status,
+    expiresAt: String(r.expiresAt ?? ""),
+    ...(typeof r.approvedAt === "string" ? { approvedAt: r.approvedAt } : {}),
+    ...(typeof r.revokedAt === "string" ? { revokedAt: r.revokedAt } : {}),
+    ...(typeof r.failure === "string" && r.failure ? { failure: r.failure } : {}),
     raw,
   };
 }
@@ -239,6 +283,62 @@ export class SealApi {
       }
       const left = deadline - Date.now();
       if (left <= 0) throw new SealCertificateRequestError("TIMEOUT", requestId);
+      await sleep(Math.min(wait, left), opts.signal);
+    }
+  }
+
+  /**
+   * `POST /seal/grants` `{orgEtsi, sessionId}` — тамганы эрх (`SEAL:<orgEtsi>`)-ийг RP өөрөө хүсэх (202, `status:
+   * "PENDING"`). `sessionId` — танай RP-ийн эхлүүлсэн, сүүлийн 5 минутад OK-оор дууссан AUTHENTICATION session; түүний хүн
+   * байгууллагын улсын бүртгэлээр баталгаажсан Гүйцэтгэх захирал байх ёстой — push зөвхөн түүн рүү очиж PIN2-оор
+   * зөвшөөрнө. Нэг session — нэг хүсэлт; ижил session-ээр дахин дуудвал ижил PENDING хүсэлтийг буцаана. SEAL эрх шаардахгүй,
+   * биллинг тооцохгүй. Төлөвийг {@link waitForGrant} / {@link grantStatus}-ээр асууна. Алдаа: 400 {@link
+   * RequestInvalidError}; 403 `ForbiddenError` (`RP_NOT_REGISTERED` | `NOT_ORG_CEO`); 404 {@link AuthSessionNotFoundError} |
+   * `ORG_NOT_FOUND`; 409 {@link AuthSessionWrongFlowError} | {@link AuthSessionNotCompletedError} | {@link
+   * AuthSessionTooOldError} | {@link AuthSessionAlreadyUsedError} | {@link OrgNotActiveError} | {@link RpNotActiveError} |
+   * {@link SealGrantAlreadyApprovedError} | {@link RpPermissionsFullError} | {@link SealApproverUnavailableError}; 429
+   * `RATE_LIMITED` (`retryAfterMs`).
+   */
+  async requestGrant(orgEtsi: string, sessionId: string): Promise<SealGrantRequest> {
+    if (typeof orgEtsi !== "string" || orgEtsi.trim() === "" || orgEtsi.length > 64) throw new ValidationError("seal: orgEtsi хоосон эсвэл 64 тэмдэгтээс урт");
+    if (typeof sessionId !== "string" || sessionId.trim() === "" || sessionId.length > 64) throw new ValidationError("seal: sessionId хоосон эсвэл 64 тэмдэгтээс урт");
+    const body: Record<(typeof SEAL_GRANT_REQUEST_FIELDS)[number], string> = { orgEtsi: orgEtsi.trim(), sessionId: sessionId.trim() };
+    return parseSealGrant(await this.http.post(RP_ROUTES.sealGrantRequest.path, body), body.orgEtsi);
+  }
+
+  /**
+   * `GET /seal/grants/{grantId}` — хүсэлтийн төлөв. Зөвхөн хүсэлтийн эзэн RP; бусад RP-д / олдоогүй → {@link
+   * SealGrantNotFoundError} 404. `APPROVED` нь эрх цуцлагдтал хэвээр (`REVOKED` болтол).
+   */
+  async grantStatus(grantId: string): Promise<SealGrantRequest> {
+    if (typeof grantId !== "string" || grantId === "") throw new ValidationError("seal: grantId хоосон");
+    return parseSealGrant(await this.http.get(routePath(RP_ROUTES.sealGrantStatus, grantId)));
+  }
+
+  /**
+   * Хүсэлт APPROVED болтол `intervalMs` тутамд асууж зөвшөөрсөн хүсэлтийг буцаана. REJECTED / EXPIRED / FAILED / REVOKED →
+   * {@link SealGrantRequestError} (`outcome`, `failure`; шинэ хүсэлт хэрэгтэй); `timeoutMs` дуусвал `outcome: "TIMEOUT"`
+   * (хүсэлт серверт PENDING хэвээр — ижил `grantId`-аар дахин хүлээж болно). Түр алдаа (`ApiError.retryable`) — Retry-After-ийг
+   * хүлээгээд үргэлжилнэ; бусад алдаа шууд шидэгдэнэ. Хүлээх хугацаа, зайн анхдагч нь {@link waitForCertificate}-тэй ижил.
+   */
+  async waitForGrant(grantId: string, opts: SealWaitOptions = {}): Promise<SealGrantRequest> {
+    const interval = opts.intervalMs !== undefined && opts.intervalMs > 0 ? opts.intervalMs : DEFAULT_SEAL_POLL_INTERVAL_MS;
+    const deadline = Date.now() + (opts.timeoutMs !== undefined && opts.timeoutMs > 0 ? opts.timeoutMs : DEFAULT_SEAL_WAIT_TIMEOUT_MS);
+    for (;;) {
+      if (opts.signal?.aborted) throw opts.signal.reason;
+      let wait = interval;
+      try {
+        const g = await this.grantStatus(grantId);
+        if (g.status === "APPROVED") return g;
+        if (g.status === "REJECTED" || g.status === "EXPIRED" || g.status === "FAILED" || g.status === "REVOKED") {
+          throw new SealGrantRequestError(g.status, g.grantId, g.failure);
+        }
+      } catch (e) {
+        if (!(e instanceof ApiError && e.retryable)) throw e;
+        wait = Math.max(interval, e.retryAfterMs ?? 0);
+      }
+      const left = deadline - Date.now();
+      if (left <= 0) throw new SealGrantRequestError("TIMEOUT", grantId);
       await sleep(Math.min(wait, left), opts.signal);
     }
   }

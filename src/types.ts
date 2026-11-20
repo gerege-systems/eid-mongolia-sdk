@@ -333,6 +333,46 @@ export interface RepresentationsResponse {
   raw?: unknown;
 }
 
+/**
+ * Байгууллагын тамга ашиглах нэг RP-ийн эрх (CA `dto.MobileSealGrant`; `GET /organization/seal-grants/etsi/{personEtsi}`).
+ * Энгийн RP зөвхөн өөрийн эрхийг харна.
+ */
+export interface PersonSealGrant {
+  grantId: string;
+  rpName: string;
+  rpDomain?: string;
+  /** `APPROVED` | `PENDING`. */
+  status: "APPROVED" | "PENDING" | string;
+  /** RFC 3339. */
+  createdAt: string;
+  decidedAt?: string;
+  /** Зөвхөн PENDING. */
+  expiresAt?: string;
+  approverName?: string;
+  /** Энэ RP тухайн байгууллагын нэрээр хийсэн амжилттай тамгалалт (нийт / сүүлийн 30 өдөр). Статистик түр боломжгүй бол алга. */
+  sealCount?: number;
+  sealCount30d?: number;
+  /** RFC 3339; хэзээ ч тамгалаагүй бол `null`, статистик түр боломжгүй бол алга. */
+  lastSealedAt?: string | null;
+}
+
+/** Иргэн Гүйцэтгэх захирал байгаа нэг байгууллага ба түүний RP тамганы эрхүүд. */
+export interface PersonOrgSealGrants {
+  orgEtsi: string;
+  orgName: string;
+  /** `ACTIVE` | `SUSPENDED` | `REVOKED` | … */
+  orgStatus: string;
+  grants: PersonSealGrant[];
+}
+
+/** GET /organization/seal-grants/etsi/{personEtsi} хариу. */
+export interface PersonSealGrantsResponse {
+  personEtsi: string;
+  organizations: PersonOrgSealGrants[];
+  /** Серверийн түүхий JSON. */
+  raw?: unknown;
+}
+
 /** Session-ий байгууллагын блок — байгууллага + тухайн иргэний эрх (бүртгэлээс real-time). */
 export interface OrgResult {
   /** `NTRMN-<улсын бүртгэлийн дугаар>`. */
