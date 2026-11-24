@@ -207,7 +207,8 @@ function parseExtension(c: Certificate, e: Extension): void {
       c.keyUsage = keyUsageBits(n.value);
       break;
     case OID.extKeyUsage:
-      c.extKeyUsage = children(n).map((x) => oidString(x.value));
+      // SEQUENCE OF OBJECT IDENTIFIER — anything else makes the certificate unparseable, as in Go.
+      c.extKeyUsage = children(expect(n, TAG.SEQUENCE, "EKU SEQUENCE")).map((x) => oidString(expect(x, TAG.OID, "EKU OID").value));
       break;
     case OID.aia:
       for (const ad of children(n)) {

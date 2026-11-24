@@ -113,6 +113,65 @@ test("§6.1 on the golden PKI; unparsable DER is not an e-Seal certificate; same
   assert.equal(I.sealCertificateDER(undefined), false);
 });
 
+// Minimal DER editing: the golden seal certificate with one extra extendedKeyUsage extension (signature not re-made —
+// neither rule verifies it).
+function tlvAt(b: Uint8Array, p: number): { hl: number; len: number } {
+  let len = b[p + 1]!;
+  let hl = 2;
+  if (len & 0x80) {
+    const n = len & 0x7f;
+    len = 0;
+    for (let i = 0; i < n; i++) len = len * 256 + b[p + 2 + i]!;
+    hl = 2 + n;
+  }
+  return { hl, len };
+}
+const derBody = (b: Uint8Array): Uint8Array => {
+  const t = tlvAt(b, 0);
+  return b.subarray(t.hl, t.hl + t.len);
+};
+function derItems(b: Uint8Array): Uint8Array[] {
+  const out: Uint8Array[] = [];
+  for (let p = 0; p < b.length; ) {
+    const t = tlvAt(b, p);
+    out.push(b.subarray(p, p + t.hl + t.len));
+    p += t.hl + t.len;
+  }
+  return out;
+}
+function derEnc(tag: number, ...parts: Uint8Array[]): Uint8Array {
+  const body = Buffer.concat(parts);
+  const n = body.length;
+  const len = n < 0x80 ? [n] : n < 0x100 ? [0x81, n] : n < 0x10000 ? [0x82, n >> 8, n & 0xff] : [0x83, n >> 16, (n >> 8) & 0xff, n & 0xff];
+  return new Uint8Array(Buffer.concat([Buffer.from([tag, ...len]), body]));
+}
+function withEku(der: Uint8Array, ekuValue: number[]): Uint8Array {
+  const [tbs, alg, sig] = derItems(derBody(der));
+  const tbsItems = derItems(derBody(tbs!));
+  const i = tbsItems.findIndex((x) => x[0] === 0xa3);
+  assert.ok(i >= 0, "seal.pem has extensions");
+  const exts = derItems(derBody(derBody(tbsItems[i]!)));
+  const eku = derEnc(0x30, new Uint8Array([0x06, 0x03, 0x55, 0x1d, 0x25]), derEnc(0x04, new Uint8Array(ekuValue)));
+  tbsItems[i] = derEnc(0xa3, derEnc(0x30, ...exts, eku));
+  return derEnc(0x30, derEnc(0x30, ...tbsItems), alg!, sig!);
+}
+
+test("§6.1 on DER: an empty extendedKeyUsage is no purpose (seal); any purpose or a malformed EKU is not — public helper too", () => {
+  const seal = pem("seal");
+  const empty = withEku(seal, [0x30, 0x00]);
+  assert.equal(I.sealCertificateDER(empty), true, "empty EKU SEQUENCE");
+  assert.equal(isSealCertificate(empty), true, "isSealCertificate: empty EKU SEQUENCE");
+  const email = withEku(seal, [0x30, 0x0a, 0x06, 0x08, 0x2b, 0x06, 0x01, 0x05, 0x05, 0x07, 0x03, 0x04]);
+  assert.equal(I.sealCertificateDER(email), false, "EKU emailProtection");
+  assert.equal(isSealCertificate(email), false, "isSealCertificate: EKU emailProtection");
+  // Malformed EKU (not a SEQUENCE / a SEQUENCE holding a non-OID): unparseable for the pades parser (as Go), not a seal.
+  for (const bad of [[0x04, 0x00], [0x30, 0x02, 0x05, 0x00]]) {
+    const der = withEku(seal, bad);
+    assert.equal(I.sealCertificateDER(der), false, `malformed EKU ${bad}`);
+    assert.equal(isSealCertificate(der), false, `isSealCertificate: malformed EKU ${bad}`);
+  }
+});
+
 const P = { w: 22000, h: 6400, rotate: 0, name: "TEST ONLY Golden Org LLC", role: "Захирал", lang: "mn", date: "2026-10-14 12:00 (+08)", url: "" };
 
 test("§6.2 seal content: no BDC / QR / role line, text at x = pad, frame as the citizen stamp", () => {

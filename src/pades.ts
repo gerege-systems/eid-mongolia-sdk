@@ -141,7 +141,7 @@ export interface PadesPrepareOptions {
  * координат хөрвүүлэхэд {@link suggestPlacement}.
  *
  * The signer certificate alone picks the stamp (APPEARANCE_SPEC.md §6.1): an e-Seal `signerCert` (not a CA, keyUsage
- * nonRepudiation without digitalSignature, no extendedKeyUsage) gets the organisation seal stamp — no QR / verify URL /
+ * nonRepudiation without digitalSignature, no EKU purposes — an absent or empty extendedKeyUsage) gets the organisation seal stamp — no QR / verify URL /
  * role line, «eID Mongolia-аар тамгалсан» / "Sealed with eID Mongolia", no 45 pt minimum height (§6.2) and no `docId`
  * requirement; every other certificate gets the citizen stamp, unchanged.
  */

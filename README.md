@@ -1046,7 +1046,7 @@ writeFileSync("sealed.pdf", done.pdf); // PAdES-BASELINE-LT, байгуулла�
   `appearance: { x, y, width, height, page?, lang?, exact? }` (буруу/багтахгүй бол `REQUEST_INVALID`, хэт том бол
   `PDF_TOO_LARGE`). **`invisible: true` — өмнөх `sealPdf`-тэй байт-ижил үл харагдах тамга.** `prepare`-ийг шууд дуудахад:
   `prepare(pdf, { signerCert: <тамганы cert>, appearance })` → `eid.seal.seal` → `complete`. Хувилбарыг ЗӨВХӨН гэрчилгээ сонгоно (§6.1: CA биш, KeyUsage-д nonRepudiation байгаа ба
-  digitalSignature үгүй, EKU extension үгүй): e-Seal cert → QR/холбоос/үүрэггүй дардас (нэр, «eID Mongolia-аар тамгалсан» /
+  digitalSignature үгүй, EKU зорилго үгүй — extendedKeyUsage байхгүй эсвэл хоосон): e-Seal cert → QR/холбоос/үүрэггүй дардас (нэр, «eID Mongolia-аар тамгалсан» /
   "Sealed with eID Mongolia", огноо), `docId` шаардахгүй, 45 pt-ийн доод өндөр үгүй (220 × 64 pt-д f = 11); бусад cert →
   иргэний дардас (өөрчлөгдөөгүй). Байршил, `suggestPlacement` нь иргэнийхтэй ижил. `validatePdf` (энэ хувилбараас) дардсыг
   гэрчилгээгээр нь дахин үүсгэж тулгана — гэрчилгээ/дардас зөрвөл өмнөх гарын үсгүүд `modified_after_signing`. **Анхаар:**
@@ -1054,7 +1054,7 @@ writeFileSync("sealed.pdf", done.pdf); // PAdES-BASELINE-LT, байгуулла�
   дардастай revision-ийг өмнөх гарын үсгийн өөрчлөлт гэж үзнэ — CA validator §6.3-ийг гаргах хүртэл RP-д харагдах тамга
   бүү гарга (`invisible: true`).
 - `eid.seal.seal` хариуг шалгана: гарын үсэг хариуны гэрчилгээгээр digest дээр таарч, гэрчилгээ e-Seal профайл
-  (`isSealCertificate`: KeyUsage = зөвхөн nonRepudiation, EKU-гүй) байх ёстой — эс бөгөөс `ValidationError`.
+  (`isSealCertificate`: KeyUsage = зөвхөн nonRepudiation, EKU зорилго үгүй — extendedKeyUsage байхгүй эсвэл хоосон) байх ёстой — эс бөгөөс `ValidationError`.
   `hashAlgorithm`: `SHA-256` (анхдагч) | `SHA-384` | `SHA-512`.
 - Алдаа: `PadesError` `SIGNER_INVALID` (cert e-Seal биш, эсвэл тамгалах хооронд cert солигдсон — дахин оролд),
   `SIGNATURE_INVALID`, `TSA_UNAVAILABLE` / `LTV_UNAVAILABLE` (`retryable`); RP-API-ийн алдаа хэвээр: **429
