@@ -7,7 +7,7 @@ import { concat, equal, fromLatin1, toHex } from "../bytes.js";
 import { digest, sha256 } from "../crypto.js";
 import { StructureError, checkStructure } from "../pdf/nesting.js";
 import { PRef, Reader, type Value } from "../pdf/reader.js";
-import { OID, parseCertificate, verifySignature, type Certificate } from "../x509.js";
+import { OID, parseCertificate, sealCertificateDER, verifySignature, type Certificate } from "../x509.js";
 import { fromPrecise, hexSerial, pdfText, ZERO_TIME, type GoTime } from "./gofmt.js";
 import { Revisions, type SigMeta } from "./revisions.js";
 
@@ -144,7 +144,7 @@ export async function extract(doc: Uint8Array, profile: Profile = "own"): Promis
   for (const s of sigs) {
     if (!s.malformed) {
       known.set(s.objNum, s.byteRange!);
-      metas.set(s.objNum, { revIndex: 1, role: "", roleOK: s.claimedRoles.length <= 1 });
+      metas.set(s.objNum, { revIndex: 1, role: "", roleOK: s.claimedRoles.length <= 1, seal: sealCertificateDER(s.leaf) });
     }
   }
   for (const [num, m] of metas) {

@@ -99,7 +99,7 @@ export async function prepareSignature(base: Uint8Array, signingTime: Date, sign
       placement = placeOnPage(page, box, rot, vis.x, vis.y, vis.w, vis.h, vis.exact === true);
       if (placement.x !== vis.x || placement.y !== vis.y) rect = visibleRect(box, rot, placement.x, placement.y, vis.w, vis.h);
     }
-    const bodies = appearanceObjects({ w: vis.w, h: vis.h, rotate: rot, name: vis.name, role: vis.role, lang: vis.lang, date: vis.date, url: vis.url }, apIDs);
+    const bodies = appearanceObjects({ w: vis.w, h: vis.h, rotate: rot, name: vis.name, role: vis.role, lang: vis.lang, date: vis.date, url: vis.url, seal: vis.seal === true }, apIDs);
     inc.writeObject(fieldID, visibleWidget(fieldName, rect, page.ptr.id, page.ptr.gen, sigID, apIDs[0]!));
     bodies.forEach((b, i) => inc.writeObject(apIDs[i]!, b));
   }

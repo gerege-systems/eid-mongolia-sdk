@@ -28,7 +28,7 @@ import { embedCMS, PlaceholderOverflowError, prepareSignature, signatureContents
 import { PrecheckError, UUID_RE, VERIFY_URL_PREFIX, docIdFromPage, encrypted, precheck, scanSignatures, signatureCMSList } from "./pades/precheck.js";
 import { suggestVisible } from "./pades/page/suggest.js";
 import { decodeState, encodeState } from "./pades/state.js";
-import { OID, checkSignatureFrom, parseCertificate, verifyCitizen, type Certificate } from "./pades/x509.js";
+import { OID, checkSignatureFrom, parseCertificate, sealCertificate, verifyCitizen, type Certificate } from "./pades/x509.js";
 
 /**
  * `complete`: OCSP/CRL-ийн (олгогчийн гарын үсэгтэй) хариугаар гинжийн гэрчилгээ цуцлагдсан — `LTV_UNAVAILABLE`-ийн
@@ -139,6 +139,11 @@ export interface PadesPrepareOptions {
  * `x, y` нь хүссэн байрлал: тэнд хуудасны агуулга байвал дүрслэл чөлөөт зай руу шилжинэ (PLACEMENT_SPEC.md) — эцсийн
  * байрлал {@link PadesPrepared.placement}-д. `exact: true` бол яг энд зурна (шилжүүлэхгүй, §6a). Урьдчилан харах /
  * координат хөрвүүлэхэд {@link suggestPlacement}.
+ *
+ * The signer certificate alone picks the stamp (APPEARANCE_SPEC.md §6.1): an e-Seal `signerCert` (not a CA, keyUsage
+ * nonRepudiation without digitalSignature, no extendedKeyUsage) gets the organisation seal stamp — no QR / verify URL /
+ * role line, «eID Mongolia-аар тамгалсан» / "Sealed with eID Mongolia", no 45 pt minimum height (§6.2) and no `docId`
+ * requirement; every other certificate gets the citizen stamp, unchanged.
  */
 export interface PadesAppearance {
   /**
@@ -455,7 +460,7 @@ export async function prepare(pdf: Uint8Array | ArrayBuffer, opts: PadesPrepareO
     pageHex = toHex(await sha256(base));
   }
   const name = goTrim(opts.signerName ?? "") === "" ? signerDisplayName(cert) : (opts.signerName ?? "");
-  const vis = opts.appearance ? visibleSpec(doc, opts, name, now, docId, pc.revIndex) : undefined;
+  const vis = opts.appearance ? visibleSpec(doc, opts, name, now, docId, pc.revIndex, sealCertificate(cert)) : undefined;
   let prep: Awaited<ReturnType<typeof prepareSignature>>;
   try {
     // vis.page counts the input's pages; a verify page added in front shifts them by one in base (PLACEMENT_SPEC §1b).
@@ -511,10 +516,13 @@ function checkAppearance(o: Pick<PadesPrepareOptions, "appearance" | "claimedRol
   if (role !== "" && /[\p{Cc}\p{Cf}\p{Cs}]/u.test(role)) throw bad("claimedRole-д удирдах тэмдэгт");
 }
 
-/** Go visibleSpec: хуудас (0 → verify биш сүүлийн — PLACEMENT_SPEC §1a), h100, хэл, огноо (+08), verify URL. */
-function visibleSpec(doc: Uint8Array, o: PadesPrepareOptions, name: string, now: Date, docId: string, revIndex: number): Visible {
+/**
+ * Go visibleSpec: хуудас (0 → verify биш сүүлийн — PLACEMENT_SPEC §1a), h100, хэл, огноо (+08), verify URL. seal (e-Seal
+ * signer certificate, APPEARANCE_SPEC.md §6.1) → seal stamp: no URL / QR, so no docId is required.
+ */
+function visibleSpec(doc: Uint8Array, o: PadesPrepareOptions, name: string, now: Date, docId: string, revIndex: number, seal: boolean): Visible {
   const a = o.appearance!;
-  if (docId === "") throw new PadesError("REQUEST_INVALID", "appearance: docId заавал (баримтад verify хуудас алга)");
+  if (docId === "" && !seal) throw new PadesError("REQUEST_INVALID", "appearance: docId заавал (баримтад verify хуудас алга)");
   // page 0 / байхгүй = eID verify хуудас БИШ сүүлийн хуудас (PLACEMENT_SPEC §1a); тодорхой дугаар хэвээр.
   let last: number, n: number;
   try {
@@ -539,6 +547,7 @@ function visibleSpec(doc: Uint8Array, o: PadesPrepareOptions, name: string, now:
     url: `${VERIFY_URL_PREFIX}${docId}/${revIndex}`,
     avoid: true,
     exact: a.exact === true,
+    seal,
   };
 }
 

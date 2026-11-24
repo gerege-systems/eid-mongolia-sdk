@@ -225,6 +225,25 @@ function parseExtension(c: Certificate, e: Extension): void {
   }
 }
 
+/**
+ * APPEARANCE_SPEC.md §6.1 — the certificate selects the stamp variant: an e-Seal certificate is not a CA
+ * (basicConstraints absent or cA FALSE), has a keyUsage extension with nonRepudiation (bit 1) set and digitalSignature
+ * (bit 0) clear, and has no extendedKeyUsage extension at all.
+ */
+export function sealCertificate(c: Certificate): boolean {
+  return !c.isCA && (c.keyUsage & 2) !== 0 && (c.keyUsage & 1) === 0 && !c.extensions.some((e) => e.oid === OID.extKeyUsage);
+}
+
+/** {@link sealCertificate} on DER; a certificate that cannot be parsed is not an e-Seal certificate (§6.1). */
+export function sealCertificateDER(der: Uint8Array | undefined): boolean {
+  if (!der) return false;
+  try {
+    return sealCertificate(parseCertificate(der));
+  } catch {
+    return false;
+  }
+}
+
 /** Go IsTSASigningCert: EKU яг нэг, critical, яг { timeStamping }. */
 export function isTSASigningCert(c: Certificate): boolean {
   const ekus = c.extensions.filter((e) => e.oid === OID.extKeyUsage);

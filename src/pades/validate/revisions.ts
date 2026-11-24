@@ -48,6 +48,8 @@ export interface SigMeta {
   role: string;
   /** claimedRole 0 эсвэл яг 1. */
   roleOK: boolean;
+  /** The signer certificate is an e-Seal certificate (APPEARANCE_SPEC.md §6.1) — only the seal stamp is accepted (§6.3). */
+  seal?: boolean;
 }
 
 /** Гарын үсгийн мужийн дараах revision-уудын дүгнэлт. */

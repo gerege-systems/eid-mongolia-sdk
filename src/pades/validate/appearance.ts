@@ -53,16 +53,24 @@ export function ownVisible(c: Classifier, d: PDict, widget: number): void {
   const ids = apIDs(c, nr);
   const form = c.fin.get(ids[0]!);
   if (!(form instanceof PStream)) throw fail();
-  let head = "";
-  for (let i = 0; i < Math.min(form.data.length, 200); i++) head += String.fromCharCode(form.data[i]!);
-  const sm = AP_URL_RE.exec(head);
-  if (!sm || sm[2] !== String(meta.revIndex) || (c.docID !== "" && sm[1] !== c.docID)) throw fail();
-  const url = AP_VERIFY_PREFIX + sm[1] + "/" + sm[2];
+  // The certificate alone picks the variant (APPEARANCE_SPEC.md §6.1/§6.3): e-Seal → seal stamp (no URL / QR / role,
+  // step 6 skipped), anything else → citizen stamp. A stamp of the other variant never matches → fail.
+  const seal = meta.seal === true;
+  let role = "";
+  let url = "";
+  if (!seal) {
+    let head = "";
+    for (let i = 0; i < Math.min(form.data.length, 200); i++) head += String.fromCharCode(form.data[i]!);
+    const sm = AP_URL_RE.exec(head);
+    if (!sm || sm[2] !== String(meta.revIndex) || (c.docID !== "" && sm[1] !== c.docID)) throw fail();
+    role = meta.role;
+    url = AP_VERIFY_PREFIX + sm[1] + "/" + sm[2];
+  }
   const name = pdfTextString(ns);
   for (const lang of ["mn", "en"]) {
     let bodies: (string | Uint8Array)[];
     try {
-      bodies = appearanceObjects({ w, h, rotate: rot, name, role: meta.role, lang, date, url }, ids);
+      bodies = appearanceObjects({ w, h, rotate: rot, name, role, lang, date, url, seal }, ids);
     } catch {
       throw fail();
     }

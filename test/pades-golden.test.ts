@@ -17,6 +17,8 @@ const hex = (b: Uint8Array) => Buffer.from(b).toString("hex");
 interface Case {
   name: string;
   input: string;
+  /** Golden v12: "seal" = pki/seal.pem (organisation e-Seal → seal stamp, APPEARANCE_SPEC.md §6); absent = pki/citizen.pem. */
+  signer?: "seal";
   prepare: { reason?: string; claimedRole?: string; docId?: string; verifyPage?: boolean; verifyPagePosition?: "last" | "first"; fileName?: string; lang?: "mn" | "en"; appearance?: pades.PadesAppearance };
   expect: Record<string, unknown> & { error?: string };
 }
@@ -57,7 +59,7 @@ test("pades golden — Go reference-тэй байт-ижил (prepare + complete
     assert.ok(input, `${c.name}: оролт алга`);
     assert.equal(sha(input), c.expect.inputSha256, `${c.name}: inputSha256`);
     const opts: pades.PadesPrepareOptions = {
-      signerCert: pem("citizen"),
+      signerCert: pem(c.signer === "seal" ? "seal" : "citizen"),
       chain,
       signingTime: new Date(M.signingTime),
       reason: c.prepare.reason,
@@ -161,6 +163,10 @@ test("pades golden — Go reference-тэй байт-ижил (prepare + complete
     assert.notEqual((c.expect.placement as { status?: string } | undefined)?.status, "moved", `${c.name}: exact → moved`);
   }
   assert.ok(n >= 16, "golden case цөөн");
+  // Golden v12 (APPEARANCE_SPEC.md §6): the seal-stamp cases are part of the byte-identity run above.
+  for (const s of ["seal-visible", "seal-visible-en", "seal-visible-third"]) {
+    assert.ok(M.cases.some((c) => c.name === s && c.signer === "seal" && c.prepare.appearance), `golden v12: ${s} алга`);
+  }
   assert.ok(M.cases.filter((c) => c.prepare.appearance).length >= 11, "харагдах golden case цөөн");
   for (const s of ["requested", "moved", "overlap"]) {
     assert.ok(M.cases.some((c) => (c.expect.placement as { status?: string } | undefined)?.status === s), `golden-д placement ${s} алга`);
