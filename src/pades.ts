@@ -35,9 +35,9 @@ import {
   precheck,
   scanSignatures,
   signatureCMSList,
-  type VerifiedSignature,
+  type PrecheckedSignature,
 } from "./pades/precheck.js";
-import { SEAL_QR, type SealQrOption } from "./pades/sealqr.js";
+import { sealQrRequested } from "./pades/sealqr.js";
 import { suggestVisible } from "./pades/page/suggest.js";
 import { decodeState, encodeState } from "./pades/state.js";
 import { OID, checkSignatureFrom, parseCertificate, sealCertificate, verifyCitizen, type Certificate } from "./pades/x509.js";
@@ -451,7 +451,7 @@ export async function prepare(pdf: Uint8Array | ArrayBuffer, opts: PadesPrepareO
   }
   const seal = sealCertificate(cert);
   // A stamp that draws a QR: the citizen stamp (§3), or the seal stamp with QR (§6.5) — internal switch only.
-  const drawsQR = opts.appearance !== undefined && (!seal || (opts as PadesPrepareOptions & SealQrOption)[SEAL_QR] === true);
+  const drawsQR = opts.appearance !== undefined && (!seal || sealQrRequested(opts));
   const docId = await resolveDocId(doc, pc.newDoc, pc.verified, docIdOpt);
   let base = doc;
   let pageHex = "";
@@ -542,7 +542,7 @@ function checkAppearance(o: Pick<PadesPrepareOptions, "appearance" | "claimedRol
  * REQUEST_INVALID (visible and invisible signers alike); (3) else `given`; (4) else "" — never random on a signed document
  * (the CA rejects a rev > 1 registration of an unknown docId), so a stamp that draws a QR is then REQUEST_INVALID.
  */
-async function resolveDocId(doc: Uint8Array, newDoc: boolean, verified: Map<number, VerifiedSignature>, given: string): Promise<string> {
+async function resolveDocId(doc: Uint8Array, newDoc: boolean, verified: Map<number, PrecheckedSignature>, given: string): Promise<string> {
   if (newDoc) return given !== "" ? given : await randUUID();
   let found = docIdFromPage(doc);
   if (found === "") {

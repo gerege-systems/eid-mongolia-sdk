@@ -23,7 +23,7 @@ interface Case {
   input: string;
   /** Golden v12: "seal" = pki/seal.pem (organisation e-Seal → seal stamp, APPEARANCE_SPEC.md §6); absent = pki/citizen.pem. */
   signer?: "seal";
-  /** Golden v13: the seal stamp with QR (§6.5) — Go's unexported PrepareOptions.sealQR; here the internal SEAL_QR hook. */
+  /** Golden v13: the seal stamp with QR (§6.5) — Go's unexported PrepareOptions.sealQR; here the internal withSealQr hook. */
   sealQr?: boolean;
   prepare: { reason?: string; claimedRole?: string; docId?: string; verifyPage?: boolean; verifyPagePosition?: "last" | "first"; fileName?: string; lang?: "mn" | "en"; appearance?: pades.PadesAppearance };
   expect: Record<string, unknown> & { error?: string };
@@ -38,8 +38,8 @@ interface Manifest {
 const M = JSON.parse(readFileSync(new URL("manifest.json", G), "utf8")) as Manifest;
 
 /**
- * prepare with the internal §6.5 switch on (golden cases `"sealQr": true`). The switch is a module-private symbol of
- * src/pades/sealqr.ts that no entry point exports, so it is reached through a bundle of src — never through dist.
+ * prepare with the internal §6.5 switch on (golden cases `"sealQr": true`). The switch is a module-private WeakSet of
+ * src/pades/sealqr.ts (`withSealQr`, exported by no entry point), so it is reached through a bundle of src — never dist.
  */
 type Prepare = (pdf: Uint8Array, o: pades.PadesPrepareOptions) => Promise<pades.PadesPrepared>;
 const tmp = mkdtempSync(join(tmpdir(), "eid-golden-sealqr-"));
@@ -47,7 +47,7 @@ after(() => rmSync(tmp, { recursive: true, force: true }));
 async function sealQrPrepare(): Promise<Prepare> {
   const r = await build({
     stdin: {
-      contents: `export { prepare } from "./src/pades.ts";\nexport { SEAL_QR } from "./src/pades/sealqr.ts";`,
+      contents: `export { prepare } from "./src/pades.ts";\nexport { withSealQr } from "./src/pades/sealqr.ts";`,
       resolveDir: join(dirname(fileURLToPath(import.meta.url)), ".."),
       loader: "ts",
       sourcefile: "sealqr-entry.ts",
@@ -60,8 +60,8 @@ async function sealQrPrepare(): Promise<Prepare> {
   });
   const out = join(tmp, "sealqr.mjs");
   writeFileSync(out, r.outputFiles[0]!.contents);
-  const m = (await import(pathToFileURL(out).href)) as { prepare: Prepare; SEAL_QR: symbol };
-  return (pdf, o) => m.prepare(pdf, { ...o, [m.SEAL_QR]: true } as pades.PadesPrepareOptions);
+  const m = (await import(pathToFileURL(out).href)) as { prepare: Prepare; withSealQr<T extends object>(o: T): T };
+  return (pdf, o) => m.prepare(pdf, m.withSealQr({ ...o }));
 }
 const prepareSealQr = await sealQrPrepare();
 

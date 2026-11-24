@@ -1067,6 +1067,7 @@ writeFileSync("sealed.pdf", done.pdf); // PAdES-BASELINE-LT, байгуулла�
   QR-тэй тамгатай, verify хуудасгүй баримтад үл харагдах гарын үсэг өмнө нь `opts.docId` эсвэл ""-г авдаг байсан, одоо
   тамганы docId-г авна). Юу ч олдохгүй бол `opts.docId`, эс бөгөөс "" — гарын үсэгтэй баримтад санамсаргүй docId үүсгэхгүй
   (QR зурах дардас тэгвэл `REQUEST_INVALID`, өмнөхтэй ижил). Тамганы дардасны уншилт эвдэрсэн бол `PDF_INVALID`.
+  `sealPdf`-ийн буцаах `docId` (гаралтын байт биш) ийм баримтад өмнөх QR-тэй тамганы docId болно.
 - `eid.seal.seal` хариуг шалгана: гарын үсэг хариуны гэрчилгээгээр digest дээр таарч, гэрчилгээ e-Seal профайл
   (`isSealCertificate`: KeyUsage = зөвхөн nonRepudiation, EKU зорилго үгүй — extendedKeyUsage байхгүй эсвэл хоосон) байх ёстой — эс бөгөөс `ValidationError`.
   `hashAlgorithm`: `SHA-256` (анхдагч) | `SHA-384` | `SHA-512`.

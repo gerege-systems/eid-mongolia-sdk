@@ -36,14 +36,15 @@ interface Internals {
   docIdFromStamps(doc: Uint8Array, verified: Map<number, Verified>): string;
   precheck(doc: Uint8Array, issuers: unknown[]): Promise<{ newDoc: boolean; revIndex: number; verified: Map<number, Verified> }>;
   parseCertificate(der: Uint8Array): unknown;
-  prepare(pdf: Uint8Array, o: Record<PropertyKey, unknown>): Promise<pades.PadesPrepared>;
-  SEAL_QR: symbol;
+  prepare(pdf: Uint8Array, o: pades.PadesPrepareOptions): Promise<pades.PadesPrepared>;
+  withSealQr<T extends object>(o: T): T;
+  PdfError: new (...a: unknown[]) => Error;
 }
 
 const tmp = mkdtempSync(join(tmpdir(), "eid-seal-qr-"));
 after(() => rmSync(tmp, { recursive: true, force: true }));
 
-/** src bundled into one ESM — the renderer, docIdFromStamps, precheck and the SEAL_QR switch are internal. */
+/** src bundled into one ESM — the renderer, docIdFromStamps, precheck and the withSealQr switch are internal. */
 async function internals(): Promise<Internals> {
   const r = await build({
     stdin: {
@@ -53,7 +54,8 @@ async function internals(): Promise<Internals> {
         `export { docIdFromStamps, precheck } from "./src/pades/precheck.ts";`,
         `export { parseCertificate } from "./src/pades/x509.ts";`,
         `export { prepare } from "./src/pades.ts";`,
-        `export { SEAL_QR } from "./src/pades/sealqr.ts";`,
+        `export { withSealQr } from "./src/pades/sealqr.ts";`,
+        `export { PdfError } from "./src/pades/pdf/reader.ts";`,
       ].join("\n"),
       resolveDir: root,
       loader: "ts",
@@ -212,14 +214,111 @@ test("§6.6 2.2: /Filter absent or a direct null only — [] , a name, an indire
   for (const [name, objs, want] of cases) assert.equal(I.docIdFromStamps(stampPdf(objs), ONE()), want, name);
 });
 
-test("§6.6 2.2: a failure reading the candidate's own /N throws (prepare → PDF_INVALID); an unrelated unreadable object is skipped", () => {
-  // Object 5 (the candidate's /N stream) sits at a bogus xref offset.
-  assert.throws(() => I.docIdFromStamps(stampPdf(one(""), [5]), ONE()));
-  // A fake widget 8 (not a candidate's own read) at a bogus offset: skipped, the candidate still wins.
-  assert.equal(I.docIdFromStamps(stampPdf(one("", stampWidget("6 0 R", 5)), [7]), ONE()), EARLIER);
-  // A widget's /AP that is not a dictionary / /N not a stream → no candidate, no error.
-  assert.equal(I.docIdFromStamps(stampPdf([stampWidget("6 0 R", 5).replace("/AP << /N 5 0 R >>", "/AP 5 0 R"), "<< /N 1 >>", stampSig(50)]), ONE()), "");
+// Spec sentence (§6.6 2.2): "only a single-widget candidate's own /AP, /N, /Length and stream reads → PDF_INVALID;
+// unreadable objects elsewhere in this walk are skipped". Objects listed in the second rawPdf argument sit at a bogus
+// xref offset (loading them throws PdfError).
+test("§6.6 2.2: a single-widget candidate's own unreadable /AP, /N, /Length or /DecodeParms throws PdfError (prepare → PDF_INVALID)", () => {
+  const isPdfError = (e: unknown) => e instanceof I.PdfError;
+  // 4 widget (/AP 7 0 R) → 5 stream, 6 sig; 7 = the /AP dictionary.
+  const indirectAP = [stampWidget("6 0 R", 5).replace("/AP << /N 5 0 R >>", "/AP 7 0 R"), stampStream(EARLIER, 1), stampSig(50), "<< /N 5 0 R >>"];
+  assert.equal(I.docIdFromStamps(stampPdf(indirectAP), ONE()), EARLIER, "control: indirect /AP readable");
+  const cases: [string, Uint8Array][] = [
+    ["/AP", stampPdf(indirectAP, [7])],
+    ["/N", stampPdf(one(""), [5])],
+    ["/Length 7 0 R", stampPdf([stampWidget("6 0 R", 5), stampStream(EARLIER, 1).replace(/\/Length \d+/, "/Length 7 0 R"), stampSig(50), "99"], [7])],
+    ["/DecodeParms 7 0 R", stampPdf(one(" /DecodeParms 7 0 R", "<< /Columns 1 >>"), [7])],
+  ];
+  for (const [name, doc] of cases) assert.throws(() => I.docIdFromStamps(doc, ONE()), isPdfError, name);
+});
+
+test("§6.6 2.2: unreadable objects elsewhere are skipped — indirect /FT, /V to a non-signature, any read on a two-widget signature", () => {
+  // 7 a second widget whose indirect /FT (8) cannot be loaded: skipped, so 6 keeps one widget and wins.
+  const badFT = one("", stampWidget("6 0 R", 5).replace("/FT /Sig", "/FT 8 0 R"), "/Sig");
+  assert.equal(I.docIdFromStamps(stampPdf(badFT, [8]), ONE()), EARLIER, "unloadable indirect /FT");
+  // 7 a widget whose /V points to 8, an unloadable object that is not a verified signature.
+  const badV = one("", stampWidget("8 0 R", 5), "<< /Type /Sig >>");
+  assert.equal(I.docIdFromStamps(stampPdf(badV, [8]), ONE()), EARLIER, "/V to an unloadable non-signature");
+  // A widget object itself unloadable: skipped.
+  assert.equal(I.docIdFromStamps(stampPdf(one("", stampWidget("6 0 R", 5)), [7]), ONE()), EARLIER, "unloadable widget object");
+  // Signature 6 with two widgets (4, 7) whose /N (5, 8) both cannot be loaded: ignored entirely, never read.
+  const twoBad = [stampWidget("6 0 R", 5), stampStream(EARLIER, 1), stampSig(50), stampWidget("6 0 R", 8), stampStream(FORGED, 1)];
+  assert.equal(I.docIdFromStamps(stampPdf(twoBad, [5, 8]), ONE()), "", "two widgets with unreadable streams");
+  // /AP not a dictionary, /N not a stream → no candidate, no error.
+  assert.equal(I.docIdFromStamps(stampPdf([stampWidget("6 0 R", 5).replace("/AP << /N 5 0 R >>", "/AP 5"), "<< /N 1 >>", stampSig(50)]), ONE()), "");
   assert.equal(I.docIdFromStamps(stampPdf([stampWidget("6 0 R", 5), "<< /Type /XObject >>", stampSig(50)]), ONE()), "");
+});
+
+/** `base` + an incremental update that redefines `objs` (number → body; null = a bogus xref offset). Classic xref. */
+function appendRevision(base: Uint8Array, objs: [number, string | null][]): Uint8Array {
+  const s = Buffer.from(base).toString("latin1");
+  const size = Number([...s.matchAll(/\/Size (\d+)/g)].at(-1)![1]);
+  const rootRef = [...s.matchAll(/\/Root (\d+ \d+ R)/g)].at(-1)![1];
+  const prev = Number([...s.matchAll(/startxref\s+(\d+)/g)].at(-1)![1]);
+  const parts: string[] = [s.endsWith("\n") ? s : s + "\n"];
+  let len = parts[0]!.length;
+  // One xref subsection per run of consecutive object numbers.
+  const sections: { start: number; rows: string[] }[] = [];
+  let maxObj = size - 1;
+  for (const [n, body] of objs) {
+    let off = 1; // null body: a bogus offset inside the header → loading the object throws
+    if (body !== null) {
+      off = len;
+      const o = `${n} 0 obj\n${body}\nendobj\n`;
+      parts.push(o);
+      len += o.length;
+    }
+    const last = sections.at(-1);
+    const row = `${String(off).padStart(10, "0")} 00000 n\r\n`;
+    if (last && last.start + last.rows.length === n) last.rows.push(row);
+    else sections.push({ start: n, rows: [row] });
+    maxObj = Math.max(maxObj, n);
+  }
+  parts.push("xref\n", ...sections.map((x) => `${x.start} ${x.rows.length}\n${x.rows.join("")}`));
+  parts.push(`trailer\n<< /Size ${maxObj + 1} /Root ${rootRef} /Prev ${prev} >>\nstartxref\n${len}\n%%EOF\n`);
+  return new Uint8Array(Buffer.from(parts.join(""), "latin1"));
+}
+
+test("prepare: the QR seal's own /N made unreadable by an appended revision → PDF_INVALID (public prepare)", async () => {
+  const base = readG("output/seal-qr-visible.pdf");
+  const n = Number(/\/AP << \/N (\d+) 0 R >>/.exec(Buffer.from(base).toString("latin1"))![1]);
+  const broken = appendRevision(base, [[n, null]]);
+  for (const visible of [true, false]) {
+    await assert.rejects(pades.prepare(broken, opts("", visible)), code("PDF_INVALID"), `visible ${visible}`);
+  }
+  // The same bytes through docIdFromStamps with the original document's verified signatures: the candidate's own read.
+  const verified = (await I.precheck(base, ["04"].map((x) => I.parseCertificate(pem(x))))).verified;
+  assert.throws(() => I.docIdFromStamps(broken, verified), (e: unknown) => e instanceof I.PdfError);
+});
+
+test("~150k forged widgets borrowing the seal's /V (appended unsigned revision): linear work; the seal is ignored as a source", async () => {
+  // Attack from the review: copying the widget list on every append is ~n²/2 = 1.1e10 element copies at n = 150k. The
+  // count + first-widget map is O(n). No absolute wall-clock threshold: the same walk at n/4 and n must scale like n
+  // (ratio ≈ 4; quadratic bookkeeping gives ≈ 16 once it dominates) — bound 10× (+ 500 ms slack for GC/JIT noise).
+  const base = readG("output/seal-qr-visible.pdf");
+  const s = Buffer.from(base).toString("latin1");
+  const sigObj = Number(/\/V (\d+) 0 R\n {2}\/AP << \/N \d+ 0 R >>/.exec(s)![1]);
+  const size = Number([...s.matchAll(/\/Size (\d+)/g)].at(-1)![1]);
+  const forgedDoc = (n: number) => {
+    const forged: [number, string][] = [];
+    for (let i = 0; i < n; i++) forged.push([size + i, `<</FT/Sig/V ${sigObj} 0 R>>`]);
+    return appendRevision(base, forged);
+  };
+  const N = 150_000;
+  const big = forgedDoc(N);
+  const small = forgedDoc(N / 4);
+  assert.ok(big.length <= (10 << 20) - (256 << 10), `${big.length} bytes over the input limit`);
+  const verified = (await I.precheck(base, ["04"].map((x) => I.parseCertificate(pem(x))))).verified;
+  assert.equal(I.docIdFromStamps(small, verified), "", "warm-up; two or more widgets → not a source");
+  const time = (doc: Uint8Array): number => {
+    const t = performance.now();
+    assert.equal(I.docIdFromStamps(doc, verified), "");
+    return performance.now() - t;
+  };
+  const t1 = time(small);
+  const t2 = time(big);
+  assert.ok(t2 < 10 * t1 + 500, `n/4: ${t1.toFixed(0)} ms, n: ${t2.toFixed(0)} ms — super-linear`);
+  // Through the public prepare (prechecks pass: the appended revision is unsigned): the invisible citizen gets "".
+  assert.equal((await pades.prepare(big, opts("", false))).docId, "");
 });
 
 test("§6.6 2.2 on golden bytes: QR seal → its docId; QR-less seal → none; the citizen stamp after a QR seal is not a source", async () => {
@@ -354,16 +453,55 @@ test("public prepare / sealPdf on a QR-sealed document: the new seal stamp has n
   assert.equal(p.docId, QR_SEAL_DOC_ID, "docId from the earlier e-Seal stamp");
   assert.ok(!preparedPdf(p.state).subarray(sealQr.length).includes(Buffer.from("/EIDVerify")), "QR-less stamp");
   assert.equal(await sealDtbs(sealQr, { appearance: STAMP }), hex(p.dtbs), "sealPdf = public prepare");
-  // The same options with the internal switch (src bundle) draw the marker at rev 2 — dist has no way to set it.
-  const q = await I.prepare(sealQr, { ...opts("", true, "seal"), [I.SEAL_QR]: true });
+  // The same options registered with the internal switch (src bundle) draw the marker at rev 2.
+  const q = await I.prepare(sealQr, I.withSealQr(opts("", true, "seal")));
   assert.ok(preparedPdf(q.state).subarray(sealQr.length).includes(marker(QR_SEAL_DOC_ID, 2)));
   assert.notEqual(hex(q.dtbs), hex(p.dtbs));
+  // A copy of registered options is not registered: the switch is the object's identity, never a property.
+  assert.equal(hex((await I.prepare(sealQr, { ...I.withSealQr(opts("", true, "seal")) })).dtbs), hex(p.dtbs));
   const guess = await pades.prepare(sealQr, { ...opts("", true, "seal"), [Symbol.for("eid-mongolia-sdk.pades.sealQr")]: true, sealQr: true } as pades.PadesPrepareOptions);
   assert.equal(hex(guess.dtbs), hex(p.dtbs), "a registered symbol or a sealQr key does nothing");
-  assert.ok(!Object.keys(pades).some((k) => /seal_?qr/i.test(k)), "no SEAL_QR export");
+  assert.ok(!Object.keys(pades).some((k) => /seal_?qr/i.test(k)), "no switch export");
   // state never carries the switch.
   const st = Buffer.from(q.state);
   assert.ok(!st.subarray(13, 13 + st.readUInt32BE(9)).toString().toLowerCase().includes("sealqr"));
+});
+
+/** Option keys prepare reads (PadesPrepareOptions); a Proxy answers every other key — string or symbol — with true. */
+const KNOWN = new Set(["signerCert", "chain", "signerName", "reason", "claimedRole", "signingTime", "docId", "verifyPage", "verifyPagePosition", "lang", "fileName", "appearance"]);
+
+test("a Proxy as prepare options (every unknown key and every symbol → true) still yields the QR-less stamp; no symbol is read", async () => {
+  const sealQr = readG("output/seal-qr-visible.pdf");
+  const plain = await pades.prepare(sealQr, opts("", true, "seal"));
+  const symbolsRead: symbol[] = [];
+  const target = opts("", true, "seal") as unknown as Record<PropertyKey, unknown>;
+  const proxy = new Proxy(target, {
+    get(t, k) {
+      if (typeof k === "symbol") symbolsRead.push(k);
+      return typeof k === "string" && KNOWN.has(k) ? t[k] : true;
+    },
+    has: () => true,
+  }) as unknown as pades.PadesPrepareOptions;
+  const p = await pades.prepare(sealQr, proxy);
+  assert.equal(hex(p.dtbs), hex(plain.dtbs), "Proxy: QR-less");
+  assert.ok(!preparedPdf(p.state).subarray(sealQr.length).includes(Buffer.from("/EIDVerify")));
+  assert.deepEqual(symbolsRead, [], "prepare reads no symbol-keyed property of the options");
+});
+
+test("Object.prototype pollution (symbols and sealQr keys) changes neither prepare nor sealPdf output", async () => {
+  const sealQr = readG("output/seal-qr-visible.pdf");
+  const contract = readG("input/libreoffice-contract.pdf");
+  const before = { prepare: hex((await pades.prepare(sealQr, opts("", true, "seal"))).dtbs), seal: await sealDtbs(contract, { reason: "Нэхэмжлэх" }) };
+  const keys: PropertyKey[] = [Symbol("sealQr"), Symbol.for("eid-mongolia-sdk.pades.sealQr"), Symbol.for("sealQr"), "sealQr", "sealQR", "seal_qr"];
+  const proto = Object.prototype as Record<PropertyKey, unknown>;
+  try {
+    for (const k of keys) proto[k] = true;
+    assert.equal(hex((await pades.prepare(sealQr, opts("", true, "seal"))).dtbs), before.prepare, "prepare");
+    assert.equal(await sealDtbs(contract, { reason: "Нэхэмжлэх" }), before.seal, "sealPdf");
+  } finally {
+    for (const k of keys) delete proto[k];
+  }
+  assert.equal(before.seal, gcase("seal-visible").expect.dtbs, "sealPdf = golden v12 seal-visible");
 });
 
 // ── Validator inputs used above exist (the verdicts are asserted in validate-golden.test.ts) ──────────────────────────

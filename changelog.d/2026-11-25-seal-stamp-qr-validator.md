@@ -9,21 +9,25 @@
   golden/тестийн hook ашиглана). `prepare`-ийн docId (§6.6): гарын үсэгтэй баримтад verify хуудасны холбоос алга бол
   шалгасан **e-Seal** гарын үсгийн хамгийн эрт зурсан тэмдэгтэй дардасны docId (маркерын rev = дараалал, өөрийн `/FT
   /Sig` ба шууд бус `/V`, гарын үсэг бүрт ганц widget, `/Filter` байхгүй эсвэл шууд `null`; иргэний дардас хэзээ ч эх
-  биш); олдсон docId ≠ `opts.docId` → `REQUEST_INVALID` (үл харагдах гарын үсэгт ч); тэр дардсыг унших алдаа →
-  `PDF_INVALID`; юу ч олдохгүй бол `opts.docId`, эс бөгөөс "" (гарын үсэгтэй баримтад санамсаргүй docId хэзээ ч үгүй).
+  биш); олдсон docId ≠ `opts.docId` → `REQUEST_INVALID` (үл харагдах гарын үсэгт ч); зөвхөн ганц widget-тэй нэр
+  дэвшигчийн өөрийн `/AP`, `/N`, `/Length` (`/DecodeParms`) ба stream-ийн уншилт эвдэрсэн бол `PDF_INVALID`, бусад
+  уншигдахгүй объектыг алгасна; юу ч олдохгүй бол `opts.docId`, эс бөгөөс "" (гарын үсэгтэй баримтад санамсаргүй docId
+  хэзээ ч үгүй). Widget-ийг гарын үсэг бүрт тоо + эхнийх л хадгална — олон мянган хуурамч widget-тэй PDF-д O(n).
 - **Зан төлөвийн өөрчлөлт:** QR-тэй тамгатай, verify хуудасгүй баримтад үл харагдах гарын үсэг одоо тамганы docId-г
-  авна (өмнө нь `opts.docId` эсвэл ""); зөрүүтэй `opts.docId` → `REQUEST_INVALID`. Зөвхөн иргэний гарын үсэгтэй баримт
-  0.48.x-тэй яг ижил.
+  авна (өмнө нь `opts.docId` эсвэл ""); зөрүүтэй `opts.docId` → `REQUEST_INVALID`. `sealPdf`-ийн буцаах `docId` (байт
+  биш) ийм баримтад одоо өмнөх QR-тэй тамганы docId болно. Зөвхөн иргэний гарын үсэгтэй баримт 0.48.x-тэй яг ижил.
 - **Нийтийн API QR-тэй тамга ГАРГАХГҮЙ:** `sealPdf` ба `prepare` QR-гүй дардсаа хэвээр (`sealPdf`-ийн гаралт 0.48.1-тэй
   байт-ижил — golden v12 `seal-visible` / `seal-visible-en` DTBS). Шилжүүлэгч нь `src/pades/sealqr.ts`-ийн
-  экспортлогдоогүй (`Symbol()`, `Symbol.for` биш) түлхүүр — ямар ч entry point, нийтийн options төрөл, `state`-д
-  байхгүй; зөвхөн src bundle-аар тест/golden (`"sealQr": true`) асаана (Go-ийн экспортлогдоогүй `sealQR`-тэй ижил).
-  QR-гүй дардас үүрд хүчинтэй.
+  module-private `WeakSet` — options объектын identity (`has(opts)`), шинж чанар биш: prepare дуудагчийн объект ба
+  түүний prototype-оос энэ шийдвэрт юу ч уншихгүй (Proxy, symbol, `Object.prototype` бохирдуулалт нөлөөлөхгүй).
+  Бүртгэх `withSealQr`-ийг ямар ч entry point экспортлохгүй; `sealPdf`, `complete`, `state` задлалт дууддаггүй; зөвхөн
+  src bundle-аар тест/golden (`"sealQr": true`) асаана (Go-ийн экспортлогдоогүй `sealQR`-тэй ижил). QR-гүй дардас
+  үүрд хүчинтэй.
 - **Writers must not emit the QR seal stamp until the CA validator and /verify bundle ship §6.5.**
 - **Яагаад:** Rollout-ийн 1-р алхам — дардас дахин үүсгэдэг шалгагч бүр шинэ хувилбарыг бичигч гаргахаас ӨМНӨ
   production-д хүлээн авна. Go SDK #68 (golden v13)-тай байт-ижил.
 - **Хаана:** `src/pades/page/appearance.ts`, `src/pades/validate/appearance.ts`, `src/pades/precheck.ts`
-  (`VerifiedSignature`, `docIdFromStamps`), `src/pades.ts` (`resolveDocId`, `visibleSpec`), `src/pades/sealqr.ts`,
+  (`PrecheckedSignature`, `docIdFromStamps`), `src/pades.ts` (`resolveDocId`, `visibleSpec`), `src/pades/sealqr.ts`,
   `scripts/sync-pades-golden.mjs` (Go main `3fc16fb` — PR #68-ийн merge commit; tag гармагц дахин бэхэлнэ),
   `src/pades/assets/{fonts,chain}.ts` (зөвхөн толгойн мөр), `test/fixtures/pades/{golden,validate}` (v13),
   `test/pades-golden.test.ts`, `test/validate-golden.test.ts`, `test/pades-seal-qr.test.ts`, `README.md` (§3i).

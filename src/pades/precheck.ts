@@ -139,16 +139,16 @@ async function issuedByAny(leaf: Certificate, issuers: Certificate[]): Promise<b
  * A signature #6 found and #8–#10 accepted (APPEARANCE_SPEC.md §6.6 «verified signatures»): its revision end
  * (ByteRange[2] + ByteRange[3], checked by #8) and whether its signer certificate is an e-Seal certificate (§6.1).
  */
-export interface VerifiedSignature {
+export interface PrecheckedSignature {
   end: number;
   seal: boolean;
 }
 
 /**
- * precheck — {newDoc, revIndex, verified}. verified: signature dictionary object number → {@link VerifiedSignature}
+ * precheck — {newDoc, revIndex, verified}. verified: signature dictionary object number → {@link PrecheckedSignature}
  * (empty on an unsigned document). PDF_ENCRYPTED шалгалтыг дуудагч өмнө нь хийнэ (#4 → #5 дараалал).
  */
-export async function precheck(doc: Uint8Array, issuers: Certificate[]): Promise<{ newDoc: boolean; revIndex: number; verified: Map<number, VerifiedSignature> }> {
+export async function precheck(doc: Uint8Array, issuers: Certificate[]): Promise<{ newDoc: boolean; revIndex: number; verified: Map<number, PrecheckedSignature> }> {
   if (encrypted(doc)) throw new PrecheckError("PDF_ENCRYPTED", "шифрлэгдсэн PDF дэмжигдэхгүй");
   let scan: ReturnType<typeof scanSignatures>;
   try {
@@ -168,7 +168,7 @@ export async function precheck(doc: Uint8Array, issuers: Certificate[]): Promise
     }
   }
   if (locked) throw new PrecheckError("PDF_LOCKED", "баримт certification (DocMDP P=1) гарын үсгээр түгжигдсэн");
-  const verified = new Map<number, VerifiedSignature>();
+  const verified = new Map<number, PrecheckedSignature>();
   for (let i = 0; i < sigs.length; i++) {
     const l = leaves[i]!;
     if (sigs[i]!.subFilter !== "ETSI.CAdES.detached" || !(await issuedByAny(l.leaf, issuers)) || !l.stamped || !hasDSS) {
@@ -213,13 +213,15 @@ const STAMP_MARKER_MAX = 128;
  * rev must equal the signature's position (1 + the verified signatures with a smaller ByteRange end). The candidate with
  * the smallest ByteRange end wins, ties → the lower signature object number. "" when there is none.
  *
- * Objects that cannot be read while looking for widgets are skipped; a failure reading a candidate's own `/AP`, `/N`,
- * `/Length` or stream bytes throws (prepare → PDF_INVALID; a candidate found before it is never used).
+ * Only a single-widget candidate's own `/AP`, `/N`, `/Length` and stream reads (its stream dictionary's `/DecodeParms`
+ * included) throw (prepare → PDF_INVALID; a candidate found before it is never used); unreadable objects elsewhere in
+ * this walk are skipped — an unloadable indirect `/FT`, a `/V` to an unloadable non-signature object, and any read on a
+ * signature with two or more widgets (never read: only the count and the first widget are kept, O(n) for n widgets).
  */
-export function docIdFromStamps(doc: Uint8Array, verified: Map<number, VerifiedSignature>): string {
+export function docIdFromStamps(doc: Uint8Array, verified: Map<number, PrecheckedSignature>): string {
   if (![...verified.values()].some((s) => s.seal)) return "";
   const r = new Reader(doc);
-  const widgets = new Map<number, Value[]>();
+  const widgets = new Map<number, { count: number; first: Value }>();
   for (const x of r.xref) {
     let w: { sig: number; v: Value } | undefined;
     try {
@@ -234,13 +236,15 @@ export function docIdFromStamps(doc: Uint8Array, verified: Map<number, VerifiedS
       continue; // an unreadable object is not a candidate's own read — skipped
     }
     if (w === undefined) continue;
-    widgets.set(w.sig, [...(widgets.get(w.sig) ?? []), w.v]);
+    const seen = widgets.get(w.sig);
+    if (seen === undefined) widgets.set(w.sig, { count: 1, first: w.v });
+    else seen.count++;
   }
   let best: { end: number; obj: number; docId: string } | undefined;
   for (const [obj, s] of verified) {
     const ws = widgets.get(obj);
-    if (!s.seal || ws === undefined || ws.length !== 1) continue;
-    const m = stampMarker(r, ws[0]!);
+    if (!s.seal || ws === undefined || ws.count !== 1) continue;
+    const m = stampMarker(r, ws.first);
     if (m === undefined) continue;
     let pos = 1;
     for (const o of verified.values()) if (o.end < s.end) pos++;
@@ -258,6 +262,8 @@ function stampMarker(r: Reader, w: Value): { docId: string; rev: string } | unde
   if (n.kind() !== "stream") return undefined;
   const st = n.data as PStream;
   if (st.hdr.has("Filter") && st.hdr.get("Filter") !== null) return undefined;
+  // Reading the stream resolves its /DecodeParms (Go Value.Reader) — an unloadable one is a read failure of the candidate.
+  n.key("DecodeParms");
   // Go io.NewSectionReader(f, offset, /Length): a negative or over-long /Length reads what the file holds.
   const len = n.key("Length").int64();
   const end = Math.min(r.bytes.length, st.offset + Math.min(Math.max(len, 0), STAMP_MARKER_MAX));
