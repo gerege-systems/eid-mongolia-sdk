@@ -6,7 +6,7 @@
 import { latin1 } from "../bytes.js";
 import { appearanceObjects, round100, visibleWidget } from "../page/appearance.js";
 import { PReal, PRef, PdfObjError, PStr, PStream, PdfParser, dget, isArr, isDict, isInt, pdfEqual, type PDict, type PVal } from "./pdfobj.js";
-import { errNotSignatureOnly, ownDate, pdfTextString, type Classifier } from "./revisions.js";
+import { OWN_TEXT_LIMIT, errNotSignatureOnly, ownDate, pdfTextString, type Classifier } from "./revisions.js";
 
 export const AP_VERIFY_PREFIX = "https://ca.eidmongolia.mn/verify/";
 const AP_URL_RE = /^\/EIDVerify <<\/URL \(https:\/\/ca\.eidmongolia\.mn\/verify\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/([1-9][0-9]?)\)>> BDC\n/;
@@ -46,23 +46,33 @@ export function ownVisible(c: Classifier, d: PDict, widget: number): void {
   if (!isDict(sd) || !meta || !meta.roleOK) throw fail();
   const ns = dget(sd, "Name");
   const ms = dget(sd, "M");
-  if (!(ns instanceof PStr) || !(ms instanceof PStr)) throw fail();
+  // The sig dict check rejects a /Name over OWN_TEXT_LIMIT anyway; failing here keeps a hostile multi-megabyte name
+  // out of the (quadratic) stamp text wrap below.
+  if (!(ns instanceof PStr) || !(ms instanceof PStr) || ns.v.length > OWN_TEXT_LIMIT) throw fail();
   const m = ms.v;
   if (!ownDate(m) || m.slice(16) !== "+08'00'") throw fail();
   const date = `${m.slice(2, 6)}-${m.slice(6, 8)}-${m.slice(8, 10)} ${m.slice(10, 12)}:${m.slice(12, 14)} (+08)`;
   const ids = apIDs(c, nr);
   const form = c.fin.get(ids[0]!);
   if (!(form instanceof PStream)) throw fail();
-  let head = "";
-  for (let i = 0; i < Math.min(form.data.length, 200); i++) head += String.fromCharCode(form.data[i]!);
-  const sm = AP_URL_RE.exec(head);
-  if (!sm || sm[2] !== String(meta.revIndex) || (c.docID !== "" && sm[1] !== c.docID)) throw fail();
-  const url = AP_VERIFY_PREFIX + sm[1] + "/" + sm[2];
+  // The certificate alone picks the variant (APPEARANCE_SPEC.md §6.1/§6.3): e-Seal → seal stamp (no URL / QR / role,
+  // step 6 skipped), anything else → citizen stamp. A stamp of the other variant never matches → fail.
+  const seal = meta.seal === true;
+  let role = "";
+  let url = "";
+  if (!seal) {
+    let head = "";
+    for (let i = 0; i < Math.min(form.data.length, 200); i++) head += String.fromCharCode(form.data[i]!);
+    const sm = AP_URL_RE.exec(head);
+    if (!sm || sm[2] !== String(meta.revIndex) || (c.docID !== "" && sm[1] !== c.docID)) throw fail();
+    role = meta.role;
+    url = AP_VERIFY_PREFIX + sm[1] + "/" + sm[2];
+  }
   const name = pdfTextString(ns);
   for (const lang of ["mn", "en"]) {
     let bodies: (string | Uint8Array)[];
     try {
-      bodies = appearanceObjects({ w, h, rotate: rot, name, role: meta.role, lang, date, url }, ids);
+      bodies = appearanceObjects({ w, h, rotate: rot, name, role, lang, date, url, seal }, ids);
     } catch {
       throw fail();
     }

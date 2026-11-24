@@ -48,6 +48,8 @@ export interface SigMeta {
   role: string;
   /** claimedRole 0 эсвэл яг 1. */
   roleOK: boolean;
+  /** The signer certificate is an e-Seal certificate (APPEARANCE_SPEC.md §6.1) — only the seal stamp is accepted (§6.3). */
+  seal?: boolean;
 }
 
 /** Гарын үсгийн мужийн дараах revision-уудын дүгнэлт. */
@@ -85,7 +87,8 @@ const SIG_DICT_KEYS = [
 const OWN_FIELD_KEYS = ["Type", "Subtype", "Rect", "P", "F", "FT", "T", "V"];
 const OWN_SIG_DICT_KEYS = ["Type", "Filter", "SubFilter", "Prop_Build", "ByteRange", "Contents", "TransformMethod", "TransformParams", "Name", "Location", "Reason", "ContactInfo", "M"];
 const PADES_SIG_DICT_KEYS = ["Type", "Filter", "SubFilter", "ByteRange", "Contents", "M", "Name", "Reason"];
-const OWN_TEXT_LIMIT = 256;
+/** Sig dict free text (/Name /Reason /Location /ContactInfo /M) maximum length, bytes (Go ownTextLimit). */
+export const OWN_TEXT_LIMIT = 256;
 const OWN_TEXT_FORBIDDEN = [" obj", "endobj", "stream", "xref", "trailer", "startxref", "%%EOF"];
 
 /** Go string(utf16.Decode(units)) — хос бус surrogate → U+FFFD. */

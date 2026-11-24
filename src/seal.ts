@@ -134,8 +134,9 @@ const b64 = (s: unknown, what: string): Uint8Array => {
 };
 
 /**
- * e-Seal профайл: KeyUsage-д nonRepudiation (contentCommitment) байгаа, digitalSignature байхгүй, EKU байхгүй, CA биш
- * (CA/SDK шалгагчийн `usage: "seal"` ангилалтай ижил; Go `eid.IsSealCertificate`).
+ * e-Seal профайл: KeyUsage-д nonRepudiation (contentCommitment) байгаа, digitalSignature байхгүй, EKU зорилго үгүй (EKU
+ * extension байхгүй эсвэл хоосон SEQUENCE), CA биш (CA/SDK шалгагчийн `usage: "seal"` ангилалтай ижил; Go
+ * `eid.IsSealCertificate`, APPEARANCE_SPEC.md §6.1).
  */
 export function isSealCertificate(cert: X509Certificate | Uint8Array): boolean {
   let c: X509Certificate;
@@ -144,13 +145,24 @@ export function isSealCertificate(cert: X509Certificate | Uint8Array): boolean {
   } catch {
     return false;
   }
-  if (c.ca || certExtension(c.raw, "2.5.29.37")) return false;
+  if (c.ca || !noEkuPurpose(certExtension(c.raw, "2.5.29.37"))) return false;
   const v = certExtension(c.raw, "2.5.29.15");
   if (!v) return false;
   const bs = tlv(v, 0, v.length);
   if (bs.tag !== 0x03 || bs.end - bs.start < 2) return false;
   const bits = v[bs.start + 1]!;
   return (bits & 0x40) !== 0 && (bits & 0x80) === 0;
+}
+
+/** EKU extension value: absent or an empty SEQUENCE → no purpose; one or more purposes or malformed → false (Go). */
+function noEkuPurpose(v: Uint8Array | undefined): boolean {
+  if (!v) return true;
+  try {
+    const s = tlv(v, 0, v.length);
+    return s.tag === 0x30 && s.start === s.end && s.end === v.length;
+  } catch {
+    return false;
+  }
 }
 
 function parseSealCertificate(raw: unknown, orgEtsi: string): SealCertificate {

@@ -24,8 +24,10 @@ export interface Visible {
   lang: string;
   /** «YYYY-MM-DD HH:MM (+08)» */
   date: string;
-  /** https://ca.eidmongolia.mn/verify/<docID>/<revIndex> */
+  /** https://ca.eidmongolia.mn/verify/<docID>/<revIndex>; unused for the seal stamp. */
   url: string;
+  /** Organisation seal stamp (APPEARANCE_SPEC.md §6): only when the signer certificate is an e-Seal certificate (§6.1). */
+  seal?: boolean;
   /** Scan the page and move the stamp off existing content (PLACEMENT_SPEC.md); false/absent = exactly (x, y). */
   avoid?: boolean;
   /**
@@ -45,6 +47,8 @@ export interface AppearanceParams {
   lang: string;
   date: string;
   url: string;
+  /** Organisation seal stamp (APPEARANCE_SPEC.md §6): no QR / URL / role line, SEAL_LABELS; role and url are ignored. */
+  seal?: boolean;
 }
 
 const AP_PAD = 400;
@@ -63,6 +67,12 @@ export const MAX_APPEARANCE_SIDE = 1440000;
 export const APPEARANCE_LABELS: Record<string, string> = {
   mn: "eID Mongolia-аар зурсан",
   en: "Signed with eID Mongolia",
+};
+
+/** Seal stamp label line (APPEARANCE_SPEC.md §6.2). */
+export const SEAL_LABELS: Record<string, string> = {
+  mn: "eID Mongolia-аар тамгалсан",
+  en: "Sealed with eID Mongolia",
 };
 
 /** pt → h100: floor(v × 100 + 0.5). */
@@ -104,6 +114,7 @@ interface ApLine {
 
 /** Form XObject-ийн content stream (APPEARANCE_SPEC.md §3). */
 export function appearanceContent(p: AppearanceParams): string {
+  if (p.seal === true) return sealContent(p);
   const label = APPEARANCE_LABELS[p.lang];
   if (label === undefined) throw new AppearanceError(`хэл ${p.lang}`);
   if (!asciiURL(p.url)) throw new AppearanceError("URL ASCII биш");
@@ -158,6 +169,42 @@ export function appearanceContent(p: AppearanceParams): string {
   }
   if (cm !== "") w.op("Q");
   w.op("EMC");
+  return w.ops;
+}
+
+/**
+ * Organisation seal stamp content stream (APPEARANCE_SPEC.md §6.2, Go core sealContent): the citizen stamp's frame, fonts
+ * and line rules without the QR, the /EIDVerify marked content and the role line; the text starts at pad and uses the
+ * full inner width (W − 2·pad).
+ */
+function sealContent(p: AppearanceParams): string {
+  const label = SEAL_LABELS[p.lang];
+  if (label === undefined) throw new AppearanceError(`хэл ${p.lang}`);
+  if (p.w <= 0 || p.h <= 0 || p.w > MAX_APPEARANCE_SIDE || p.h > MAX_APPEARANCE_SIDE) throw new AppearanceError("хэмжээ");
+  const q: AppearanceParams = { ...p, role: "" };
+  const tw = p.w - 2 * AP_PAD;
+  const [reg, bld] = loadFonts();
+  const w = new PageWriter(reg, bld);
+  let lines: ApLine[] | undefined;
+  for (let f = AP_MAX_SIZE; f >= AP_MIN_SIZE && lines === undefined && tw > 0; f--) lines = apLayout(w, q, label, f, tw);
+  if (lines === undefined) throw new AppearanceError("хэт жижиг (бичвэр багтахгүй)");
+  let total = 0;
+  for (const l of lines) total += l.size * AP_LEADING;
+  const { cm } = apRotation(p.rotate, p.w, p.h);
+  if (cm !== "") {
+    w.op("q");
+    w.op(cm);
+  }
+  w.op(`${C_OK} RG`);
+  w.op("1 w");
+  w.op(`0.5 0.5 ${num100(p.w - 100)} ${num100(p.h - 100)} re S`);
+  let cursor = p.h - AP_PAD - Math.trunc((p.h - 2 * AP_PAD - total) / 2);
+  for (const l of lines) {
+    cursor -= l.size * AP_LEADING;
+    w.op(`${l.color} rg`);
+    w.op(`BT /F${l.font} ${l.size} Tf ${num100(AP_PAD)} ${num100(cursor + l.size * AP_DESCENT)} Td ${w.glyphHex(l.font, l.text)} Tj ET`);
+  }
+  if (cm !== "") w.op("Q");
   return w.ops;
 }
 

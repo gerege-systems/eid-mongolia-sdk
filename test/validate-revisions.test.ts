@@ -25,7 +25,7 @@ interface CorpusEntry {
   profile: "own" | "broad";
   error?: string;
   docId: string;
-  metas?: Record<string, { revIndex: number; role: string; roleOK: boolean }>;
+  metas?: Record<string, { revIndex: number; role: string; roleOK: boolean; seal?: boolean }>;
   signatures: CorpusSig[];
 }
 
