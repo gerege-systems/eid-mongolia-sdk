@@ -16,9 +16,8 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const GO_SDK_REPO = "https://github.com/gerege-systems/eid-mongolia-sdk-go";
-// Go #65 branch test/seal-visible-stamp (golden v12: organisation seal stamp, APPEARANCE_SPEC.md §6) — NOT merged/tagged
-// yet: re-pin to the merge commit (tag pades-golden-v12) once Go PR #65 lands. v11 = d5a68ae90582 (Go #61).
-export const GO_SDK_COMMIT = "c44c77c7d365c613b917095fabe7dd4e79cf93e7";
+// Go #65 merge commit on main (golden v12: organisation seal stamp, APPEARANCE_SPEC.md §6; no tag yet). v11 = d5a68ae90582 (Go #61).
+export const GO_SDK_COMMIT = "692dffa550356cbd8793cf6b2a6d703fb05ddaa6";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const check = process.argv.includes("--check");
