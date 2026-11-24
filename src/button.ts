@@ -496,6 +496,20 @@ dialog.dialog::backdrop { background: hsl(222 47% 11% / 0.5); }
   color: var(--_eid-warning-fg); font-size: 0.8125rem; }
 .meta { margin-top: 4px; text-align: center; font-size: 0.8125rem; color: var(--_eid-fg-subtle); }
 .meta.low, .meta.low .mono { color: var(--_eid-warning-fg); }
+/* Намхан дэлгэц (≈700px laptop): QR цонх (push хэсэг хаалттай, ~682px) дотоод scroll-гүй багтана — эхлээд босоо зай,
+   дараа нь QR. >760px өндөрт ба утсан (<640px өргөн) өөрчлөлтгүй. Үсгийн хэмжээ, товчны өндөр хэвээр. */
+@media (min-width: 640px) and (max-height: 760px) {
+  .dialog { padding-top: 20px; padding-bottom: 20px; }
+  .head { margin-bottom: 12px; }
+  .qr-vc { margin-top: 8px; }
+  .steps { margin-top: 12px; gap: 4px; }
+  .or { margin: 12px 0; }
+}
+@media (min-width: 640px) and (max-height: 680px) {
+  .dialog { padding-top: 16px; padding-bottom: 16px; }
+  .head { margin-bottom: 8px; }
+  .qr { width: 220px; }
+}
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; }
   .spinner { animation: none; border-right-color: currentColor; opacity: 0.6; } }
 `;
