@@ -6,7 +6,7 @@
 import { latin1 } from "../bytes.js";
 import { appearanceObjects, round100, visibleWidget } from "../page/appearance.js";
 import { PReal, PRef, PdfObjError, PStr, PStream, PdfParser, dget, isArr, isDict, isInt, pdfEqual, type PDict, type PVal } from "./pdfobj.js";
-import { errNotSignatureOnly, ownDate, pdfTextString, type Classifier } from "./revisions.js";
+import { OWN_TEXT_LIMIT, errNotSignatureOnly, ownDate, pdfTextString, type Classifier } from "./revisions.js";
 
 export const AP_VERIFY_PREFIX = "https://ca.eidmongolia.mn/verify/";
 const AP_URL_RE = /^\/EIDVerify <<\/URL \(https:\/\/ca\.eidmongolia\.mn\/verify\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/([1-9][0-9]?)\)>> BDC\n/;
@@ -46,7 +46,9 @@ export function ownVisible(c: Classifier, d: PDict, widget: number): void {
   if (!isDict(sd) || !meta || !meta.roleOK) throw fail();
   const ns = dget(sd, "Name");
   const ms = dget(sd, "M");
-  if (!(ns instanceof PStr) || !(ms instanceof PStr)) throw fail();
+  // The sig dict check rejects a /Name over OWN_TEXT_LIMIT anyway; failing here keeps a hostile multi-megabyte name
+  // out of the (quadratic) stamp text wrap below.
+  if (!(ns instanceof PStr) || !(ms instanceof PStr) || ns.v.length > OWN_TEXT_LIMIT) throw fail();
   const m = ms.v;
   if (!ownDate(m) || m.slice(16) !== "+08'00'") throw fail();
   const date = `${m.slice(2, 6)}-${m.slice(6, 8)}-${m.slice(8, 10)} ${m.slice(10, 12)}:${m.slice(12, 14)} (+08)`;

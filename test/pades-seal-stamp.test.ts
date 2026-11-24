@@ -4,10 +4,10 @@
 // mismatch directions) in validate-golden.test.ts. sealPdf (§6.4, Go pades/seal_visible_test.go): the automatic default
 // reproduces the Go goldens byte-for-byte where a recorded signature exists; the other cases compare the DTBS sealPdf
 // sends with prepare's DTBS for the expected appearance (no seal private key in this repo).
-import { test } from "node:test";
+import { after, test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash, X509Certificate } from "node:crypto";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { tmpdir } from "node:os";
@@ -25,21 +25,26 @@ const pem = (n: string) => pemAt(new URL(`pki/${n}.pem`, G));
 interface FakeCert {
   isCA: boolean;
   keyUsage: number;
-  extensions: { oid: string; critical: boolean; value: Uint8Array }[];
+  /** EKU purposes (known and unknown OIDs); [] also for an extension holding an empty SEQUENCE. */
+  extKeyUsage: string[];
 }
 interface Internals {
   sealCertificate(c: FakeCert): boolean;
   sealCertificateDER(der: Uint8Array | undefined): boolean;
+  keyUsageBits(bs: Uint8Array): number;
   appearanceContent(p: Record<string, unknown>): string;
   AppearanceError: new (...a: unknown[]) => Error;
 }
+
+const tmp = mkdtempSync(join(tmpdir(), "eid-seal-stamp-"));
+after(() => rmSync(tmp, { recursive: true, force: true }));
 
 /** src (NodeNext .js imports) bundled into one ESM — the rule and the content stream are internal. */
 async function internals(): Promise<Internals> {
   const r = await build({
     stdin: {
       contents: [
-        `export { sealCertificate, sealCertificateDER } from "./src/pades/x509.ts";`,
+        `export { keyUsageBits, sealCertificate, sealCertificateDER } from "./src/pades/x509.ts";`,
         `export { appearanceContent, AppearanceError } from "./src/pades/page/appearance.ts";`,
       ].join("\n"),
       resolveDir: root,
@@ -51,32 +56,44 @@ async function internals(): Promise<Internals> {
     write: false,
     logLevel: "error",
   });
-  const out = join(mkdtempSync(join(tmpdir(), "eid-seal-stamp-")), "seal-stamp.mjs");
+  const out = join(tmp, "seal-stamp.mjs");
   writeFileSync(out, r.outputFiles[0]!.contents);
   return (await import(pathToFileURL(out).href)) as Internals;
 }
 
 const I = await internals();
 
-const EKU = "2.5.29.37";
-const KU = "2.5.29.15";
 const DIGITAL_SIGNATURE = 1;
 const NON_REPUDIATION = 2;
 const KEY_ENCIPHERMENT = 4;
 
-test("§6.1: e-Seal = not a CA, keyUsage nonRepudiation set and digitalSignature clear, no EKU extension", () => {
-  const ku = { oid: KU, critical: true, value: new Uint8Array() };
-  const eku = { oid: EKU, critical: false, value: new Uint8Array([0x30, 0x00]) };
-  const c = (isCA: boolean, keyUsage: number, ...extensions: FakeCert["extensions"]): FakeCert => ({ isCA, keyUsage, extensions });
-  assert.equal(I.sealCertificate(c(false, NON_REPUDIATION, ku)), true);
+test("§6.1: e-Seal = not a CA, keyUsage nonRepudiation set and digitalSignature clear, no EKU purpose (as Go / CA)", () => {
+  const c = (isCA: boolean, keyUsage: number, extKeyUsage: string[] = []): FakeCert => ({ isCA, keyUsage, extKeyUsage });
+  assert.equal(I.sealCertificate(c(false, NON_REPUDIATION)), true);
   // Other bits are ignored.
-  assert.equal(I.sealCertificate(c(false, NON_REPUDIATION | KEY_ENCIPHERMENT, ku)), true);
-  assert.equal(I.sealCertificate(c(false, NON_REPUDIATION | DIGITAL_SIGNATURE, ku)), false, "citizen SIGN: digitalSignature set");
-  assert.equal(I.sealCertificate(c(false, DIGITAL_SIGNATURE, ku)), false);
+  assert.equal(I.sealCertificate(c(false, NON_REPUDIATION | KEY_ENCIPHERMENT)), true);
+  assert.equal(I.sealCertificate(c(false, NON_REPUDIATION | DIGITAL_SIGNATURE)), false, "citizen SIGN: digitalSignature set");
+  assert.equal(I.sealCertificate(c(false, DIGITAL_SIGNATURE)), false);
   assert.equal(I.sealCertificate(c(false, 0)), false, "no keyUsage extension");
-  assert.equal(I.sealCertificate(c(true, NON_REPUDIATION, ku)), false, "CA");
-  // Any extendedKeyUsage extension — even an empty SEQUENCE — is not an e-Seal certificate (§6.1 item 3).
-  assert.equal(I.sealCertificate(c(false, NON_REPUDIATION, ku, eku)), false, "EKU present");
+  assert.equal(I.sealCertificate(c(true, NON_REPUDIATION)), false, "CA");
+  // Any EKU purpose, known or unknown, is not an e-Seal certificate (Go ExtKeyUsage / UnknownExtKeyUsage).
+  assert.equal(I.sealCertificate(c(false, NON_REPUDIATION, ["1.3.6.1.5.5.7.3.4"])), false, "EKU emailProtection");
+  assert.equal(I.sealCertificate(c(false, NON_REPUDIATION, ["1.2.3.4.5"])), false, "unknown EKU purpose");
+  // An EKU extension that is an empty SEQUENCE has no purpose → still an e-Seal certificate (Go: both lists empty).
+  assert.equal(I.sealCertificate(c(false, NON_REPUDIATION, [])), true, "EKU extension = empty SEQUENCE");
+});
+
+test("keyUsage: only bits 0–8 are read (Go x509); bit 32/33 do not alias digitalSignature/nonRepudiation", () => {
+  // BIT STRING contents: unused-bits byte, then the bits MSB first. Bit 1 (nonRepudiation) + bit 32.
+  assert.equal(I.keyUsageBits(new Uint8Array([0x07, 0x40, 0x00, 0x00, 0x00, 0x80])), NON_REPUDIATION);
+  assert.equal(I.sealCertificate({ isCA: false, keyUsage: I.keyUsageBits(new Uint8Array([0x07, 0x40, 0x00, 0x00, 0x00, 0x80])), extKeyUsage: [] }), true);
+  // Only bit 33 set → nothing in bits 0–8.
+  assert.equal(I.keyUsageBits(new Uint8Array([0x06, 0x00, 0x00, 0x00, 0x00, 0x40])), 0);
+  // Bit 8 (decipherOnly) is still read; bit 9 is not.
+  assert.equal(I.keyUsageBits(new Uint8Array([0x07, 0x00, 0x80])), 1 << 8);
+  assert.equal(I.keyUsageBits(new Uint8Array([0x06, 0x00, 0x40])), 0);
+  assert.equal(I.keyUsageBits(new Uint8Array([0x01, 0xa0])), DIGITAL_SIGNATURE | (1 << 2));
+  assert.equal(I.keyUsageBits(new Uint8Array([0x00])), 0);
 });
 
 test("§6.1 on the golden PKI; unparsable DER is not an e-Seal certificate; same answer as isSealCertificate", () => {

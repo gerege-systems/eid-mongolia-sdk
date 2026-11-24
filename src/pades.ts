@@ -814,11 +814,6 @@ export interface PadesSealOptions {
   complete?: PadesCompleteOptions;
 }
 
-/** e-Seal профайл: KeyUsage-д nonRepudiation, digitalSignature үгүй, EKU үгүй, CA биш (шалгагчийн `usage: "seal"`). */
-function isSealCert(c: Certificate): boolean {
-  return !c.isCA && (c.keyUsage & 2) !== 0 && (c.keyUsage & 1) === 0 && c.extKeyUsage.length === 0;
-}
-
 /**
  * PDF-ийг байгууллагын цахим тамгаар (e-Seal) тамгална: тамганы гэрчилгээ (`GET /seal/certificate/{orgEtsi}`) →
  * {@link prepare} → 32 байт DTBS-ийг `POST /seal/{orgEtsi}`-ээр (SHA-256) тамгалуулна → {@link complete} (TSA + OCSP/CRL +
@@ -848,7 +843,8 @@ export async function sealPdf(sealer: PadesSealer, orgEtsi: string, pdf: Uint8Ar
   } catch (e) {
     throw new PadesError("SIGNER_INVALID", "тамганы гэрчилгээ задарсангүй", { cause: e });
   }
-  if (!isSealCert(cert)) throw new PadesError("SIGNER_INVALID", "гэрчилгээ e-Seal биш (KeyUsage = зөвхөн nonRepudiation байх ёстой)");
+  // e-Seal профайл (шалгагчийн `usage: "seal"`, дардасны хувилбар — APPEARANCE_SPEC.md §6.1).
+  if (!sealCertificate(cert)) throw new PadesError("SIGNER_INVALID", "гэрчилгээ e-Seal биш (KeyUsage = зөвхөн nonRepudiation байх ёстой)");
   const doc = u8(pdf, "pdf");
   const po: PadesPrepareOptions = {
     signerCert: cert.raw,
@@ -859,8 +855,9 @@ export async function sealPdf(sealer: PadesSealer, orgEtsi: string, pdf: Uint8Ar
   };
   let auto = false;
   if (opts.invisible !== true) {
+    // null (untyped JS callers) = absent → the automatic stamp with its fallbacks.
     po.appearance = opts.appearance ?? (await defaultSealAppearance(doc));
-    auto = opts.appearance === undefined && po.appearance !== undefined;
+    auto = opts.appearance == null && po.appearance !== undefined;
   }
   let p: PadesPrepared;
   try {

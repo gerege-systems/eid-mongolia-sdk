@@ -184,6 +184,16 @@ export function parseCertificate(der: Uint8Array): Certificate {
   }
 }
 
+/**
+ * keyUsage BIT STRING contents (unused-bits byte first) → Go x509.KeyUsage: only bits 0–8 (digitalSignature …
+ * decipherOnly) are read, as Go does; higher bits are ignored (a JS shift by ≥ 32 would wrap onto bits 0/1).
+ */
+export function keyUsageBits(bs: Uint8Array): number {
+  let ku = 0;
+  for (let k = 0; k < 9 && 1 + (k >> 3) < bs.length; k++) if (bs[1 + (k >> 3)]! & (0x80 >> (k & 7))) ku |= 1 << k;
+  return ku;
+}
+
 function parseExtension(c: Certificate, e: Extension): void {
   const n = parseOne(e.value);
   switch (e.oid) {
@@ -193,15 +203,9 @@ function parseExtension(c: Certificate, e: Extension): void {
       c.isCA = p[0]?.tag === TAG.BOOLEAN && p[0].value[0] !== 0;
       break;
     }
-    case OID.keyUsage: {
-      const bs = n.value;
-      let ku = 0;
-      for (let i = 1; i < bs.length; i++) {
-        for (let b = 0; b < 8; b++) if (bs[i]! & (0x80 >> b)) ku |= 1 << ((i - 1) * 8 + b);
-      }
-      c.keyUsage = ku;
+    case OID.keyUsage:
+      c.keyUsage = keyUsageBits(n.value);
       break;
-    }
     case OID.extKeyUsage:
       c.extKeyUsage = children(n).map((x) => oidString(x.value));
       break;
@@ -228,10 +232,11 @@ function parseExtension(c: Certificate, e: Extension): void {
 /**
  * APPEARANCE_SPEC.md §6.1 — the certificate selects the stamp variant: an e-Seal certificate is not a CA
  * (basicConstraints absent or cA FALSE), has a keyUsage extension with nonRepudiation (bit 1) set and digitalSignature
- * (bit 0) clear, and has no extendedKeyUsage extension at all.
+ * (bit 0) clear, and no extendedKeyUsage purpose (known or unknown) — an EKU extension holding an empty sequence still
+ * counts as none, exactly as Go (`len(ExtKeyUsage) == 0 && len(UnknownExtKeyUsage) == 0`) and the CA port decide.
  */
 export function sealCertificate(c: Certificate): boolean {
-  return !c.isCA && (c.keyUsage & 2) !== 0 && (c.keyUsage & 1) === 0 && !c.extensions.some((e) => e.oid === OID.extKeyUsage);
+  return !c.isCA && (c.keyUsage & 2) !== 0 && (c.keyUsage & 1) === 0 && c.extKeyUsage.length === 0;
 }
 
 /** {@link sealCertificate} on DER; a certificate that cannot be parsed is not an e-Seal certificate (§6.1). */
