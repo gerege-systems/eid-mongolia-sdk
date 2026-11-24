@@ -1,10 +1,12 @@
 // Organisation seal stamp (APPEARANCE_SPEC.md §6, golden v12): the variant rule (§6.1) on hand-made certificate shapes
 // and on the golden PKI, the seal content stream (§6.2) and prepare's variant choice. Byte-identity with the Go reference
 // is in pades-golden.test.ts (seal-visible, seal-visible-en, seal-visible-third); the validator verdicts (§6.3, both
-// mismatch directions) in validate-golden.test.ts.
+// mismatch directions) in validate-golden.test.ts. sealPdf (§6.4, Go pades/seal_visible_test.go): the automatic default
+// reproduces the Go goldens byte-for-byte where a recorded signature exists; the other cases compare the DTBS sealPdf
+// sends with prepare's DTBS for the expected appearance (no seal private key in this repo).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { X509Certificate } from "node:crypto";
+import { createHash, X509Certificate } from "node:crypto";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -150,5 +152,202 @@ test("prepare: the signer certificate alone selects the stamp variant", async ()
   await assert.rejects(
     () => pades.prepare(input, { ...small, signerCert: pem("citizen") }),
     (e: unknown) => e instanceof pades.PadesError && e.code === "REQUEST_INVALID",
+  );
+});
+
+// ── sealPdf (APPEARANCE_SPEC.md §6.4, Go pades.SealPDF) ─────────────────────────────────────────────────────────────
+
+interface GoldenCase {
+  name: string;
+  input: string;
+  signer?: string;
+  prepare: { reason?: string; lang?: "mn" | "en"; appearance?: pades.PadesAppearance };
+  expect: Record<string, unknown> & { dtbs: string; signature: string; outSha256: string; placement?: pades.PadesPlacement; revIndex: number };
+}
+const GM = JSON.parse(readFileSync(new URL("manifest.json", G), "utf8")) as { signingTime: string; now: string; http: Record<string, string>; cases: GoldenCase[] };
+const gcase = (n: string) => GM.cases.find((c) => c.name === n)!;
+const readG = (p: string) => new Uint8Array(readFileSync(new URL(p, G)));
+const inputOf = (c: GoldenCase) => (c.input.startsWith("case:") ? readG(`output/${c.input.slice(5)}.pdf`) : readG(c.input));
+const sha = (b: Uint8Array) => createHash("sha256").update(b).digest("hex");
+const hex = (b: Uint8Array) => Buffer.from(b).toString("hex");
+const ORG = "NTRMN-6235972";
+const SEAL = pem("seal");
+const CHAIN = ["04", "03", "02"].map(pem);
+const SIGNING_TIME = new Date(GM.signingTime);
+const code = (c: pades.PadesErrorCode) => (e: unknown) => e instanceof pades.PadesError && e.code === c;
+
+/** Golden pki/seal.pem; seal() returns the Go-recorded signature of a golden seal case with that DTBS. */
+function goldenSealer(): pades.PadesSealer {
+  return {
+    getCertificate: async () => ({ certificate: SEAL }),
+    seal: async (_org, digest) => {
+      const c = GM.cases.find((x) => x.signer === "seal" && x.expect.dtbs === hex(digest));
+      if (!c) throw new Error(`no golden seal signature for DTBS ${hex(digest)}`);
+      return { signature: new Uint8Array(Buffer.from(c.expect.signature, "hex")), certificate: SEAL };
+    },
+  };
+}
+
+const STOP = new Error("stop after the DTBS");
+
+/** The DTBS sealPdf sends for `input` (the sealer stops the flow there). */
+async function sealDtbs(input: Uint8Array, o: pades.PadesSealOptions = {}): Promise<string> {
+  const got: string[] = [];
+  const s: pades.PadesSealer = {
+    getCertificate: async () => ({ certificate: SEAL }),
+    seal: async (_org, digest) => {
+      got.push(hex(digest));
+      throw STOP;
+    },
+  };
+  await assert.rejects(pades.sealPdf(s, ORG, input, { signingTime: SIGNING_TIME, chain: CHAIN, ...o }), (e: unknown) => e === STOP);
+  assert.equal(got.length, 1);
+  return got[0]!;
+}
+
+/** prepare with the seal certificate (as sealPdf calls it) — DTBS, placement, prepared PDF length. */
+async function sealPrepared(input: Uint8Array, appearance?: pades.PadesAppearance) {
+  const p = await pades.prepare(input, { signerCert: SEAL, chain: CHAIN, signingTime: SIGNING_TIME, appearance });
+  const st = Buffer.from(p.state);
+  return { dtbs: hex(p.dtbs), placement: p.placement, length: st.length - 13 - st.readUInt32BE(9) };
+}
+
+function goldenComplete(name: string): pades.PadesCompleteOptions {
+  return {
+    tsaUrl: "http://tsa.pki.test/",
+    roots: [pem("root")],
+    fetch: async (url, init) => {
+      const f = GM.http[`${init.method} ${url} ${sha(init.body ?? new Uint8Array()).slice(0, 16)}`];
+      if (!f) return { status: 404, arrayBuffer: async () => new ArrayBuffer(0) };
+      const b = readG(f);
+      return { status: 200, arrayBuffer: async () => b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength) as ArrayBuffer };
+    },
+    httpsUpgrade: false,
+    now: () => new Date(GM.now),
+    sleep: async (ms) => assert.fail(`${name}: wait ${ms} ms`),
+    nonce: () => new Uint8Array(createHash("sha256").update(Buffer.concat([Buffer.from(`golden-nonce:${name}`), Buffer.of(0)])).digest().subarray(0, 8)),
+  };
+}
+
+/** One page w × h pt with "RECEIPT" at the top (Go smallPDF); `pad` bytes of an unreferenced stream inflate the file. */
+function makePdf(w: number, h: number, pad = 0): Uint8Array {
+  const content = `BT /F1 6 Tf 4 ${h - 12} Td (RECEIPT) Tj ET`;
+  const objs = [
+    "<< /Type /Catalog /Pages 2 0 R >>",
+    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+    `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${w} ${h}] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>`,
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    `<< /Length ${content.length} >>\nstream\n${content}\nendstream`,
+  ];
+  if (pad > 0) objs.push(`<< /Length ${pad} >>\nstream\n${" ".repeat(pad)}\nendstream`);
+  let out = "%PDF-1.4\n";
+  const offs: number[] = [];
+  objs.forEach((o, i) => {
+    offs.push(out.length);
+    out += `${i + 1} 0 obj\n${o}\nendobj\n`;
+  });
+  const xref = out.length;
+  out += `xref\n0 ${objs.length + 1}\n0000000000 65535 f \n`;
+  for (const o of offs) out += `${String(o).padStart(10, "0")} 00000 n \n`;
+  out += `trailer\n<< /Size ${objs.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+  return new Uint8Array(Buffer.from(out, "latin1"));
+}
+
+test("sealPdf default = Go golden byte-for-byte: seal-visible (unsigned → moved off the footer), seal-visible-third (after two visible citizen signatures)", async () => {
+  for (const name of ["seal-visible", "seal-visible-third"]) {
+    const c = gcase(name);
+    const input = inputOf(c);
+    assert.equal(sha(input), c.expect.inputSha256, `${name}: input`);
+    const r = await pades.sealPdf(goldenSealer(), ORG, input, { reason: c.prepare.reason, signingTime: SIGNING_TIME, chain: CHAIN, complete: goldenComplete(name) });
+    assert.equal(r.outSha256, c.expect.outSha256, `${name}: outSha256`);
+    assert.ok(Buffer.from(r.pdf).equals(Buffer.from(readG(`output/${name}.pdf`))), `${name}: output/${name}.pdf`);
+    assert.ok(Buffer.from(r.pdf.subarray(0, input.length)).equals(Buffer.from(input)), `${name}: the input is a byte prefix`);
+    assert.deepEqual(r.placement, c.expect.placement, `${name}: placement`);
+    assert.equal(r.revIndex, c.expect.revIndex);
+    assert.equal(r.hasPage, false);
+  }
+  // Every signature of these outputs is valid (earlier ones extended by signatures only): validate golden cases
+  // seal-visible and seal-after-two-citizens run on the same bytes.
+  assert.deepEqual(gcase("seal-visible-third").expect.placement, { page: 2, x: 356, y: 204, width: 220, height: 64, status: "moved" });
+});
+
+test("sealPdf explicit appearance = Go golden seal-visible-en byte-for-byte", async () => {
+  const c = gcase("seal-visible-en");
+  const r = await pades.sealPdf(goldenSealer(), ORG, inputOf(c), {
+    signingTime: SIGNING_TIME,
+    chain: CHAIN,
+    appearance: { ...c.prepare.appearance!, lang: "en" },
+    complete: goldenComplete(c.name),
+  });
+  assert.equal(r.outSha256, c.expect.outSha256);
+  assert.deepEqual(r.placement, c.expect.placement);
+});
+
+test("sealPdf automatic placement (Go TestSealPDFAutoPlacement): requested / overlap at (pw − 256, 36), page resolved once", async () => {
+  const cases: [string, pades.PadesPlacement][] = [
+    ["input/quartz-pdf13.pdf", { page: 1, x: 356, y: 36, width: 220, height: 64, status: "requested" }],
+    ["input/full-page.pdf", { page: 1, x: 356, y: 36, width: 220, height: 64, status: "overlap" }],
+  ];
+  for (const [file, want] of cases) {
+    const input = readG(file);
+    const p = await sealPrepared(input, { page: 1, x: 356, y: 36, width: 220, height: 64 });
+    assert.deepEqual(p.placement, want, file);
+    assert.equal(await sealDtbs(input), p.dtbs, `${file}: sealPdf DTBS = prepare with the automatic appearance`);
+  }
+});
+
+test("sealPdf after a verify page in front (Go TestSealPDFVerifyPageFirst): the stamp goes on the last non-verify page 3", async () => {
+  const input = readG("output/vpfirst-multi.pdf");
+  const p = await sealPrepared(input, { page: 3, x: 356, y: 36, width: 220, height: 64 });
+  assert.equal(p.placement?.page, 3);
+  assert.equal(p.placement?.width, 220);
+  assert.equal(p.placement?.height, 64);
+  assert.equal(await sealDtbs(input), p.dtbs);
+});
+
+test("sealPdf explicit appearance (Go TestSealPDFExplicitAppearance): exact never moves; an explicit verify page is kept", async () => {
+  const signed = readG("output/libreoffice-contract-visible.pdf");
+  const exact: pades.PadesAppearance = { page: 1, x: 36, y: 600, width: 200, height: 60, lang: "en", exact: true };
+  const pe = await sealPrepared(signed, exact);
+  assert.equal(pe.placement?.page, 1);
+  assert.equal(pe.placement?.x, 36);
+  assert.equal(pe.placement?.y, 600);
+  assert.notEqual(pe.placement?.status, "moved");
+  assert.equal(await sealDtbs(signed, { appearance: exact }), pe.dtbs);
+  const onVerify: pades.PadesAppearance = { page: 3, x: 340, y: 36, width: 220, height: 64 };
+  const pv = await sealPrepared(signed, onVerify);
+  assert.equal(pv.placement?.page, 3);
+  assert.equal(await sealDtbs(signed, { appearance: onVerify }), pv.dtbs);
+});
+
+test("sealPdf small pages (Go TestSealPDFSmallPages): 164 pt receipt → fitted 156 × 64 at x = 4; tiny page → invisible; explicit → REQUEST_INVALID", async () => {
+  const receipt = makePdf(164, 600);
+  const p = await sealPrepared(receipt, { page: 1, x: 4, y: 36, width: 156, height: 64 });
+  assert.deepEqual(p.placement, { page: 1, x: 4, y: 36, width: 156, height: 64, status: "requested" });
+  assert.equal(await sealDtbs(receipt), p.dtbs);
+
+  const tiny = makePdf(40, 60);
+  assert.equal(await sealDtbs(tiny), (await sealPrepared(tiny)).dtbs, "tiny page: the invisible seal");
+  await assert.rejects(
+    pades.sealPdf(goldenSealer(), ORG, tiny, { signingTime: SIGNING_TIME, chain: CHAIN, appearance: { x: 0, y: 0, width: 40, height: 60 } }),
+    code("REQUEST_INVALID"),
+  );
+});
+
+test("sealPdf automatic stamp over the output size limit → invisible; explicit appearance → PDF_TOO_LARGE", async () => {
+  const MAX_INPUT = (10 << 20) - (256 << 10);
+  const stamp: pades.PadesAppearance = { page: 1, x: 356, y: 36, width: 220, height: 64 };
+  // Measure the invisible and visible revision sizes on a small file, then pad the input to halfway between them.
+  const small = makePdf(612, 792, 1);
+  const inv = (await sealPrepared(small)).length - small.length;
+  const vis = (await sealPrepared(small, stamp)).length - small.length;
+  assert.ok(vis - inv > 20_000, `visible − invisible = ${vis - inv}`);
+  const big = makePdf(612, 792, 1 + MAX_INPUT - small.length - Math.round((inv + vis) / 2));
+  assert.ok(big.length <= MAX_INPUT);
+  await assert.rejects(pades.prepare(big, { signerCert: SEAL, chain: CHAIN, signingTime: SIGNING_TIME, appearance: stamp }), code("PDF_TOO_LARGE"));
+  assert.equal(await sealDtbs(big), (await sealPrepared(big)).dtbs, "automatic → invisible seal");
+  await assert.rejects(
+    pades.sealPdf(goldenSealer(), ORG, big, { signingTime: SIGNING_TIME, chain: CHAIN, appearance: stamp }),
+    code("PDF_TOO_LARGE"),
   );
 });

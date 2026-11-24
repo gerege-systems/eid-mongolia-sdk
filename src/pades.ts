@@ -289,6 +289,11 @@ export interface PadesCompleted {
    * тулгана.
    */
   claimedRole: string;
+  /**
+   * The visible seal stamp's final rect (Go `Completed.Placement`) — set only by {@link sealPdf}, absent when the seal is
+   * invisible. The citizen flow returns it from {@link prepare} ({@link PadesPrepared.placement}).
+   */
+  placement?: PadesPlacement;
 }
 
 const MAX_OUTPUT_BYTES = 10 << 20;
@@ -782,10 +787,21 @@ export interface PadesSealer {
 }
 
 /**
- * {@link sealPdf}-ийн тохиргоо. Тамга үл харагдах, баталгаажуулалтын (QR) хуудасгүй: verify хуудас нь CA-ийн бүртгэл
- * (`/verify/{docId}`) рүү заадаг ч тамга иргэний гарын үсгийн бүртгэлд (`POST /pdf/signatures`) ордоггүй.
+ * {@link sealPdf}-ийн тохиргоо. Баталгаажуулалтын (QR) хуудасгүй: verify хуудас нь CA-ийн бүртгэл (`/verify/{docId}`) рүү
+ * заадаг ч тамга иргэний гарын үсгийн бүртгэлд (`POST /pdf/signatures`) ордоггүй. Анхдагчаар тамга ХАРАГДАНА (Go
+ * `pades.SealOptions`, APPEARANCE_SPEC.md §6.4): баримтын сүүлийн (eID verify биш) хуудасны баруун доод буланд байгууллагын
+ * тамганы дардас (QR/холбоосгүй), агуулгатай давхцвал чөлөөт байрлал руу (PLACEMENT_SPEC.md).
  */
 export interface PadesSealOptions {
+  /**
+   * Дардасны байршил ({@link prepare}-ийн `appearance`-тэй ижил: page, x, y, width, height, lang, exact); буруу эсвэл
+   * багтахгүй бол `REQUEST_INVALID`. Байхгүй бол автомат (§6.4): сүүлийн (eID verify биш) хуудасны баруун доод буланд
+   * ≤ 220 × 64 pt (жижиг хуудсанд багтаана), exact биш; дардас хуудсанд багтахгүй (эсвэл гаралт хэтэрхий том) бол үл
+   * харагдах тамга (`placement` байхгүй). `invisible` үед үл тооно.
+   */
+  appearance?: PadesAppearance;
+  /** Дардасгүй — өмнөх (golden v12-оос өмнөх) `sealPdf`-тэй байт-ижил гаралт. */
+  invisible?: boolean;
   /** `/Reason` (≤ 127 UTF-16 нэгж). */
   reason?: string;
   /** `/Name`; хоосон бол гэрчилгээний CN (байгууллагын нэр). */
@@ -807,7 +823,10 @@ function isSealCert(c: Certificate): boolean {
  * PDF-ийг байгууллагын цахим тамгаар (e-Seal) тамгална: тамганы гэрчилгээ (`GET /seal/certificate/{orgEtsi}`) →
  * {@link prepare} → 32 байт DTBS-ийг `POST /seal/{orgEtsi}`-ээр (SHA-256) тамгалуулна → {@link complete} (TSA + OCSP/CRL +
  * DSS) → PAdES-BASELINE-LT. PDF eID руу очихгүй. Шалгагчид (CA `/v3/validate/pdf`, `validatePdf`) энэ гарын үсгийг
- * `usage: "seal"` (байгууллагын тамга) гэж ангилна. Go `pades.SealPDF`-тэй ижил.
+ * `usage: "seal"` (байгууллагын тамга) гэж ангилна. Go `pades.SealPDF`-тэй ижил. Анхдагчаар дардас харагдана
+ * ({@link PadesSealOptions}); эцсийн байршил `placement`-д. Тамганы дардсыг таньдаггүй шалгагчид (APPEARANCE_SPEC.md §6.3
+ * хэрэгжүүлэхээс өмнөх CA `/v3/validate/pdf`, энэ SDK-ийн өмнөх хувилбарууд) өмнөх гарын үсгийг modified гэж мэдээлнэ —
+ * тэдгээр шинэчлэгдэх хүртэл `invisible: true` ашиглана уу.
  *
  * `sealer` нь RP backend-ийн `EidClient.seal` (RP secret) — хөтөчөөс шууд дуудахгүй.
  *
@@ -830,16 +849,68 @@ export async function sealPdf(sealer: PadesSealer, orgEtsi: string, pdf: Uint8Ar
     throw new PadesError("SIGNER_INVALID", "тамганы гэрчилгээ задарсангүй", { cause: e });
   }
   if (!isSealCert(cert)) throw new PadesError("SIGNER_INVALID", "гэрчилгээ e-Seal биш (KeyUsage = зөвхөн nonRepudiation байх ёстой)");
-  const p = await prepare(pdf, {
+  const doc = u8(pdf, "pdf");
+  const po: PadesPrepareOptions = {
     signerCert: cert.raw,
     chain: opts.chain,
     signerName: opts.signerName,
     reason: opts.reason,
     signingTime: opts.signingTime,
-  });
+  };
+  let auto = false;
+  if (opts.invisible !== true) {
+    po.appearance = opts.appearance ?? (await defaultSealAppearance(doc));
+    auto = opts.appearance === undefined && po.appearance !== undefined;
+  }
+  let p: PadesPrepared;
+  try {
+    p = await prepare(doc, po);
+  } catch (e) {
+    // The automatic stamp does not fit the page (text, box) or its fonts push the output over the size limit — the
+    // caller asked for nothing, so the invisible seal is the fallback (APPEARANCE_SPEC.md §6.4).
+    if (!auto || !(e instanceof PadesError) || (e.code !== "REQUEST_INVALID" && e.code !== "PDF_TOO_LARGE")) throw e;
+    delete po.appearance;
+    p = await prepare(doc, po);
+  }
   const r = await sealer.seal(orgEtsi, p.dtbs, "SHA-256");
   if (!eq(u8(r.certificate, "certificate"), cert.raw)) {
     throw new PadesError("SIGNER_INVALID", "тамгалах хооронд байгууллагын тамганы гэрчилгээ солигдсон — дахин оролдоно уу");
   }
-  return complete(p.state, r.signature, opts.complete);
+  const res = await complete(p.state, r.signature, opts.complete);
+  if (p.placement) res.placement = p.placement;
+  return res;
+}
+
+/** Automatic seal stamp size and margin, pt (Go `SealStampWidth/Height/Margin`, APPEARANCE_SPEC.md §6.4). */
+const SEAL_STAMP_WIDTH = 220;
+const SEAL_STAMP_HEIGHT = 64;
+const SEAL_STAMP_MARGIN = 36;
+/** Smallest distance from the page edge to the automatic stamp, pt. */
+const SEAL_STAMP_GAP = 4;
+
+/**
+ * Go defaultSealAppearance (APPEARANCE_SPEC.md §6.4): the page is resolved ONCE — suggestPlacement's page 0 (the last page
+ * that is not an eID verify page, PLACEMENT_SPEC §1a/§6b) — and passed explicitly; the stamp is the bottom-right corner
+ * fitted to that page's visible size. Undefined (→ invisible seal) when the page cannot be read or is ≤ 8 pt wide/high;
+ * prepare reports the real error.
+ */
+async function defaultSealAppearance(doc: Uint8Array): Promise<PadesAppearance | undefined> {
+  let s: PlacementSuggestion;
+  try {
+    s = await suggestPlacement(doc, { x: 0, y: 0, width: 1, height: 1 });
+  } catch {
+    return undefined;
+  }
+  const pw = s.pageWidth;
+  const ph = s.pageHeight;
+  const w = Math.min(SEAL_STAMP_WIDTH, pw - 2 * SEAL_STAMP_GAP);
+  const h = Math.min(SEAL_STAMP_HEIGHT, ph - 2 * SEAL_STAMP_GAP);
+  if (w <= 0 || h <= 0) return undefined;
+  return {
+    page: s.page,
+    x: pw - w - Math.min(SEAL_STAMP_MARGIN, (pw - w) / 2),
+    y: Math.min(SEAL_STAMP_MARGIN, (ph - h) / 2),
+    width: w,
+    height: h,
+  };
 }

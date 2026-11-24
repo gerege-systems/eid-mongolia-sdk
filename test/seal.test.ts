@@ -426,7 +426,9 @@ function replay(drop: (key: string) => boolean = () => false): pades.PadesComple
 
 const seededNonce = (seed: string) => new Uint8Array(createHash("sha256").update(Buffer.concat([Buffer.from(seed), Buffer.of(0)])).digest().subarray(0, 8));
 
+// invisible: true — the recorded fixture is the pre-v12 (invisible) SealPDF output; the default is visible since v12.
 const sealOpts = (drop?: (k: string) => boolean): pades.PadesSealOptions => ({
+  invisible: true,
   reason: M.reason,
   signingTime: new Date(M.signingTime),
   chain: ["04", "03", "02"].map(pki),
@@ -469,6 +471,16 @@ test("sealPdf — PAdES-B-LT, Go reference-тэй байт-ижил, verify ху
   assert.equal(out.revIndex, 1);
   assert.equal(out.claimedRole, "");
   assert.deepEqual(out.signerCert, SEAL);
+  assert.equal(out.placement, undefined);
+});
+
+test("sealPdf — invisible: true ignores appearance; byte-identical to the pre-v12 sealPdf", async () => {
+  const input = new Uint8Array(readFileSync(new URL("input/quartz-pdf13.pdf", G)));
+  const { s, calls } = sealer();
+  const out = await pades.sealPdf(s, "NTRMN-6235972", input, { ...sealOpts(), appearance: { x: 36, y: 36, width: 220, height: 64 } });
+  assert.equal(Buffer.from(calls[0]!.digest).toString("hex"), M.dtbs);
+  assert.equal(out.outSha256, M.outSha256);
+  assert.equal(out.placement, undefined);
 });
 
 test("sealPdf — татгалзалт", async () => {

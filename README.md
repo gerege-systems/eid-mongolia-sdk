@@ -1034,19 +1034,25 @@ writeFileSync("sealed.pdf", done.pdf); // PAdES-BASELINE-LT, байгуулла�
   32 байт DTBS-ийг `eid.seal.seal(org, dtbs, "SHA-256")` (`POST /seal/{orgEtsi}`, `{digest, hashType}`) → `complete`.
   PDF eID руу очихгүй.
 - **RFC 3161 timestamp заавал** (eID TSA, `complete.tsaUrl`): TSA хүрэхгүй бол `TSA_UNAVAILABLE`, цагийн тэмдэггүй файл
-  буцаахгүй; OCSP/CRL + DSS → B-LT. Тамга үл харагдах, баталгаажуулалтын (QR) хуудасгүй — тамга иргэний гарын үсгийн
-  бүртгэлд (`registerSignature`) ордоггүй тул `/verify/{docId}` холбоос өгөхгүй.
+  буцаахгүй; OCSP/CRL + DSS → B-LT. Баталгаажуулалтын (QR) хуудасгүй — тамга иргэний гарын үсгийн бүртгэлд
+  (`registerSignature`) ордоггүй тул `/verify/{docId}` холбоос өгөхгүй.
 - Шалгагч (`validatePdf`, CA `/v3/validate/pdf`) энэ гарын үсгийг `certificate.usage: "seal"` гэж ангилна — хэрэглэгчид
   «Байгууллагын тамга» гэж харуулна уу.
-- **Харагдах тамганы дардас** (APPEARANCE_SPEC.md §6, golden v12): `sealPdf` үл харагдах хэвээр; харагдах дардас хэрэгтэй
-  бол `prepare(pdf, { signerCert: <тамганы cert>, appearance: { x, y, width, height, page?, lang?, exact? } })` →
-  `eid.seal.seal` → `complete`. Хувилбарыг ЗӨВХӨН гэрчилгээ сонгоно (§6.1: CA биш, KeyUsage-д nonRepudiation байгаа ба
+- **Харагдах тамганы дардас — `sealPdf`-ийн анхдагч ӨӨРЧЛӨГДСӨН** (APPEARANCE_SPEC.md §6.4, Go `SealPDF`-тэй ижил):
+  `sealPdf` анхдагчаар дардас ХАРАГДАНА — баримтын сүүлийн (eID verify биш) хуудасны баруун доод буланд 220 × 64 pt
+  (`x = хуудасны өргөн − 256`, `y = 36`; жижиг хуудсанд `w = min(220, pw − 8)`, `h = min(64, ph − 8)`-аар багтаана),
+  агуулгатай давхцвал чөлөөт байрлал руу (PLACEMENT_SPEC.md); эцсийн байршил `result.placement`-д. Дардас хуудсанд
+  багтахгүй эсвэл гаралт хэмжээний хязгаараас хэтэрвэл үл харагдах тамга (`placement` байхгүй). Өөрөө байрлуулах бол
+  `appearance: { x, y, width, height, page?, lang?, exact? }` (буруу/багтахгүй бол `REQUEST_INVALID`, хэт том бол
+  `PDF_TOO_LARGE`). **`invisible: true` — өмнөх `sealPdf`-тэй байт-ижил үл харагдах тамга.** `prepare`-ийг шууд дуудахад:
+  `prepare(pdf, { signerCert: <тамганы cert>, appearance })` → `eid.seal.seal` → `complete`. Хувилбарыг ЗӨВХӨН гэрчилгээ сонгоно (§6.1: CA биш, KeyUsage-д nonRepudiation байгаа ба
   digitalSignature үгүй, EKU extension үгүй): e-Seal cert → QR/холбоос/үүрэггүй дардас (нэр, «eID Mongolia-аар тамгалсан» /
   "Sealed with eID Mongolia", огноо), `docId` шаардахгүй, 45 pt-ийн доод өндөр үгүй (220 × 64 pt-д f = 11); бусад cert →
   иргэний дардас (өөрчлөгдөөгүй). Байршил, `suggestPlacement` нь иргэнийхтэй ижил. `validatePdf` (энэ хувилбараас) дардсыг
   гэрчилгээгээр нь дахин үүсгэж тулгана — гэрчилгээ/дардас зөрвөл өмнөх гарын үсгүүд `modified_after_signing`. **Анхаар:**
   §6.3-ийг хэрэгжүүлээгүй шалгагч (CA `/v3/validate/pdf` шинэчлэгдэх хүртэл, энэ SDK-ийн өмнөх хувилбарууд) тамганы
-  дардастай revision-ийг өмнөх гарын үсгийн өөрчлөлт гэж үзнэ.
+  дардастай revision-ийг өмнөх гарын үсгийн өөрчлөлт гэж үзнэ — CA validator §6.3-ийг гаргах хүртэл RP-д харагдах тамга
+  бүү гарга (`invisible: true`).
 - `eid.seal.seal` хариуг шалгана: гарын үсэг хариуны гэрчилгээгээр digest дээр таарч, гэрчилгээ e-Seal профайл
   (`isSealCertificate`: KeyUsage = зөвхөн nonRepudiation, EKU-гүй) байх ёстой — эс бөгөөс `ValidationError`.
   `hashAlgorithm`: `SHA-256` (анхдагч) | `SHA-384` | `SHA-512`.
