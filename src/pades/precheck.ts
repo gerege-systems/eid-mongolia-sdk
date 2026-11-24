@@ -3,8 +3,8 @@
 import { TAG, children, oidString, readNode } from "./asn1.js";
 import { fromLatin1 } from "./bytes.js";
 import { parseSignedData, verifySignedData } from "./cms.js";
-import { PdfError, PRef, Reader, Value } from "./pdf/reader.js";
-import { checkSignatureFrom, type Certificate } from "./x509.js";
+import { PdfError, PRef, Reader, Value, type PDict, type PStream } from "./pdf/reader.js";
+import { checkSignatureFrom, sealCertificate, type Certificate } from "./x509.js";
 
 export const MAX_SIGNATURES = 16;
 export const VERIFY_URL_PREFIX = "https://ca.eidmongolia.mn/verify/";
@@ -135,8 +135,20 @@ async function issuedByAny(leaf: Certificate, issuers: Certificate[]): Promise<b
   return false;
 }
 
-/** precheck — {newDoc, revIndex}. PDF_ENCRYPTED шалгалтыг дуудагч өмнө нь хийнэ (#4 → #5 дараалал). */
-export async function precheck(doc: Uint8Array, issuers: Certificate[]): Promise<{ newDoc: boolean; revIndex: number }> {
+/**
+ * A signature #6 found and #8–#10 accepted (APPEARANCE_SPEC.md §6.6 «verified signatures»): its revision end
+ * (ByteRange[2] + ByteRange[3], checked by #8) and whether its signer certificate is an e-Seal certificate (§6.1).
+ */
+export interface VerifiedSignature {
+  end: number;
+  seal: boolean;
+}
+
+/**
+ * precheck — {newDoc, revIndex, verified}. verified: signature dictionary object number → {@link VerifiedSignature}
+ * (empty on an unsigned document). PDF_ENCRYPTED шалгалтыг дуудагч өмнө нь хийнэ (#4 → #5 дараалал).
+ */
+export async function precheck(doc: Uint8Array, issuers: Certificate[]): Promise<{ newDoc: boolean; revIndex: number; verified: Map<number, VerifiedSignature> }> {
   if (encrypted(doc)) throw new PrecheckError("PDF_ENCRYPTED", "шифрлэгдсэн PDF дэмжигдэхгүй");
   let scan: ReturnType<typeof scanSignatures>;
   try {
@@ -145,7 +157,7 @@ export async function precheck(doc: Uint8Array, issuers: Certificate[]): Promise
     throw new PrecheckError("PDF_INVALID", `PDF биш эсвэл эвдэрсэн: ${e instanceof Error ? e.message : String(e)}`);
   }
   const { sigs, locked, hasDSS } = scan;
-  if (sigs.length === 0) return { newDoc: true, revIndex: 1 };
+  if (sigs.length === 0) return { newDoc: true, revIndex: 1, verified: new Map() };
   if (sigs.length >= MAX_SIGNATURES) throw new PrecheckError("PDF_TOO_MANY_SIGNATURES", "баримтад хэт олон гарын үсэг байна");
   const leaves: { leaf: Certificate; stamped: boolean }[] = [];
   for (const s of sigs) {
@@ -156,13 +168,16 @@ export async function precheck(doc: Uint8Array, issuers: Certificate[]): Promise
     }
   }
   if (locked) throw new PrecheckError("PDF_LOCKED", "баримт certification (DocMDP P=1) гарын үсгээр түгжигдсэн");
+  const verified = new Map<number, VerifiedSignature>();
   for (let i = 0; i < sigs.length; i++) {
     const l = leaves[i]!;
     if (sigs[i]!.subFilter !== "ETSI.CAdES.detached" || !(await issuedByAny(l.leaf, issuers)) || !l.stamped || !hasDSS) {
       throw new PrecheckError("PDF_FOREIGN_SIGNATURE", "баримтад eID-ийн биш гарын үсэг байна");
     }
+    const br = sigs[i]!.byteRange!; // #8 checked: 4 integers, b + c ≤ len
+    verified.set(sigs[i]!.obj, { end: br[2]! + br[3]!, seal: sealCertificate(l.leaf) });
   }
-  return { newDoc: false, revIndex: sigs.length + 1 };
+  return { newDoc: false, revIndex: sigs.length + 1, verified };
 }
 
 /** Эхний eID гарын үсгийн хуудасны /Link annotation-ийн URI-аас docId. */
@@ -181,6 +196,75 @@ export function docIdFromPage(doc: Uint8Array): string {
   return "";
 }
 
+/** A marked stamp's first line (APPEARANCE_SPEC.md §5 step 6): docId = group 1, rev = group 2. */
+const STAMP_MARKER_RE = /^\/EIDVerify <<\/URL \(https:\/\/ca\.eidmongolia\.mn\/verify\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/([1-9][0-9]?)\)>> BDC\n/;
+/** Bytes of a form stream read for the marker (the line is ≤ 99 bytes). */
+const STAMP_MARKER_MAX = 128;
+
+/**
+ * Prepare's docId rule step 2.2 (APPEARANCE_SPEC.md §6.6, Go `docIDFromStamps`): the docId of the earliest-signed marked
+ * stamp of a verified e-Seal signature. Sources are only the `verified` signatures whose signer certificate is an e-Seal
+ * certificate (a citizen stamp's marker is never a source). A widget is a dictionary of the last revision's xref
+ * (object-number order, each read with its xref generation) whose OWN `/FT` is `/Sig` and whose OWN `/V` is an indirect
+ * reference to such a signature dictionary (a direct `/V`, an inherited entry, or a reference to anything else is
+ * ignored); a signature with more than one widget is ignored. For a signature with exactly one widget: `/AP` → dictionary,
+ * `/N` → stream whose `/Filter` is absent or a direct `null` (an indirect reference — even to null —, `[]` or a name → no
+ * candidate); the first ≤ 128 of its `/Length` bytes as stored must match the marker regex at offset 0, and the marker's
+ * rev must equal the signature's position (1 + the verified signatures with a smaller ByteRange end). The candidate with
+ * the smallest ByteRange end wins, ties → the lower signature object number. "" when there is none.
+ *
+ * Objects that cannot be read while looking for widgets are skipped; a failure reading a candidate's own `/AP`, `/N`,
+ * `/Length` or stream bytes throws (prepare → PDF_INVALID; a candidate found before it is never used).
+ */
+export function docIdFromStamps(doc: Uint8Array, verified: Map<number, VerifiedSignature>): string {
+  if (![...verified.values()].some((s) => s.seal)) return "";
+  const r = new Reader(doc);
+  const widgets = new Map<number, Value[]>();
+  for (const x of r.xref) {
+    let w: { sig: number; v: Value } | undefined;
+    try {
+      const v = r.resolve(x.ptr, new PRef(x.ptr.id, x.ptr.gen));
+      if (v.kind() !== "dict" || v.key("FT").name() !== "Sig") continue;
+      const raw = (v.data as PDict).get("V");
+      if (!(raw instanceof PRef) || raw.id === x.ptr.id || verified.get(raw.id)?.seal !== true) continue;
+      const sig = v.key("V");
+      if (sig.kind() !== "dict" || sig.ptr.id !== raw.id) continue;
+      w = { sig: raw.id, v };
+    } catch {
+      continue; // an unreadable object is not a candidate's own read — skipped
+    }
+    if (w === undefined) continue;
+    widgets.set(w.sig, [...(widgets.get(w.sig) ?? []), w.v]);
+  }
+  let best: { end: number; obj: number; docId: string } | undefined;
+  for (const [obj, s] of verified) {
+    const ws = widgets.get(obj);
+    if (!s.seal || ws === undefined || ws.length !== 1) continue;
+    const m = stampMarker(r, ws[0]!);
+    if (m === undefined) continue;
+    let pos = 1;
+    for (const o of verified.values()) if (o.end < s.end) pos++;
+    if (m.rev !== String(pos)) continue;
+    if (best === undefined || s.end < best.end || (s.end === best.end && obj < best.obj)) best = { end: s.end, obj, docId: m.docId };
+  }
+  return best?.docId ?? "";
+}
+
+/** The widget's /AP /N marker (docIdFromStamps); undefined = no marker. Read errors propagate. */
+function stampMarker(r: Reader, w: Value): { docId: string; rev: string } | undefined {
+  const ap = w.key("AP");
+  if (ap.kind() !== "dict") return undefined;
+  const n = ap.key("N");
+  if (n.kind() !== "stream") return undefined;
+  const st = n.data as PStream;
+  if (st.hdr.has("Filter") && st.hdr.get("Filter") !== null) return undefined;
+  // Go io.NewSectionReader(f, offset, /Length): a negative or over-long /Length reads what the file holds.
+  const len = n.key("Length").int64();
+  const end = Math.min(r.bytes.length, st.offset + Math.min(Math.max(len, 0), STAMP_MARKER_MAX));
+  const head = st.offset < end ? fromLatin1(r.bytes, st.offset, end) : "";
+  const m = STAMP_MARKER_RE.exec(head);
+  return m ? { docId: m[1]!, rev: m[2]! } : undefined;
+}
 
 /** Баримтын нэг гарын үсэг — {@link signatureCMSList}. */
 export interface SignatureEntry {

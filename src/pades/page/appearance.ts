@@ -24,7 +24,10 @@ export interface Visible {
   lang: string;
   /** «YYYY-MM-DD HH:MM (+08)» */
   date: string;
-  /** https://ca.eidmongolia.mn/verify/<docID>/<revIndex>; unused for the seal stamp. */
+  /**
+   * https://ca.eidmongolia.mn/verify/<docID>/<revIndex>. With `seal`: "" = the QR-less seal stamp (§6.2), set = the seal
+   * stamp with QR (§6.5 — only the internal golden/test hook sets it; no public API emits it yet).
+   */
   url: string;
   /** Organisation seal stamp (APPEARANCE_SPEC.md §6): only when the signer certificate is an e-Seal certificate (§6.1). */
   seal?: boolean;
@@ -47,7 +50,10 @@ export interface AppearanceParams {
   lang: string;
   date: string;
   url: string;
-  /** Organisation seal stamp (APPEARANCE_SPEC.md §6): no QR / URL / role line, SEAL_LABELS; role and url are ignored. */
+  /**
+   * Organisation seal stamp (APPEARANCE_SPEC.md §6): SEAL_LABELS, role ignored. url "" → the QR-less seal stamp (§6.2);
+   * url set → the citizen stamp's structure (§3: QR, /EIDVerify BDC) with the seal label and no role line (§6.5).
+   */
   seal?: boolean;
 }
 
@@ -112,10 +118,12 @@ interface ApLine {
   text: string;
 }
 
-/** Form XObject-ийн content stream (APPEARANCE_SPEC.md §3). */
+/** Form XObject-ийн content stream (APPEARANCE_SPEC.md §3; seal → §6.2 without a URL, §6.5 with one). */
 export function appearanceContent(p: AppearanceParams): string {
-  if (p.seal === true) return sealContent(p);
-  const label = APPEARANCE_LABELS[p.lang];
+  if (p.seal === true && p.url === "") return sealContent(p);
+  // §6.5: the citizen stamp (§3) byte for byte — the seal label, never a role line.
+  if (p.seal === true) p = { ...p, role: "" };
+  const label = (p.seal === true ? SEAL_LABELS : APPEARANCE_LABELS)[p.lang];
   if (label === undefined) throw new AppearanceError(`хэл ${p.lang}`);
   if (!asciiURL(p.url)) throw new AppearanceError("URL ASCII биш");
   if (p.w <= 0 || p.h <= 0 || p.w > MAX_APPEARANCE_SIDE || p.h > MAX_APPEARANCE_SIDE) throw new AppearanceError("хэмжээ");
