@@ -1,3 +1,5 @@
+Монгол · [English](README.en.md) · [中文](README.zh-CN.md)
+
 # @gerege-systems/eid-mongolia-sdk
 
 **e-ID Mongolia** (Монгол Улсын иргэний цахим үнэмлэх) Relying Party SDK — иргэнээр утсаар нь нэвтрэлт
