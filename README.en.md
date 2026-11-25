@@ -56,29 +56,29 @@ It only uses the RP-API from §2/§4 (device link v3, push, `ResponseValidator`)
 import { EidClient, NATIONAL_ROOT_CA_PEM, createEidLogin } from "@gerege-systems/eid-mongolia-sdk";
 
 const eid = new EidClient({
-  credentials: { rpUUID: process.env.EID_RP_UUID!, rpName: "Интернэт банк", apiSecret: process.env.EID_SECRET! },
-  // Root (01) — итгэлийн тулгуур; завсрын 02 → 03 → 04 нь SDK-д суусан (CITIZEN_INTERMEDIATES_PEM, анхдагч).
+  credentials: { rpUUID: process.env.EID_RP_UUID!, rpName: "Internet Bank", apiSecret: process.env.EID_SECRET! },
+  // Root (01) is the trust anchor; the intermediates 02 → 03 → 04 are built into the SDK (CITIZEN_INTERMEDIATES_PEM, the default).
   trust: { trustAnchorsPem: [NATIONAL_ROOT_CA_PEM] },
 });
 
 export const eidLogin = createEidLogin({
   client: eid,
-  callbackUrl: "https://bank.example.mn/auth/eid/callback", // host нь RP-ийн callbackHosts-д; утасны урсгалд заавал
+  callbackUrl: "https://bank.example.mn/auth/eid/callback", // the host must be in the RP's callbackHosts; required for the phone flow
   async onSuccess(id) {
-    // id.etsi (PNOMN-…) — хэрэглэгчийг ҮҮГЭЭР таньна; id.givenName/surname (латин), id.person (кирилл, байвал)
-    // id.sessionId, id.documentNumber, id.certificateDerB64 — дараагийн алхамд (гарын үсэг, гэрчилгээ холбох)
+    // id.etsi (PNOMN-…) — identify the user BY THIS; id.givenName/surname (Latin), id.person (Cyrillic, if present)
+    // id.sessionId, id.documentNumber, id.certificateDerB64 — for the next steps (signing, linking the certificate)
     const user = await users.findOrCreateByEtsi(id.etsi);
-    const sid = await sessions.create(user.id); // ШИНЭ session (session fixation)
+    const sid = await sessions.create(user.id); // a NEW session (session fixation)
     return {
       redirect: "/dashboard",
       headers: { "Set-Cookie": `app_session=${sid}; Path=/; HttpOnly; Secure; SameSite=Lax` },
     };
   },
-  // store: redisStore,            // олон instance / serverless бол (анхдагч — процессын санах ой)
-  // rateLimit: { start: (key) => redisLimiter.allow(key) }, // анхдагчтай нэгтгэгдэнэ (push 3/мин хэвээр) — доор «Хязгаарлалт»
-  trustProxy: 1, // handle(Request)-д клиент IP: nginx/LB нэг hop бол 1 (доор «Клиент IP»)
-  onEvent: ({ kind, sessionId, meta }) => audit.record(`auth.eid_${kind}`, sessionId, meta), // таны аудит
-  // auditKey: process.env.EID_AUDIT_KEY, // pushKey-ийг instance/restart хооронд тогтвортой болгох
+  // store: redisStore,            // for multiple instances / serverless (default — process memory)
+  // rateLimit: { start: (key) => redisLimiter.allow(key) }, // merged with the defaults (push stays 3/min) — see "Rate limiting" below
+  trustProxy: 1, // client IP for handle(Request): 1 if nginx/LB is a single hop (see "Client IP" below)
+  onEvent: ({ kind, sessionId, meta }) => audit.record(`auth.eid_${kind}`, sessionId, meta), // your audit
+  // auditKey: process.env.EID_AUDIT_KEY, // keep pushKey stable across instances/restarts
 });
 ```
 
@@ -118,10 +118,10 @@ and does not delete logins already in progress. With multiple instances, use a R
 
 ```ts
 import { defaultRateLimit } from "@gerege-systems/eid-mongolia-sdk";
-rateLimit: { start: { limit: 60, windowMs: 60_000 } },             // NAT-ын ард олон хэрэглэгчтэй бол; push 3/мин хэвээр
-rateLimit: { start: false },                                       // start-ийг өөрийн давхаргад (nginx/gateway) хязгаарладаг бол
-rateLimit: { ...defaultRateLimit, start: (k) => redis.allow(k) },  // ижил — анхдагчийг илэрхий бичсэн
-rateLimit: { push: (k) => redis.allow(k, 3, 60) },                 // олон instance: push-ийг Redis-ээр солино
+rateLimit: { start: { limit: 60, windowMs: 60_000 } },             // when many users sit behind a NAT; push stays 3/min
+rateLimit: { start: false },                                       // if you rate-limit start in your own layer (nginx/gateway)
+rateLimit: { ...defaultRateLimit, start: (k) => redis.allow(k) },  // same — with the default written out explicitly
+rateLimit: { push: (k) => redis.allow(k, 3, 60) },                 // multiple instances: replace push with Redis
 ```
 
 Go: `eidlogin.Config.RateLimits` (`map[string]eidlogin.RateRule{"start": {Max: 20, Window: time.Minute}}`,
@@ -143,7 +143,7 @@ app.use("/auth/eid", express.json(), async (req, res) => {
 <eid-login-button start-url="/auth/eid/start" status-url="/auth/eid/status" lang="mn"></eid-login-button>
 <script type="module">
   document.querySelector("eid-login-button").addEventListener("eid-login-success", (e) => {
-    // e.detail = { state: "OK", redirect, data } — preventDefault() хийвэл redirect хийхгүй
+    // e.detail = { state: "OK", redirect, data } — no redirect if you call preventDefault()
   });
 </script>
 ```
@@ -198,12 +198,12 @@ any level of the page (`:root`, a parent element, `eid-login-button`) is inherit
 Dark order: `--eid-<name>-dark` → `--eid-<name>` → the dark default.
 
 ```css
-:root {                                   /* эсвэл eid-login-button { … } */
-  --eid-accent: var(--brand);             /* хоёр theme-д */
-  --eid-accent-dark: var(--brand-400);    /* зөвхөн dark-д (өгөхгүй бол --eid-accent) */
+:root {                                   /* or eid-login-button { … } */
+  --eid-accent: var(--brand);             /* for both themes */
+  --eid-accent-dark: var(--brand-400);    /* dark only (falls back to --eid-accent if not set) */
   --eid-radius: 6px; --eid-radius-lg: 8px;
 }
-eid-login-button::part(button) { width: 100%; }  /* part: button, icon, label, dialog (backdrop — зөвхөн fallback-д) */
+eid-login-button::part(button) { width: 100%; }  /* part: button, icon, label, dialog (backdrop — fallback only) */
 eid-login-button::part(label) { font-weight: 600; }
 eid-login-button::part(icon) { height: 18px; }
 ```
@@ -298,7 +298,7 @@ export const redisStore: EidLoginStore = {
     await redis.set(key(sid), JSON.stringify(tx), "PX", ttlMs);
   },
   async delete(sid) {
-    return (await redis.del(key(sid))) === 1; // DEL атомар — зэрэг хоёр status-ийн зөвхөн нэг нь onSuccess дуудна
+    return (await redis.del(key(sid))) === 1; // DEL is atomic — of two concurrent status calls only one invokes onSuccess
   },
 };
 ```
@@ -311,29 +311,29 @@ The tx holds `sessionSecret` (the material for assembling the QR) — keep Redis
 import { EidClient, NATIONAL_ROOT_CA_PEM } from "@gerege-systems/eid-mongolia-sdk";
 
 const eid = new EidClient({
-  // baseUrl анхдагч https://rp.eidmongolia.mn (RP-API, /v3-гүй) — mTLS-тэй RP ч мөн энэ хост
+  // baseUrl defaults to https://rp.eidmongolia.mn (RP-API, no /v3) — an RP with mTLS uses this host too
   credentials: {
     rpUUID: process.env.EID_RP_UUID!,
-    rpName: "Интернэт банк", // дэд системийн нэр, ≤ 120 тэмдэгт (CA илүүг тэмдэгтээр таслана)
+    rpName: "Internet Bank", // subsystem name, ≤ 120 characters (the CA truncates anything longer)
     apiSecret: process.env.EID_SECRET!, // rp_sk_…
   },
-  trust: { trustAnchorsPem: [NATIONAL_ROOT_CA_PEM] }, // ← Mongolian National Root CA, production-д ЗААВАЛ (завсрын 02–04 SDK-д суусан)
+  trust: { trustAnchorsPem: [NATIONAL_ROOT_CA_PEM] }, // ← Mongolian National Root CA, REQUIRED in production (intermediates 02–04 are built into the SDK)
 });
 
-// ETSI (PNOMN-<иргэний дугаар>) / регистр / иргэний дугаар — аль нь ч болно (сервер танина)
+// ETSI (PNOMN-<civil ID number>) / registry number / civil ID number — any works (the server recognizes it)
 const s = await eid.auth.notificationByEtsi("PNOMN-12345678", [
-  { type: "displayTextAndPIN", displayText60: "Хаан Банк-д нэвтрэх" },
+  { type: "displayTextAndPIN", displayText60: "Log in to Khan Bank" },
 ]);
 
-showToUser(s.vc); // ← иргэний утсан дээр харагдах баталгаажуулах код (VC)
+showToUser(s.vc); // ← the verification code (VC) shown on the citizen's phone
 
-// long-poll; session-ий хугацаа дуустал хүлээнэ: expiresAt + 15 с (алга бол discovery sessionTtl, эс бөгөөс 600 с).
-// CA хугацаа дууссан session-ийг COMPLETE/TIMEOUT болгоно. { maxWaitMs } өгвөл түүгээр таслана (RUNNING буцна).
+// long-poll; waits until the session expires: expiresAt + 15 s (discovery sessionTtl if absent, otherwise 600 s).
+// The CA turns an expired session into COMPLETE/TIMEOUT. If { maxWaitMs } is given, it cuts the wait off (RUNNING is returned).
 const result = await eid.session.waitForResult(s.sessionId, { expiresAt: s.expiresAt });
-const who = eid.validator.validateAuth(result, s.acsp!); // ← гинж + ACSP_V2 крипто-баталгаажуулна (RUNNING бол ValidationError)
+const who = eid.validator.validateAuth(result, s.acsp!); // ← verifies the chain + ACSP_V2 cryptographically (ValidationError if RUNNING)
 
-console.log(who.documentNumber, who.subject); // баталгаажсан иргэн
-const { name, serialNumber } = who.parsedSubject; // латин «givenName surname», "PNOMN-12345678" (givenName/surname/commonName/country…)
+console.log(who.documentNumber, who.subject); // the verified citizen
+const { name, serialNumber } = who.parsedSubject; // Latin "givenName surname", "PNOMN-12345678" (givenName/surname/commonName/country…)
 ```
 
 The session's `person` block (from the CA's registry — the Cyrillic name, date of birth and sex, which are not in the certificate) is **not part of** the signature —
@@ -342,10 +342,10 @@ trust it only after matching it against the certificate's `SERIALNUMBER`:
 ```ts
 import { personMatchesCertificate } from "@gerege-systems/eid-mongolia-sdk";
 if (personMatchesCertificate(result.person, who.parsedSubject)) {
-  const { firstName, lastName /* ЭЦГИЙН нэр */, familyName /* УРГИЙН овог */, civilId, regNo, birthDate, gender, geID,
-    nationality /* «MNG» — ISO 3166-1 alpha-3, гэрчилгээний country биш; мэдэгдэхгүй бол undefined */ } = result.person!;
+  const { firstName, lastName /* FATHER'S name */, familyName /* FAMILY name */, civilId, regNo, birthDate, gender, geID,
+    nationality /* "MNG" — ISO 3166-1 alpha-3, not the certificate's country; undefined if unknown */ } = result.person!;
 }
-// result.raw — серверийн түүхий JSON (SDK задлаагүй талбарт)
+// result.raw — the server's raw JSON (for fields the SDK does not parse)
 ```
 
 The subject fields (`parsedSubject`, also in `validateSign`) come from `parseSubject(cert)` — OIDs 2.5.4.42/4/3/5/6/10/97,
@@ -362,15 +362,15 @@ UTF8String/PrintableString/BMPString. `parseSubject` only parses: never trust th
 ```ts
 import { sha256Base64 } from "@gerege-systems/eid-mongolia-sdk";
 
-const digest = sha256Base64(pdfBytes); // баримтын SHA-256 (base64)
+const digest = sha256Base64(pdfBytes); // SHA-256 of the document (base64)
 
 const s = await eid.sign.digestByEtsi("PNOMN-12345678", digest, [
-  { type: "displayTextAndPIN", displayText60: "Зээлийн гэрээнд гарын үсэг зурах" },
+  { type: "displayTextAndPIN", displayText60: "Sign the loan agreement" },
 ]);
 showToUser(s.vc);
 
 const result = await eid.session.waitForResult(s.sessionId);
-const sig = eid.validator.validateSign(result, digest); // digest-ийн эсрэг баталгаажна
+const sig = eid.validator.validateSign(result, digest); // verified against the digest
 
 console.log(sig.signatureValueB64, sig.subject);
 ```
@@ -381,7 +381,7 @@ For a sign session started via device-link / push, check the flow you started wi
 a mismatch throws `ValidationError`). The third parameter is a `hashAlgorithm` string (the old form) or an object:
 
 ```ts
-eid.validator.validateSign(result, digest, { expectedFlowType: "QR" }); // эсвэл "Web2App" / "App2App" / "Notification"
+eid.validator.validateSign(result, digest, { expectedFlowType: "QR" }); // or "Web2App" / "App2App" / "Notification"
 eid.validator.validateSign(result, digest384, { hashAlgorithm: "SHA-384", expectedFlowType: "Web2App" });
 ```
 
@@ -410,18 +410,18 @@ Because the certificate goes into the DTBS (`signingCertificateV2`), do certific
 match the certificate.
 
 ```ts
-const cc = await eid.sign.certificateChoiceByEtsi("PNOMN-12345678"); // эсвэл certificateChoiceDeviceLink() (QR; callbackUrl өгвөл Web2App/App2App ч)
+const cc = await eid.sign.certificateChoiceByEtsi("PNOMN-12345678"); // or certificateChoiceDeviceLink() (QR; also Web2App/App2App if callbackUrl is given)
 const signer = eid.validator.validateCertificateChoice(await eid.session.waitForResult(cc.sessionId), cc.sessionId);
-const dtbs = myCmsBuilder.dtbs(signer.certificate); // таных: SHA-256(signedAttrs), 32 байт, стандарт base64 (PDF бол /pades prepare)
-const ix = [{ type: "displayTextAndPIN" as const, displayText60: "Гэрээнд гарын үсэг зурах" }];
-const s = await eid.sign.digestForSigner(signer, dtbs, ix, { fileName: "Гэрээ.pdf" }); // linked/{documentNumber}
+const dtbs = myCmsBuilder.dtbs(signer.certificate); // yours: SHA-256(signedAttrs), 32 bytes, standard base64 (for a PDF, /pades prepare)
+const ix = [{ type: "displayTextAndPIN" as const, displayText60: "Sign the contract" }];
+const s = await eid.sign.digestForSigner(signer, dtbs, ix, { fileName: "Contract.pdf" }); // linked/{documentNumber}
 // QR / Web2App: eid.sign.deviceLinkForSigner(signer, dtbs, ix, { callbackUrl })
 const r = await eid.session.waitForResult(s.sessionId);
 const sig = eid.validator.validateSign(r, s.sign!.digest, {
   hashAlgorithm: s.sign!.hashAlgorithm,
   expectedFlowType: "Notification",
-  expectedAlgorithm: s.sign!.signatureAlgorithm, // sha256WithRSAEncryption — PSS хариуг татгалзана
-  expectedCertificate: signer.certificate,       // өөр гэрчилгээгээр зурсан бол татгалзана
+  expectedAlgorithm: s.sign!.signatureAlgorithm, // sha256WithRSAEncryption — a PSS response is rejected
+  expectedCertificate: signer.certificate,       // rejected if signed with a different certificate
 });
 ```
 
@@ -437,17 +437,17 @@ if it is not in the list the CA drops it and the session is QR-only. The phone o
 with the RP's own query (e.g. `value=<random>`) unchanged + `sessionSecretDigest` + `sessionId` (of the certificate-choice).
 
 ```ts
-// 1) cert-choice-ийг callback-тай эхлүүл; `value`-г эхэлсэн браузерийн cookie-д хадгал
+// 1) start cert-choice with a callback; store `value` in the cookie of the browser that started it
 const cc = await eid.sign.certificateChoiceDeviceLink({ callbackUrl: `${origin}/auth/eid/callback?value=${value}` });
-const qr = buildDeviceLink(deviceLinkInput(cc, "QR", "mon"));        // desktop (секунд тутам шинэчил)
-const w2a = buildDeviceLink(deviceLinkInput(cc, "Web2App", "mon"));  // утсан дээрх товч (нэг session)
-// 2) validateCertificateChoice → 3) digestForSigner(signer, …) — дээрх linked sign
+const qr = buildDeviceLink(deviceLinkInput(cc, "QR", "mon"));        // desktop (refresh every second)
+const w2a = buildDeviceLink(deviceLinkInput(cc, "Web2App", "mon"));  // button on the phone (same session)
+// 2) validateCertificateChoice → 3) digestForSigner(signer, …) — the linked sign above
 const signer = eid.validator.validateCertificateChoice(await eid.session.waitForResult(cc.sessionId), cc.sessionId);
 const s = await eid.sign.digestForSigner(signer, dtbs, ix);
 
-// 4) /auth/eid/callback дээр
+// 4) at /auth/eid/callback
 const ok = q.value === cookieValue && verifySessionSecretDigest(q.sessionSecretDigest, cc.sessionSecret!);
-// ok бол session-ийг ЗӨВХӨН НЭГ УДАА хүлээн зөвшөөр (дахин ашиглахгүй), дараа нь linked SIGN-ий үр дүнг уншина:
+// if ok, accept the session ONLY ONCE (never reuse it), then read the linked SIGN result:
 const r = await eid.session.waitForResult(s.sessionId);
 ```
 
@@ -465,20 +465,20 @@ Details: [developer.eidmongolia.mn](https://developer.eidmongolia.mn/).
 ```ts
 import { ForbiddenError, ApiError, ON_BEHALF_ERROR_CODES } from "@gerege-systems/eid-mongolia-sdk";
 
-// 1. Иргэн сүүлийн 24 цагт танай RP-ээр нэвтэрсэн байх ёстой.
+// 1. The citizen must have logged in through your RP within the last 24 hours.
 const { representations } = await eid.organization.getRepresentations("PNOMN-12345678");
-// → [{ orgEtsi: "NTRMN-6235972", orgName: "Гэрэгэ Системс ХХК", role: "ceo", roleLabel: "Гүйцэтгэх захирал",
-//      rightType: "ADMIN", rightTypeLabel: "Админ", source: "REGISTRY", sourceLabel: "Улсын бүртгэл", … }]
+// → [{ orgEtsi: "NTRMN-6235972", orgName: "Gerege Systems LLC", role: "ceo", roleLabel: "Chief Executive Officer",
+//      rightType: "ADMIN", rightTypeLabel: "Admin", source: "REGISTRY", sourceLabel: "State registry", … }]
 
-// 2. PDF: §3d (клиент талын PAdES) — signPdfDigest({ …, onBehalfOf }) + prepare({ claimedRole: rep.claimedRole }).
-// 3. Raw digest гарын үсэг: eid.sign.digestByEtsi(id, digest, interactions, { onBehalfOf: "NTRMN-6235972" })
-//    — CMS-ийг та угсардаг тул мэдүүлсэн үүргийг (signer-attributes-v2) өөрөө нэмнэ.
+// 2. PDF: §3d (client-side PAdES) — signPdfDigest({ …, onBehalfOf }) + prepare({ claimedRole: rep.claimedRole }).
+// 3. Raw digest signature: eid.sign.digestByEtsi(id, digest, interactions, { onBehalfOf: "NTRMN-6235972" })
+//    — since you assemble the CMS yourself, you add the claimed role (signer-attributes-v2) yourself.
 try {
   /* … */
 } catch (e) {
   if ((e instanceof ForbiddenError || e instanceof ApiError) && e.code) {
     // REPRESENTATION_DENIED | REPRESENTATION_PENDING | REPRESENTATION_EXPIRED | ORG_NOT_ACTIVE |
-    // SIGNER_UNIDENTIFIED (403) · ORG_NOT_FOUND (404) · REPRESENTATION_REVOKED (403, бүртгэлийн үед)
+    // SIGNER_UNIDENTIFIED (403) · ORG_NOT_FOUND (404) · REPRESENTATION_REVOKED (403, at registration time)
   }
   throw e;
 }
@@ -511,7 +511,7 @@ replaced through renewal also carries its own token's number). MOBILE/HSM rows a
 
 ```ts
 const { certificates } = await eid.person.certificates(etsi);
-const byToken = new Map<string, typeof certificates>(); // Map.groupBy нь Node ≥ 21 — Node 18/20-д ажиллахгүй
+const byToken = new Map<string, typeof certificates>(); // Map.groupBy requires Node ≥ 21 — it does not work on Node 18/20
 for (const c of certificates) if (c.tokenSerial) byToken.set(c.tokenSerial, [...(byToken.get(c.tokenSerial) ?? []), c]);
 ```
 
@@ -520,27 +520,27 @@ for (const c of certificates) if (c.tokenSerial) byToken.set(c.tokenSerial, [...
 ```ts
 import { verifyTokenCertificates, tokenAuthDigest, tokenLimitOf } from "@gerege-systems/eid-mongolia-sdk";
 
-// гэрчилгээ олголт (TOKEN_ISSUE эрх) — иргэн утсаараа PIN2-оор батална
-const input = { signerEtsi, csrAuth, csrSign, tokenSerial: "EP2003-0042A1" }; // onBehalfOf алга = хувийн
-// push-ээс ӨМНӨ: ижил оролтоор dryRun — session/push үүсэхгүй, алдааны код бодиттой ижил
-const pv = await eid.token.previewCertificate(input); // pv.supersedes байвал иргэнд анхааруулж зөвшөөрүүлээд ↓
+// certificate issuance (TOKEN_ISSUE permission) — the citizen confirms with PIN2 on their phone
+const input = { signerEtsi, csrAuth, csrSign, tokenSerial: "EP2003-0042A1" }; // no onBehalfOf = personal
+// BEFORE the push: dryRun with the same input — no session/push is created, error codes are the same as for real
+const pv = await eid.token.previewCertificate(input); // if pv.supersedes is set, warn the citizen and get their consent, then ↓
 const st = await eid.token.issueCertificate(input);
 // … eid.session.poll(st.sessionId) → result.tokenCertificate?.status === "ISSUED"
 const res = await eid.token.certificateResult(st.sessionId);
-verifyTokenCertificates(res, csrAuth, csrSign); // гэрчилгээ бүр CSR-ийн түлхүүртэй
+verifyTokenCertificates(res, csrAuth, csrSign); // every certificate matches its CSR's key
 // 409 TOKEN_LIMIT_REACHED → tokenLimitOf(err): { kind, limit, organization? }
-// 409 TOKEN_IN_USE — serial өөр иргэнд; 409 TOKEN_SCOPE_CHANGE — сунгалт scope солих гэсэн (доор)
-// 400 APP_ATTESTATION_INVALID — appTransaction ирсэн боловч хүчингүй (доор)
+// 409 TOKEN_IN_USE — the serial belongs to another citizen; 409 TOKEN_SCOPE_CHANGE — a renewal that would change scope (below)
+// 400 APP_ATTESTATION_INVALID — an appTransaction was sent but is invalid (below)
 
-// токеноор нэвтрэх (AUTH эрх)
+// signing in with the token (AUTH permission)
 const ch = await eid.token.authChallenge();
-const digest = tokenAuthDigest(ch.rpUUID, ch.challenge); // токен CKM_ECDSA → түүхий r||s
-// 0.19.0-аас challenge-ийг бүтнээр нь өгнө (RP хадгалсан, эсвэл клиентээс буцаж ирсэн — CA challengeId-ээр тулгана):
-// SDK CA-ийн OK-д дангаар итгэхгүй — r||s-ийг гэрчилгээний түлхүүрээр, rpUUID-ийг өөрийнхтэй, гэрчилгээг trust-аар
-// (гинж, issuer, зориулалт auth) шалгаад дараа нь CA руу илгээнэ.
+const digest = tokenAuthDigest(ch.rpUUID, ch.challenge); // the token's CKM_ECDSA → raw r||s
+// since 0.19.0 pass the challenge whole (kept by the RP, or returned from the client — the CA matches it by challengeId):
+// the SDK does not trust the CA's OK alone — it checks r||s against the certificate's key, the rpUUID against its own, and the certificate against trust
+// (chain, issuer, purpose auth) and only then sends it to the CA.
 const who = await eid.token.authVerify(ch, authCertDer, rs);
 
-// токеноор PDF: §3d — prepare() → токен CKM_ECDSA(dtbs) → r||s → complete() → registerSignature() (sessionID-гүй, medium "token")
+// PDF with a token: §3d — prepare() → token CKM_ECDSA(dtbs) → r||s → complete() → registerSignature() (no sessionID, medium "token")
 ```
 
 **Renewal preserves the scope** (CA 2026-10-16, discovery `tokenCertificate.scopeLockedOnRenewal: true` —
@@ -609,42 +609,42 @@ Start the session with that `documentNumber` — if a different device signs, `c
 ### Web RP (browser prepare/complete, backend session)
 
 ```ts
-// ── браузер ─────────────────────────────────────────────────────────────────────────────
+// ── browser ─────────────────────────────────────────────────────────────────────────────
 import { prepare, complete } from "@gerege-systems/eid-mongolia-sdk/pades";
 
 const { certB64, documentNumber } = await api("/sign/pdf/signer");             // backend: person.certificates
-const signerCert = Uint8Array.from(atob(certB64), (ch) => ch.charCodeAt(0));     // prepare нь DER Uint8Array авна
+const signerCert = Uint8Array.from(atob(certB64), (ch) => ch.charCodeAt(0));     // prepare takes a DER Uint8Array
 const p = await prepare(pdfBytes, {
-  signerCert, verifyPage: true, fileName: "Гэрээ №12.pdf",
-  claimedRole, // байгууллагаар бол getRepresentations()-ийн claimedRole ЯГ ХЭВЭЭР
+  signerCert, verifyPage: true, fileName: "Contract No. 12.pdf",
+  claimedRole, // if signing for an organization, getRepresentations()'s claimedRole EXACTLY AS IS
 });
-await idb.put("pades-state", p.state);                                           // хуудас дахин ачаалагдаж болно
-const s = await api("/sign/pdf/start", { dtbs: b64(p.dtbs), documentNumber, fileName: "Гэрээ №12.pdf" });
-showToUser(s.vc);                                                                // эсвэл backend-ийн QR (§4)
+await idb.put("pades-state", p.state);                                           // the page may be reloaded
+const s = await api("/sign/pdf/start", { dtbs: b64(p.dtbs), documentNumber, fileName: "Contract No. 12.pdf" });
+showToUser(s.vc);                                                                // or the backend's QR (§4)
 const { signature } = await api(`/sign/pdf/${s.sessionId}/result`);              // backend poll + validateSign
 const done = await complete(p.state, signature);                                 // TSA + OCSP/CRL + DSS
-const { pdf, signerCert: _c, ...meta } = done;                                     // PDF backend рүү очихгүй
+const { pdf, signerCert: _c, ...meta } = done;                                     // the PDF does not go to the backend
 await api(`/sign/pdf/${s.sessionId}/register`, { ...meta, cms: b64(done.cms) });
-download(done.pdf, "Гэрээ №12.pdf");
+download(done.pdf, "Contract No. 12.pdf");
 ```
 
 ```ts
 // ── RP backend (Node) ─────────────────────────────────────────────────────────────────────
 import { registrationFromCompleted } from "@gerege-systems/eid-mongolia-sdk";
 
-// /sign/pdf/start — sessionSecret (device-link) backend-ээс гарахгүй; s.digest-ийг session-д хадгал.
+// /sign/pdf/start — sessionSecret (device-link) never leaves the backend; store s.digest in the session.
 const s = await eid.signPdfDigest({
   dtbs: req.body.dtbs, fileName: req.body.fileName,
-  signer: { documentNumber: req.body.documentNumber }, // эсвэл { etsi }
-  onBehalfOf: "NTRMN-6235972",                         // заавал биш
+  signer: { documentNumber: req.body.documentNumber }, // or { etsi }
+  onBehalfOf: "NTRMN-6235972",                         // optional
 });
 store(s.sessionId, { digest: s.digest, fileName: req.body.fileName });
 // /sign/pdf/:id/result
 const r = await eid.session.waitForResult(sessionId);
 const sig = eid.validator.validateSign(r, store.get(sessionId).digest, { expectedFlowType: "Notification" });
 reply({ signature: sig.signatureValueB64 });
-// /sign/pdf/:id/register — CA CMS-ийг өөрөө шалгана (session digest = SHA-256(signedAttrs), cert, claimedRole)
-// registrationFromCompleted: CA dto-той яг ижил бие (hasPage илгээхгүй, pageSha256 зөвхөн хуудастай үед); cms base64 ч болно.
+// /sign/pdf/:id/register — the CA verifies the CMS itself (session digest = SHA-256(signedAttrs), cert, claimedRole)
+// registrationFromCompleted: a body identical to the CA's dto (hasPage is not sent, pageSha256 only when there is a page); cms may also be base64.
 const reg = await eid.registerSignature(registrationFromCompleted(req.body, {
   fileName: store.get(sessionId).fileName, sessionID: sessionId, onBehalfOf: "NTRMN-6235972" }));
 reply({ verifyUrl: reg.verifyUrl });
@@ -678,9 +678,9 @@ signature is valid in every case; it is advisable to tell the user about `overla
 `pades/PLACEMENT_SPEC.md`.
 
 ```ts
-const p = await prepare(pdfBytes, { signerCert, verifyPage: true, fileName: "Гэрээ №12.pdf",
+const p = await prepare(pdfBytes, { signerCert, verifyPage: true, fileName: "Contract No. 12.pdf",
   appearance: { page: 1, x: 340, y: 36, width: 220, height: 64 } });
-if (p.placement?.status === "overlap") notice("Гарын үсэг хуудасны агуулга дээр давхцаж байрлана");
+if (p.placement?.status === "overlap") notice("The signature is placed over the page content");
 ```
 
 **Letting the citizen choose the position (0.29.0+).** `suggestPlacement(pdf, appearance)` runs `prepare`'s placement algorithm
@@ -697,9 +697,9 @@ moved (going off the page gives `REQUEST_INVALID`, it is not clipped). Because i
 the signer, or whether the name fits (`prepare` does). Rules: `PLACEMENT_SPEC.md` §6a/§6b.
 
 ```ts
-const s = await suggestPlacement(pdfBytes, { x: 340, y: 36, width: 220, height: 64 }); // анхдагч байрлал
-// … иргэн тэмдгийг preview дээр чирнэ → { page, x, y } (pt, зүүн доод эх) …
-const p = await prepare(pdfBytes, { signerCert, verifyPage: true, fileName: "Гэрээ №12.pdf",
+const s = await suggestPlacement(pdfBytes, { x: 340, y: 36, width: 220, height: 64 }); // default position
+// … the citizen drags the stamp on the preview → { page, x, y } (pt, bottom-left origin) …
+const p = await prepare(pdfBytes, { signerCert, verifyPage: true, fileName: "Contract No. 12.pdf",
   appearance: { page, x, y, width: s.width, height: s.height, exact: true } });
 ```
 
@@ -710,8 +710,8 @@ the added page is not counted, so you pass the preview's page number directly. R
 `PLACEMENT_SPEC.md` §1b.
 
 ```ts
-const p = await prepare(pdfBytes, { signerCert, verifyPage: true, verifyPagePosition: "first", fileName: "Гэрээ №12.pdf",
-  appearance: { page: 2, x: 340, y: 36, width: 220, height: 64, exact: true } }); // гаралтын 3-р хуудсан дээр
+const p = await prepare(pdfBytes, { signerCert, verifyPage: true, verifyPagePosition: "first", fileName: "Contract No. 12.pdf",
+  appearance: { page: 2, x: 340, y: 36, width: 220, height: 64, exact: true } }); // on page 3 of the output
 ```
 
 ### Node only (the backend does everything)
@@ -721,8 +721,8 @@ import { writeFileSync } from "node:fs";
 import { registrationFromCompleted } from "@gerege-systems/eid-mongolia-sdk";
 import { prepare, complete, PadesError } from "@gerege-systems/eid-mongolia-sdk/pades";
 
-const p = await prepare(pdfBytes, { signerCert, verifyPage: true, fileName: "Гэрээ №12.pdf" });
-const s = await eid.signPdfDigest({ dtbs: p.dtbs, fileName: "Гэрээ №12.pdf", signer: { documentNumber } });
+const p = await prepare(pdfBytes, { signerCert, verifyPage: true, fileName: "Contract No. 12.pdf" });
+const s = await eid.signPdfDigest({ dtbs: p.dtbs, fileName: "Contract No. 12.pdf", signer: { documentNumber } });
 showToUser(s.vc);
 const r = await eid.session.waitForResult(s.sessionId);
 const sig = eid.validator.validateSign(r, s.digest);
@@ -732,11 +732,11 @@ for (let i = 0; ; i++) {
     done = await complete(p.state, sig.signatureValueB64);
     break;
   } catch (e) {
-    if (e instanceof PadesError && e.retryable && i < 3) continue; // TSA_UNAVAILABLE / LTV_UNAVAILABLE — ижил state+гарын үсэг
+    if (e instanceof PadesError && e.retryable && i < 3) continue; // TSA_UNAVAILABLE / LTV_UNAVAILABLE — same state + signature
     throw e;
   }
 }
-await eid.registerSignature(registrationFromCompleted(done, { fileName: "Гэрээ №12.pdf", sessionID: s.sessionId }));
+await eid.registerSignature(registrationFromCompleted(done, { fileName: "Contract No. 12.pdf", sessionID: s.sessionId }));
 writeFileSync("signed.pdf", done.pdf);
 ```
 
@@ -779,8 +779,8 @@ The signature is made **on the converted PDF, not on the Word file** — you mus
 and have them accept it as "reviewed"; the conversion may shift fonts, lines and pages (`warnings`).
 
 ```bash
-npm install @gerege-systems/eid-mongolia-sdk @matbee/libreoffice-converter@2.7.2   # optional peer — зөвхөн /convert-д
-npx eid-mongolia-convert-assets public/eid-convert                                 # build үед; git-д commit хийхгүй (~190 MB + .br/.gz)
+npm install @gerege-systems/eid-mongolia-sdk @matbee/libreoffice-converter@2.7.2   # optional peer — only for /convert
+npx eid-mongolia-convert-assets public/eid-convert                                 # at build time; do not commit to git (~190 MB + .br/.gz)
 ```
 
 ```ts
@@ -788,14 +788,14 @@ import { wordToPdf, converterStatus, isWordFile, ConvertError } from "@gerege-sy
 import { prepare } from "@gerege-systems/eid-mongolia-sdk/pades";
 
 if (isWordFile(file)) {
-  const s = await converterStatus({ assetsBase: "/eid-convert/" });   // { cached, downloadBytes } — мобайл датанд анхааруул
+  const s = await converterStatus({ assetsBase: "/eid-convert/" });   // { cached, downloadBytes } — warn about mobile data
   const { pdf, pages, warnings } = await wordToPdf(file, {
     assetsBase: "/eid-convert/",
-    signal: controller.signal,                                        // цуцлах → DOMException AbortError
-    onProgress: ({ phase, percent, loaded, total }) => show(phase, percent), // download (зөвхөн эхний удаа) → init → convert
+    signal: controller.signal,                                        // cancel → DOMException AbortError
+    onProgress: ({ phase, percent, loaded, total }) => show(phase, percent), // download (first time only) → init → convert
   });
-  preview(pdf);                       // иргэн шалгаад зөвшөөрнө
-  const p = await prepare(pdf, { signerCert, verifyPage: true, fileName: "Гэрээ.pdf" });   // §3d
+  preview(pdf);                       // the citizen reviews and accepts
+  const p = await prepare(pdf, { signerCert, verifyPage: true, fileName: "Contract.pdf" });   // §3d
 }
 ```
 
@@ -828,10 +828,10 @@ if (isWordFile(file)) {
 
   ```nginx
   location /eid-convert/ {
-      brotli_static on;          # <файл>.br, Accept-Encoding: br үед
-      gzip_static   on;          # <файл>.gz, бусад үед
+      brotli_static on;          # <file>.br, when Accept-Encoding: br
+      gzip_static   on;          # <file>.gz, otherwise
       types { application/wasm wasm; application/octet-stream data; text/javascript js; application/json json; }
-      add_header Cache-Control "public, max-age=31536000, immutable";   # + доорх worker CSP (*.js)
+      add_header Cache-Control "public, max-age=31536000, immutable";   # + the worker CSP below (*.js)
       location = /eid-convert/manifest.json { add_header Cache-Control "no-cache"; }
   }
   ```
@@ -893,17 +893,17 @@ const info = await eid.shareInfo(); // { enabled, maxFileBytes, maxRecipients, q
 if (info.enabled) {
   try {
     const r = await eid.share({
-      file: signedPdf,                 // Uint8Array | ArrayBuffer | Blob/File; ≤ 3 080 192 байт
-      filename: "гэрээ.pdf",           // .pdf өргөтгөлтэй; анхдагч File-ийн нэр эсвэл document.pdf
-      to: ["next@example.mn"],         // 1–5, давхардалгүй
-      subject: "Гэрээ — гарын үсэг",   // ≤ 150; CA «‹RP нэр›: …» угтвар тавина
-      message: "Хоёр дахь гарын үсгийг зурна уу", // ≤ 1000
+      file: signedPdf,                 // Uint8Array | ArrayBuffer | Blob/File; ≤ 3 080 192 bytes
+      filename: "contract.pdf",           // with a .pdf extension; defaults to the File's name or document.pdf
+      to: ["next@example.mn"],         // 1–5, no duplicates
+      subject: "Contract — signature",   // ≤ 150; the CA adds a "‹RP name›: …" prefix
+      message: "Please add the second signature", // ≤ 1000
       lang: "mn",                      // mn | en
     });
-    console.log(r.sent, r.sha256, r.signatures, r.docID); // docID — CA-д бүртгэлтэй бол (имэйлд verify холбоос)
+    console.log(r.sent, r.sha256, r.signatures, r.docID); // docID — if registered at the CA (a verify link goes in the email)
   } catch (e) {
     if (e instanceof ShareError) {
-      // e.code: ShareErrorCode; 422 → e.reason; 502 → e.sent / e.failed / e.recipients ("sent" | "failed", to-гийн дарааллаар)
+      // e.code: ShareErrorCode; 422 → e.reason; 502 → e.sent / e.failed / e.recipients ("sent" | "failed", in the order of to)
     }
     throw e;
   }
@@ -932,7 +932,7 @@ Go SDK `pades.ValidatePDF`), the same JSON report (snake_case); the conformance 
 import { validatePdf, ValidatePdfError } from "@gerege-systems/eid-mongolia-sdk/validate";
 
 try {
-  const rep = await validatePdf(new Uint8Array(await file.arrayBuffer())); // анхдагч: үндэсний Root CA, онлайн цуцлалт
+  const rep = await validatePdf(new Uint8Array(await file.arrayBuffer())); // default: the national Root CA, online revocation
   rep.indication; // "valid" | "invalid" | "indeterminate"
   for (const s of rep.signatures) {
     s.signer_name; s.signing_time; s.signature_level; s.certificate_level; s.problems; s.visible; s.key_medium;
@@ -978,22 +978,22 @@ The RP needs only the `QR_PRESENT` permission. The CA does not store the data in
 ```ts
 import { QrError, QrTokenInvalidError, SessionFailedError } from "@gerege-systems/eid-mongolia-sdk";
 
-const s = await eid.qr.start({ qr: scanned, nonce: orderId }); // nonce өгөөгүй бол base64url(16 байт); VC алга
-// s ({ sessionId, nonce })-ийг JSON-оор хадгалж болно — result/check-д nonce, session-ийг тулгана.
+const s = await eid.qr.start({ qr: scanned, nonce: orderId }); // if no nonce is given, base64url(16 bytes); no VC
+// s ({ sessionId, nonce }) can be stored as JSON — result/check verify the nonce and the session.
 try {
-  const p = await eid.qr.result(s); // эсвэл polling UI: await eid.qr.check(s) → { complete: false } | { complete: true, result }
-  p.data;          // { birth_date: "1990-01-01", given_name: "Бат", … } — payload-ийн дарааллаар, түлхүүр verbatim
+  const p = await eid.qr.result(s); // or for a polling UI: await eid.qr.check(s) → { complete: false } | { complete: true, result }
+  p.data;          // { birth_date: "1990-01-01", given_name: "Bat", … } — in payload order, keys verbatim
   p.source;        // "dan" | "passport" | "citizenid" | "gsign" | "guardian" | "unknown" | …
   p.photo;         // Uint8Array (JPEG) | undefined
-  p.signer;        // { certificate, etsi: "PNOMN-…", givenName, surname, commonName } — гэрчилгээнээс
+  p.signer;        // { certificate, etsi: "PNOMN-…", givenName, surname, commonName } — from the certificate
   p.signedAt;      // Date (iat)
-  p.sha256;        // hex SHA-256(signingInput) = CA-ийн аудитын qrsha (маргаанд тулгах)
+  p.sha256;        // hex SHA-256(signingInput) = the CA's audit qrsha (to match in a dispute)
 } catch (e) {
-  if (e instanceof QrTokenInvalidError) {/* start: 404 — шинэ QR гаргуул */}
+  if (e instanceof QrTokenInvalidError) {/* start: 404 — ask for a new QR */}
   else if (e instanceof SessionFailedError) {/* USER_REFUSED, TIMEOUT … */}
-  else if (e instanceof QrError && e.code === "QR_PRESENTATION_GONE") {/* аль хэдийн уншигдсан / хугацаа дууссан — шинэ QR */}
-  else if (e instanceof QrError && e.code === "QR_REVOCATION_UNKNOWN") {/* OCSP хариугүй — түр, дахин verify */}
-  else if (e instanceof QrError) {/* QR_* шалгалт унасан — ИТГЭХГҮЙ */}
+  else if (e instanceof QrError && e.code === "QR_PRESENTATION_GONE") {/* already read / expired — a new QR */}
+  else if (e instanceof QrError && e.code === "QR_REVOCATION_UNKNOWN") {/* no OCSP response — temporary, verify again */}
+  else if (e instanceof QrError) {/* a QR_* check failed — DO NOT TRUST */}
   else throw e;
 }
 ```
@@ -1027,8 +1027,8 @@ For a citizen signing on behalf of an organization, see §3a (not a seal). Backe
 ```ts
 import { sealPdf, PadesError } from "@gerege-systems/eid-mongolia-sdk/pades";
 
-const done = await sealPdf(eid.seal, "NTRMN-6235972", pdfBytes, { reason: "Нэхэмжлэх" });
-writeFileSync("sealed.pdf", done.pdf); // PAdES-BASELINE-LT, байгууллагын тамгатай
+const done = await sealPdf(eid.seal, "NTRMN-6235972", pdfBytes, { reason: "Invoice" });
+writeFileSync("sealed.pdf", done.pdf); // PAdES-BASELINE-LT, with the organization's seal
 ```
 
 - Flow: `eid.seal.getCertificate(org)` (`GET /seal/certificate/{orgEtsi}`) → `prepare` (signerCert = the seal cert) →
@@ -1094,25 +1094,25 @@ import {
 } from "@gerege-systems/eid-mongolia-sdk";
 import { sealPdf } from "@gerege-systems/eid-mongolia-sdk/pades";
 
-// 1. Захирлыг нэвтрүүлнэ (танай RP-ийн auth session, OK-оор дууссан) — sessionId-г хадгална.
-const session = await eid.auth.notificationByEtsi("PNOMN-12345678", [{ type: "displayTextAndPIN", displayText60: "Нэвтрэх" }]);
+// 1. Log the CEO in (your RP's auth session, completed with OK) — keep the sessionId.
+const session = await eid.auth.notificationByEtsi("PNOMN-12345678", [{ type: "displayTextAndPIN", displayText60: "Log in" }]);
 const result = await eid.session.waitForResult(session.sessionId, { expiresAt: session.expiresAt });
-eid.validator.validateAuth(result, session.acsp!); // нэвтрэлт OK байх ёстой
+eid.validator.validateAuth(result, session.acsp!); // the login must be OK
 
-// 2. Нэвтрэлтээс хойш 5 минутын дотор хүсэлт илгээнэ — push зөвхөн тэр захирал руу очно.
+// 2. Send the request within 5 minutes of the login — the push goes only to that CEO.
 try {
   const g = await eid.seal.requestGrant("NTRMN-6235972", session.sessionId); // 202 {grantId, status: "PENDING", expiresAt}
-  // 3. Захирал PIN2-оор зөвшөөрөх хүртэл хүлээнэ.
+  // 3. Wait until the CEO approves with PIN2.
   await eid.seal.waitForGrant(g.grantId, { timeoutMs: 10 * 60_000 });
-  // 4. Одоо /seal/{orgEtsi} ажиллана.
+  // 4. Now /seal/{orgEtsi} works.
   const sealed = await sealPdf(eid.seal, "NTRMN-6235972", pdfBytes);
 } catch (e) {
   if (e instanceof ForbiddenError && e.code === "NOT_ORG_CEO") {
-    // нэвтэрсэн хүн байгууллагын улсын бүртгэлээр баталгаажсан Гүйцэтгэх захирал биш
+    // the person who logged in is not the organization's CEO verified by the state registry
   } else if (e instanceof AuthSessionTooOldError || e instanceof AuthSessionAlreadyUsedError) {
-    // захирлыг дахин нэвтрүүлж шинэ session-оор хүснэ
+    // log the CEO in again and request with the new session
   } else if (e instanceof SealGrantRequestError) {
-    // e.outcome: "REJECTED" | "EXPIRED" | "FAILED" | "REVOKED" → шинэ нэвтрэлт + хүсэлт; "TIMEOUT" → ижил grantId-аар дахин хүлээж болно
+    // e.outcome: "REJECTED" | "EXPIRED" | "FAILED" | "REVOKED" → a new login + request; "TIMEOUT" → you may wait again with the same grantId
   } else throw e;
 }
 ```
@@ -1186,9 +1186,9 @@ try {
   await sealPdf(eid.seal, org, pdfBytes);
 } catch (e) {
   if (e instanceof SealNotIssuedError || e instanceof SealCertRevokedError || e instanceof SealCertExpiredError) {
-    // идэвхтэй тамганы гэрчилгээ алга → eid.seal.requestCertificate(org) (байгууллагын ADMIN PIN2-оор батална)
+    // no active seal certificate → eid.seal.requestCertificate(org) (the organization's ADMIN confirms with PIN2)
   } else if (e instanceof OrgNotActiveError) {
-    // байгууллага түр зогссон / цуцлагдсан — давтахгүй
+    // the organization is suspended / revoked — do not retry
   } else throw e;
 }
 ```
@@ -1206,12 +1206,12 @@ import { SealApproverUnavailableError, SealCertificateRequestError } from "@gere
 const req = await eid.seal.requestCertificate("NTRMN-6235972"); // 202 {requestId, status: "PENDING", expiresAt, approvers}
 try {
   const cert = await eid.seal.waitForCertificate("NTRMN-6235972", req.requestId, { timeoutMs: 10 * 60_000 });
-  // cert: {certificate (DER), serialNumber, notBefore, notAfter, certificateLevel, …} — getCertificate-тэй ижил хэлбэр
+  // cert: {certificate (DER), serialNumber, notBefore, notAfter, certificateLevel, …} — same shape as getCertificate
 } catch (e) {
   if (e instanceof SealCertificateRequestError) {
-    // e.outcome: "REJECTED" | "EXPIRED" | "FAILED" → шинэ хүсэлт; "TIMEOUT" → ижил requestId-аар дахин хүлээж болно
+    // e.outcome: "REJECTED" | "EXPIRED" | "FAILED" → a new request; "TIMEOUT" → you may wait again with the same requestId
   } else if (e instanceof SealApproverUnavailableError) {
-    // (requestCertificate) байгууллагад идэвхтэй eID-тэй ADMIN алга
+    // (requestCertificate) the organization has no ADMIN with an active eID
   } else throw e;
 }
 ```
@@ -1250,7 +1250,7 @@ try {
   await sealPdf(eid.seal, "NTRMN-6235972", pdfBytes);
 } catch (e) {
   if (e instanceof SealServiceDisabledError) {
-    // e.service: "issuance" | "sealing" | undefined — хэрэглэгчид «үйлчилгээ түр унтраалттай»; автоматаар давтахгүй
+    // e.service: "issuance" | "sealing" | undefined — show the user "the service is temporarily disabled"; do not retry automatically
   } else throw e;
 }
 ```
@@ -1291,14 +1291,14 @@ Web2App: {deviceLinkBase}?deviceLinkType=Web2App&sessionToken={T}&sessionType=au
 ```ts
 import { buildDeviceLink, type DeviceLinkSession } from "@gerege-systems/eid-mongolia-sdk";
 
-// backend — session эхлүүлээд бүх хариуг СЕРВЕРТ хадгална (sessionToken/sessionSecret/receivedAt/acsp)
+// backend — start the session and store the whole response ON THE SERVER (sessionToken/sessionSecret/receivedAt/acsp)
 const s = await eid.auth.deviceLinkAnonymous(
-  [{ type: "displayTextAndPIN", displayText60: "Хаан Банк-д нэвтрэх" }],
-  { callbackUrl: "https://bank.example.mn/auth/eid/callback?state=…" }, // товч харуулах бол; host нь callbackHosts-д,
-  // зам нь үргэлж /auth/eid/callback болж нормчлогдоно (зөвхөн query хадгалагдана), https заавал
+  [{ type: "displayTextAndPIN", displayText60: "Log in to Khan Bank" }],
+  { callbackUrl: "https://bank.example.mn/auth/eid/callback?state=…" }, // if showing a button; the host must be in callbackHosts,
+  // the path is always normalized to /auth/eid/callback (only the query is kept), https required
 );
 store.put(s.sessionId, s);
-res.json({ sessionId: s.sessionId, vc: s.vc }); // браузерт ЗӨВХӨН эдгээр
+res.json({ sessionId: s.sessionId, vc: s.vc }); // ONLY these go to the browser
 
 const link = (s: DeviceLinkSession, type: "QR" | "Web2App" | "App2App") =>
   buildDeviceLink({
@@ -1308,20 +1308,20 @@ const link = (s: DeviceLinkSession, type: "QR" | "Web2App" | "App2App") =>
     sessionSecret: s.sessionSecret!,
     sessionType: "auth",
     lang: "mon",
-    receivedAt: s.receivedAt, // SDK хариу хүлээн авсан мөчийг тэмдэглэнэ
+    receivedAt: s.receivedAt, // the SDK records the moment the response was received
     rpChallenge: s.acsp!.rpChallenge,
     relyingPartyName: s.acsp!.relyingPartyName,
     interactions: s.acsp!.interactions,
-    initialCallbackUrl: s.acsp!.initialCallbackUrl, // QR-д authCode-д орохгүй
+    initialCallbackUrl: s.acsp!.initialCallbackUrl, // not part of authCode for QR
   });
 
-// GET /eid/qr?sessionId=…  → браузер 1 секунд тутам дуудаж QR-ийг дахин зурна (Cache-Control: no-store)
+// GET /eid/qr?sessionId=…  → the browser calls this every second and redraws the QR (Cache-Control: no-store)
 app.get("/eid/qr", (req, res) => {
-  const s = store.get(String(req.query.sessionId)); // өөрийн browser session-д хамаарахыг шалга
+  const s = store.get(String(req.query.sessionId)); // check that it belongs to the caller's own browser session
   if (!s) return res.sendStatus(404);
   res.set("Cache-Control", "no-store").json({ link: link(s, "QR") });
 });
-// гар утсанд: товчны href = link(s, "Web2App") (нэг удаа, шинэчлэхгүй)
+// on a phone: the button's href = link(s, "Web2App") (once, no refreshing)
 ```
 
 To push over SSE/WebSocket, use `qrDeviceLinkTicker(input, (link) => send(link))` — it emits a link immediately, then every second,
@@ -1330,12 +1330,12 @@ and you stop it with the returned function (required when the session ends/the c
 **Always check the type you showed (relay protection).** `expectedFlowType` = the type of link the RP showed:
 
 ```ts
-// QR хуудас → poll-оор дууссан үр дүн
+// QR page → a result completed via polling
 eid.validator.validateAuth(result, s.acsp!, { expectedFlowType: "QR" });
 
-// Web2App/App2App товч → апп callback URL-д `userChallengeVerifier` нэмж буцна
+// Web2App/App2App button → the app returns to the callback URL with `userChallengeVerifier` added
 eid.validator.validateAuth(result, s.acsp!, {
-  expectedFlowType: "Web2App", // RP-ийн апп дахь товч бол "App2App"
+  expectedFlowType: "Web2App", // "App2App" if the button is inside the RP's app
   userChallengeVerifier: callbackQuery.get("userChallengeVerifier") ?? undefined,
 });
 // push (notificationBy*) → "Notification"
@@ -1428,11 +1428,11 @@ const eid = new EidClient({
 
 ```bash
 npm install
-npm run lint          # tsc --noEmit (үндсэн + tsconfig.button.json)
-npm test              # build + node --test (pades golden — Go reference-тэй байт-ижил)
-npm run golden:check  # test/fixtures/pades/golden + src/pades/assets ↔ бэхэлсэн Go commit
-npm run size:pades    # /pades хөтчийн bundle gzip ≤ 300 KB
-npm run test:convert-e2e   # /convert жинхэнэ LibreOffice Chromium-д (BROWSER=webkit — WebKit)
+npm run lint          # tsc --noEmit (main + tsconfig.button.json)
+npm test              # build + node --test (pades golden — byte-identical to the Go reference)
+npm run golden:check  # test/fixtures/pades/golden + src/pades/assets ↔ the pinned Go commit
+npm run size:pades    # the /pades browser bundle gzip ≤ 300 KB
+npm run test:convert-e2e   # /convert with real LibreOffice in Chromium (BROWSER=webkit — WebKit)
 ```
 
 The `/pades` conformance fixtures (golden: the inputs, the test PKI's certificates, the fixed TSA/OCSP/CRL responses, the expected
