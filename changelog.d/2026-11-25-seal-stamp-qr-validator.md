@@ -1,5 +1,12 @@
 ### Feat — `validatePdf` accepts the seal stamp with QR; prepare's docId rule (APPEARANCE_SPEC.md §6.5/§6.6, golden v13)
 
+- **In short:** the validator (`validatePdf`) now also accepts the organisation seal stamp **with a QR** (matches Go SDK
+  v0.31.0, APPEARANCE_SPEC.md §6.5); the QR-less seal stamp stays valid. **`sealPdf` still draws the QR-less stamp**
+  (output byte-identical to 0.48.1) — no public API emits the QR seal stamp in this release. `prepare` on a signed
+  document takes the docId from a verified e-Seal stamp's QR marker when the document has no verify page.
+  **Validators ≤ 0.48.x report earlier signatures as modified on a PDF that later receives a QR seal stamp — upgrade
+  before QR seal stamps start to be issued.**
+
 - **Юу:** Validator (own-signer, §6.3): e-Seal гэрчилгээний form stream-ийн хадгалсан байт (`/Length`, тайлахгүй)
   `/EIDVerify`-ээр эхэлбэл **QR-тэй тамганы дардас** (§6.5: иргэний дардас §3 байт-ижил, label «eID Mongolia-аар
   тамгалсан» / "Sealed with eID Mongolia", үүргийн мөр хэзээ ч үгүй — CMS claimedRole үл тооно) гэж §5-ийн 6-р алхмыг
@@ -30,7 +37,7 @@
   production-д хүлээн авна. Go SDK #68 (golden v13)-тай байт-ижил.
 - **Хаана:** `src/pades/page/appearance.ts`, `src/pades/validate/appearance.ts`, `src/pades/precheck.ts`
   (`PrecheckedSignature`, `docIdFromStamps`), `src/pades.ts` (`resolveDocId`, `visibleSpec`), `src/pades/sealqr.ts`,
-  `scripts/sync-pades-golden.mjs` (Go main `5fa0ac9` — #68 + #69 (docIDFromStamps-ийн Go/TS нийцэл, testdata өөрчлөлтгүй); tag гармагц дахин бэхэлнэ),
+  `scripts/sync-pades-golden.mjs` (Go **v0.31.0** = `67e05f1` — #68 + #69 docIDFromStamps-ийн Go/TS нийцэл),
   `src/pades/assets/{fonts,chain}.ts` (зөвхөн толгойн мөр), `test/fixtures/pades/{golden,validate}` (v13),
   `test/pades-golden.test.ts`, `test/validate-golden.test.ts`, `test/pades-seal-qr.test.ts`, `README.md` (§3i).
 - **Шалгасан:** GitHub Actions CI (локалд ажиллуулаагүй) — golden v13-ийн 7 бичигчийн тохиолдол байт-ижил, validate v13

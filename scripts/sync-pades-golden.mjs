@@ -16,10 +16,9 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const GO_SDK_REPO = "https://github.com/gerege-systems/eid-mongolia-sdk-go";
-// Go main after #69 (golden v13: seal stamp with QR, APPEARANCE_SPEC.md §6.5/§6.6 — #68 merge 3fc16fbd42d2 + #69
-// docIDFromStamps parity, no testdata change; no tag yet — re-pin to the tag once cut). v12 = 692dffa55035 (Go #65),
-// v11 = d5a68ae90582 (Go #61).
-export const GO_SDK_COMMIT = "5fa0ac90c640205283db0d15b8aa6f6c98bf53b8";
+// Go v0.31.0 (tag = merge commit 67e05f1ac750; golden v13: seal stamp with QR, APPEARANCE_SPEC.md §6.5/§6.6 — #68 +
+// #69 docIDFromStamps parity). v12 = 692dffa55035 (Go #65), v11 = d5a68ae90582 (Go #61).
+export const GO_SDK_COMMIT = "67e05f1ac75055cbaf60659b26ac787b54a12a6a";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const check = process.argv.includes("--check");
