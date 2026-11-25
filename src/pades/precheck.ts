@@ -213,10 +213,12 @@ const STAMP_MARKER_MAX = 128;
  * rev must equal the signature's position (1 + the verified signatures with a smaller ByteRange end). The candidate with
  * the smallest ByteRange end wins, ties → the lower signature object number. "" when there is none.
  *
- * Only a single-widget candidate's own `/AP`, `/N`, `/Length` and stream reads (its stream dictionary's `/DecodeParms`
- * included) throw (prepare → PDF_INVALID; a candidate found before it is never used); unreadable objects elsewhere in
- * this walk are skipped — an unloadable indirect `/FT`, a `/V` to an unloadable non-signature object, and any read on a
- * signature with two or more widgets (never read: only the count and the first widget are kept, O(n) for n widgets).
+ * Order (as Go): count widgets per verified e-Seal signature first — each `/V` is matched by its raw reference (object
+ * number and generation equal to that signature's xref entry) and never resolved; only the count and the first widget
+ * are kept, O(n) — then read only single-widget candidates. Only a single-widget candidate's own `/AP`, `/N`,
+ * `/Filter`, `/DecodeParms`, `/Length` and stream reads throw (prepare → PDF_INVALID; a candidate found before it is
+ * never used); unreadable objects elsewhere in this walk are skipped — an unloadable widget or indirect `/FT`, a `/V`
+ * to anything but a verified e-Seal signature, any read on a signature with two or more widgets.
  */
 export function docIdFromStamps(doc: Uint8Array, verified: Map<number, PrecheckedSignature>): string {
   if (![...verified.values()].some((s) => s.seal)) return "";
@@ -226,11 +228,14 @@ export function docIdFromStamps(doc: Uint8Array, verified: Map<number, Prechecke
     let w: { sig: number; v: Value } | undefined;
     try {
       const v = r.resolve(x.ptr, new PRef(x.ptr.id, x.ptr.gen));
-      if (v.kind() !== "dict" || v.key("FT").name() !== "Sig") continue;
+      if (v.kind() !== "dict") continue;
+      // The own /V as stored: an indirect reference whose object number AND generation equal a verified e-Seal
+      // signature's xref entry. Never resolved; a /V naming the widget itself is not special (Go docIDFromStamps).
       const raw = (v.data as PDict).get("V");
-      if (!(raw instanceof PRef) || raw.id === x.ptr.id || verified.get(raw.id)?.seal !== true) continue;
-      const sig = v.key("V");
-      if (sig.kind() !== "dict" || sig.ptr.id !== raw.id) continue;
+      if (!(raw instanceof PRef) || verified.get(raw.id)?.seal !== true) continue;
+      const xe = r.xref[raw.id];
+      if (xe === undefined || xe.ptr.id !== raw.id || xe.ptr.gen !== raw.gen) continue;
+      if (v.key("FT").name() !== "Sig") continue;
       w = { sig: raw.id, v };
     } catch {
       continue; // an unreadable object is not a candidate's own read — skipped
@@ -261,6 +266,9 @@ function stampMarker(r: Reader, w: Value): { docId: string; rev: string } | unde
   const n = ap.key("N");
   if (n.kind() !== "stream") return undefined;
   const st = n.data as PStream;
+  // Go resolves /Filter before deciding (an unloadable indirect /Filter is a read failure of the candidate); only an
+  // absent entry or a direct null counts as no filter — an indirect reference, even to null, is not a candidate.
+  n.key("Filter");
   if (st.hdr.has("Filter") && st.hdr.get("Filter") !== null) return undefined;
   // Reading the stream resolves its /DecodeParms (Go Value.Reader) — an unloadable one is a read failure of the candidate.
   n.key("DecodeParms");

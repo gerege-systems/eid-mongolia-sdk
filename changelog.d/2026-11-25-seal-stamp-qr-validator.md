@@ -12,7 +12,9 @@
   биш); олдсон docId ≠ `opts.docId` → `REQUEST_INVALID` (үл харагдах гарын үсэгт ч); зөвхөн ганц widget-тэй нэр
   дэвшигчийн өөрийн `/AP`, `/N`, `/Length` (`/DecodeParms`) ба stream-ийн уншилт эвдэрсэн бол `PDF_INVALID`, бусад
   уншигдахгүй объектыг алгасна; юу ч олдохгүй бол `opts.docId`, эс бөгөөс "" (гарын үсэгтэй баримтад санамсаргүй docId
-  хэзээ ч үгүй). Widget-ийг гарын үсэг бүрт тоо + эхнийх л хадгална — олон мянган хуурамч widget-тэй PDF-д O(n).
+  хэзээ ч үгүй). Эхлээд widget-ийг e-Seal гарын үсэг бүрт тоолно (`/V`-г түүхий лавлагаагаар — объектын дугаар ба
+  үе нь xref-ийнхтэй тэнцүү, resolve хийхгүй; тоо + эхнийх л — олон мянган хуурамч widget-тэй PDF-д O(n)), дараа нь
+  зөвхөн ганц widget-тэйг уншина (Go #69-тэй ижил).
 - **Зан төлөвийн өөрчлөлт:** QR-тэй тамгатай, verify хуудасгүй баримтад үл харагдах гарын үсэг одоо тамганы docId-г
   авна (өмнө нь `opts.docId` эсвэл ""); зөрүүтэй `opts.docId` → `REQUEST_INVALID`. `sealPdf`-ийн буцаах `docId` (байт
   биш) ийм баримтад одоо өмнөх QR-тэй тамганы docId болно. Зөвхөн иргэний гарын үсэгтэй баримт 0.48.x-тэй яг ижил.
@@ -28,7 +30,7 @@
   production-д хүлээн авна. Go SDK #68 (golden v13)-тай байт-ижил.
 - **Хаана:** `src/pades/page/appearance.ts`, `src/pades/validate/appearance.ts`, `src/pades/precheck.ts`
   (`PrecheckedSignature`, `docIdFromStamps`), `src/pades.ts` (`resolveDocId`, `visibleSpec`), `src/pades/sealqr.ts`,
-  `scripts/sync-pades-golden.mjs` (Go main `3fc16fb` — PR #68-ийн merge commit; tag гармагц дахин бэхэлнэ),
+  `scripts/sync-pades-golden.mjs` (Go main `5fa0ac9` — #68 + #69 (docIDFromStamps-ийн Go/TS нийцэл, testdata өөрчлөлтгүй); tag гармагц дахин бэхэлнэ),
   `src/pades/assets/{fonts,chain}.ts` (зөвхөн толгойн мөр), `test/fixtures/pades/{golden,validate}` (v13),
   `test/pades-golden.test.ts`, `test/validate-golden.test.ts`, `test/pades-seal-qr.test.ts`, `README.md` (§3i).
 - **Шалгасан:** GitHub Actions CI (локалд ажиллуулаагүй) — golden v13-ийн 7 бичигчийн тохиолдол байт-ижил, validate v13

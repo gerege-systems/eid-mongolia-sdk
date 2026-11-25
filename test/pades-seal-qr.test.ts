@@ -202,6 +202,21 @@ test("§6.6 2.2: direct, borrowed, unverified and inherited /V or /FT are ignore
   assert.equal(I.docIdFromStamps(stampPdf(one("")), ONE()), EARLIER, "own /FT /V");
 });
 
+test("§6.6 2.2 (Go parity): /V matches by raw reference — object number AND generation; a /V naming the widget itself is not special", () => {
+  // Signature 6's xref entry has generation 0: a widget with /V 6 1 R is not its widget (never resolved, never counted).
+  const wrongGen = one("").map((o, i) => (i === 0 ? o.replace("/V 6 0 R", "/V 6 1 R") : o));
+  assert.equal(I.docIdFromStamps(stampPdf(wrongGen), ONE()), "", "/V 6 1 R vs xref gen 0");
+  // …nor does it count as a second widget next to the genuine one.
+  assert.equal(I.docIdFromStamps(stampPdf(one("", stampWidget("6 1 R", 5))), ONE()), EARLIER, "a gen-1 /V is not a borrowed widget");
+  // The verified e-Seal signature dictionary 6 is itself the widget (/FT /Sig, /V 6 0 R, /AP): counted like any widget.
+  const merged = [
+    "<< /Type /Annot /Subtype /Widget /Rect [0 0 0 0] /P 3 0 R /F 4 /T (S) >>",
+    stampStream(EARLIER, 1),
+    "<< /Type /Sig /ByteRange [0 10 20 30] /Contents <00> /FT /Sig /V 6 0 R /AP << /N 5 0 R >> >>",
+  ];
+  assert.equal(I.docIdFromStamps(stampPdf(merged), ONE()), EARLIER, "self-referencing /V");
+});
+
 test("§6.6 2.2: /Filter absent or a direct null only — [] , a name, an indirect reference (even to null) are not candidates", () => {
   const cases: [string, string[], string][] = [
     ["/Filter absent", one(""), EARLIER],
@@ -227,6 +242,7 @@ test("§6.6 2.2: a single-widget candidate's own unreadable /AP, /N, /Length or 
     ["/N", stampPdf(one(""), [5])],
     ["/Length 7 0 R", stampPdf([stampWidget("6 0 R", 5), stampStream(EARLIER, 1).replace(/\/Length \d+/, "/Length 7 0 R"), stampSig(50), "99"], [7])],
     ["/DecodeParms 7 0 R", stampPdf(one(" /DecodeParms 7 0 R", "<< /Columns 1 >>"), [7])],
+    ["/Filter 7 0 R (unloadable)", stampPdf(one(" /Filter 7 0 R", "null"), [7])],
   ];
   for (const [name, doc] of cases) assert.throws(() => I.docIdFromStamps(doc, ONE()), isPdfError, name);
 });
