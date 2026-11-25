@@ -25,7 +25,19 @@ import { AppearanceError, defaultStampPage, round100, type Visible } from "./pad
 import { appendVerifyPage } from "./pades/page/page.js";
 import { appendDSS } from "./pades/pdf/dss.js";
 import { embedCMS, PlaceholderOverflowError, prepareSignature, signatureContents } from "./pades/pdf/signature.js";
-import { PrecheckError, UUID_RE, VERIFY_URL_PREFIX, docIdFromPage, encrypted, precheck, scanSignatures, signatureCMSList } from "./pades/precheck.js";
+import {
+  PrecheckError,
+  UUID_RE,
+  VERIFY_URL_PREFIX,
+  docIdFromPage,
+  docIdFromStamps,
+  encrypted,
+  precheck,
+  scanSignatures,
+  signatureCMSList,
+  type PrecheckedSignature,
+} from "./pades/precheck.js";
+import { sealQrRequested } from "./pades/sealqr.js";
 import { suggestVisible } from "./pades/page/suggest.js";
 import { decodeState, encodeState } from "./pades/state.js";
 import { OID, checkSignatureFrom, parseCertificate, sealCertificate, verifyCitizen, type Certificate } from "./pades/x509.js";
@@ -114,7 +126,14 @@ export interface PadesPrepareOptions {
   claimedRole?: string;
   /** `/M` (+08:00-оор бичигдэнэ, секундээр). Анхдагч — одоо. */
   signingTime?: Date;
-  /** Баримтын UUID (verify хуудас / QR). Хоосон бол шинээр (гарын үсэгтэй баримтад хуудаснаас уншина). */
+  /**
+   * Баримтын UUID (verify хуудас / QR), lowercase `8-4-4-4-12` hex. Resolution (APPEARANCE_SPEC.md §6.6): an unsigned
+   * document uses it, else a random one. A signed document reads its docId from the verify-page link, else from the
+   * earliest-signed `/EIDVerify` stamp of a verified organisation e-Seal signature (a citizen stamp is never a source);
+   * a given docId that differs from the one found → REQUEST_INVALID (visible and invisible signatures alike). Nothing
+   * found → this docId (the caller registers it), else "" — never random on a signed document, so a stamp that draws a
+   * QR then fails with REQUEST_INVALID.
+   */
   docId?: string;
   /** Баталгаажуулах (QR) хуудас нэмэх — зөвхөн гарын үсэггүй баримтын эхний гарын үсэгт. */
   verifyPage?: boolean;
@@ -423,25 +442,20 @@ export async function prepare(pdf: Uint8Array | ArrayBuffer, opts: PadesPrepareO
   // Go: секундээс доош хэсэг /M-д орохгүй (формат секундээр).
 
   const inHex = toHex(await sha256(doc));
-  let pc: { newDoc: boolean; revIndex: number };
+  let pc: Awaited<ReturnType<typeof precheck>>;
   try {
     pc = await precheck(doc, [...der(EID_ISSUERS), chain[0]!]);
   } catch (e) {
     if (e instanceof PrecheckError) throw new PadesError(e.code, e.message, { cause: e });
     throw new PadesError("PDF_INVALID", "PDF биш эсвэл эвдэрсэн", { cause: e });
   }
-  let docId = docIdOpt;
+  const seal = sealCertificate(cert);
+  // A stamp that draws a QR: the citizen stamp (§3), or the seal stamp with QR (§6.5) — internal switch only.
+  const drawsQR = opts.appearance !== undefined && (!seal || sealQrRequested(opts));
+  const docId = await resolveDocId(doc, pc.newDoc, pc.verified, docIdOpt);
   let base = doc;
   let pageHex = "";
   const hasPage = pc.newDoc && opts.verifyPage === true;
-  if (!pc.newDoc) {
-    const fromPage = docIdFromPage(doc);
-    if (fromPage !== "") {
-      if (docId !== "" && docId !== fromPage) throw new PadesError("REQUEST_INVALID", "docId нь баримтын хуудсан дээрхтэй таарахгүй");
-      docId = fromPage;
-    }
-  }
-  if (pc.newDoc && docId === "") docId = await randUUID();
   if (hasPage) {
     const fileName = cleanFileName(opts.fileName ?? "");
     if (fileName === undefined) throw new PadesError("REQUEST_INVALID", "fileName заавал, ≤ 120 тэмдэгт");
@@ -465,7 +479,7 @@ export async function prepare(pdf: Uint8Array | ArrayBuffer, opts: PadesPrepareO
     pageHex = toHex(await sha256(base));
   }
   const name = goTrim(opts.signerName ?? "") === "" ? signerDisplayName(cert) : (opts.signerName ?? "");
-  const vis = opts.appearance ? visibleSpec(doc, opts, name, now, docId, pc.revIndex, sealCertificate(cert)) : undefined;
+  const vis = opts.appearance ? visibleSpec(doc, opts, name, now, docId, pc.revIndex, seal, drawsQR) : undefined;
   let prep: Awaited<ReturnType<typeof prepareSignature>>;
   try {
     // vis.page counts the input's pages; a verify page added in front shifts them by one in base (PLACEMENT_SPEC §1b).
@@ -522,12 +536,36 @@ function checkAppearance(o: Pick<PadesPrepareOptions, "appearance" | "claimedRol
 }
 
 /**
- * Go visibleSpec: хуудас (0 → verify биш сүүлийн — PLACEMENT_SPEC §1a), h100, хэл, огноо (+08), verify URL. seal (e-Seal
- * signer certificate, APPEARANCE_SPEC.md §6.1) → seal stamp: no URL / QR, so no docId is required.
+ * prepare's docId (APPEARANCE_SPEC.md §6.6, Go resolveDocID). Unsigned: `given`, else a random UUID (the only case that
+ * generates one). Signed: (2.1) the verify-page link, else (2.2) the earliest-signed marked stamp of a verified e-Seal
+ * signature ({@link docIdFromStamps}; a failure reading that stamp → PDF_INVALID); a found docId ≠ `given` →
+ * REQUEST_INVALID (visible and invisible signers alike); (3) else `given`; (4) else "" — never random on a signed document
+ * (the CA rejects a rev > 1 registration of an unknown docId), so a stamp that draws a QR is then REQUEST_INVALID.
  */
-function visibleSpec(doc: Uint8Array, o: PadesPrepareOptions, name: string, now: Date, docId: string, revIndex: number, seal: boolean): Visible {
+async function resolveDocId(doc: Uint8Array, newDoc: boolean, verified: Map<number, PrecheckedSignature>, given: string): Promise<string> {
+  if (newDoc) return given !== "" ? given : await randUUID();
+  let found = docIdFromPage(doc);
+  if (found === "") {
+    try {
+      found = docIdFromStamps(doc, verified);
+    } catch (e) {
+      throw new PadesError("PDF_INVALID", "PDF задарсангүй (гарын үсгийн дардас)", { cause: e });
+    }
+  }
+  if (found !== "" && given !== "" && given !== found) {
+    throw new PadesError("REQUEST_INVALID", "docId нь баримтын verify хуудас / дардас дээрхтэй таарахгүй");
+  }
+  return found !== "" ? found : given;
+}
+
+/**
+ * Go visibleSpec: хуудас (0 → verify биш сүүлийн — PLACEMENT_SPEC §1a), h100, хэл, огноо (+08), verify URL. seal (e-Seal
+ * signer certificate, APPEARANCE_SPEC.md §6.1) → seal stamp: qr → with QR (§6.5), else no URL / QR (§6.2). qr → a docId
+ * is required (signed document without a verify page, a marked e-Seal stamp or opts.docId → REQUEST_INVALID, as v0.30.0).
+ */
+function visibleSpec(doc: Uint8Array, o: PadesPrepareOptions, name: string, now: Date, docId: string, revIndex: number, seal: boolean, qr: boolean): Visible {
   const a = o.appearance!;
-  if (docId === "" && !seal) throw new PadesError("REQUEST_INVALID", "appearance: docId заавал (баримтад verify хуудас алга)");
+  if (docId === "" && qr) throw new PadesError("REQUEST_INVALID", "appearance: docId заавал (баримтад verify хуудас, QR дардас алга)");
   // page 0 / байхгүй = eID verify хуудас БИШ сүүлийн хуудас (PLACEMENT_SPEC §1a); тодорхой дугаар хэвээр.
   let last: number, n: number;
   try {
@@ -549,7 +587,7 @@ function visibleSpec(doc: Uint8Array, o: PadesPrepareOptions, name: string, now:
     role: o.claimedRole ?? "",
     lang: a.lang || o.lang || "mn",
     date: `${String(z.getUTCFullYear()).padStart(4, "0")}-${p2(z.getUTCMonth() + 1)}-${p2(z.getUTCDate())} ${p2(z.getUTCHours())}:${p2(z.getUTCMinutes())} (+08)`,
-    url: `${VERIFY_URL_PREFIX}${docId}/${revIndex}`,
+    url: qr ? `${VERIFY_URL_PREFIX}${docId}/${revIndex}` : "",
     avoid: true,
     exact: a.exact === true,
     seal,

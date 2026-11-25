@@ -1,10 +1,14 @@
 // /pades conformance: Go reference-ийн golden (test/fixtures/pades/golden, scripts/sync-pades-golden.mjs-ээр бэхэлсэн
 // commit) — prepare (digest, DTBS, signedAttrs, prepared/page sha256, ByteRange, docId, алдааны код) ба complete-ийн БҮТЭН
 // гаралт (outSha256, CMS, sigRev, priorCms) байт-ижил. TSA/OCSP/CRL = тогтмол fixture (сүлжээгүй), nonce = WIRE.md §4.
-import { test } from "node:test";
+import { after, test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash, X509Certificate } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { build } from "esbuild";
 
 import * as pades from "../dist/pades.js";
 
@@ -19,6 +23,8 @@ interface Case {
   input: string;
   /** Golden v12: "seal" = pki/seal.pem (organisation e-Seal → seal stamp, APPEARANCE_SPEC.md §6); absent = pki/citizen.pem. */
   signer?: "seal";
+  /** Golden v13: the seal stamp with QR (§6.5) — Go's unexported PrepareOptions.sealQR; here the internal withSealQr hook. */
+  sealQr?: boolean;
   prepare: { reason?: string; claimedRole?: string; docId?: string; verifyPage?: boolean; verifyPagePosition?: "last" | "first"; fileName?: string; lang?: "mn" | "en"; appearance?: pades.PadesAppearance };
   expect: Record<string, unknown> & { error?: string };
 }
@@ -30,6 +36,34 @@ interface Manifest {
   cases: Case[];
 }
 const M = JSON.parse(readFileSync(new URL("manifest.json", G), "utf8")) as Manifest;
+
+/**
+ * prepare with the internal §6.5 switch on (golden cases `"sealQr": true`). The switch is a module-private WeakSet of
+ * src/pades/sealqr.ts (`withSealQr`, exported by no entry point), so it is reached through a bundle of src — never dist.
+ */
+type Prepare = (pdf: Uint8Array, o: pades.PadesPrepareOptions) => Promise<pades.PadesPrepared>;
+const tmp = mkdtempSync(join(tmpdir(), "eid-golden-sealqr-"));
+after(() => rmSync(tmp, { recursive: true, force: true }));
+async function sealQrPrepare(): Promise<Prepare> {
+  const r = await build({
+    stdin: {
+      contents: `export { prepare } from "./src/pades.ts";\nexport { withSealQr } from "./src/pades/sealqr.ts";`,
+      resolveDir: join(dirname(fileURLToPath(import.meta.url)), ".."),
+      loader: "ts",
+      sourcefile: "sealqr-entry.ts",
+    },
+    bundle: true,
+    format: "esm",
+    platform: "neutral",
+    write: false,
+    logLevel: "error",
+  });
+  const out = join(tmp, "sealqr.mjs");
+  writeFileSync(out, r.outputFiles[0]!.contents);
+  const m = (await import(pathToFileURL(out).href)) as { prepare: Prepare; withSealQr<T extends object>(o: T): T };
+  return (pdf, o) => m.prepare(pdf, m.withSealQr({ ...o }));
+}
+const prepareSealQr = await sealQrPrepare();
 
 /** WIRE.md §4: блок k = SHA-256(prev ‖ k), prev = seed эхэндээ. */
 function seededNonce(seed: string): Uint8Array {
@@ -95,8 +129,13 @@ test("pades golden — Go reference-тэй байт-ижил (prepare + complete
       n++;
       continue;
     }
-    const p = await pades.prepare(input, opts);
     const e = c.expect as Record<string, string | number[] | string[] | boolean | number | undefined>;
+    if (c.sealQr) {
+      // The public prepare never draws the QR seal stamp (sealPdf / prepare stay QR-less until the CA validator ships
+      // §6.5): the same options through dist give a different DTBS.
+      assert.notEqual(hex((await pades.prepare(input, opts)).dtbs), e.dtbs, `${c.name}: public prepare drew the QR seal stamp`);
+    }
+    const p = await (c.sealQr ? prepareSealQr : pades.prepare)(input, opts);
     assert.equal(hex(p.digest), e.digest, `${c.name}: digest`);
     assert.equal(hex(p.dtbs), e.dtbs, `${c.name}: dtbs`);
     assert.equal(p.docId, e.docId, `${c.name}: docId`);
@@ -167,6 +206,20 @@ test("pades golden — Go reference-тэй байт-ижил (prepare + complete
   for (const s of ["seal-visible", "seal-visible-en", "seal-visible-third"]) {
     assert.ok(M.cases.some((c) => c.name === s && c.signer === "seal" && c.prepare.appearance), `golden v12: ${s} алга`);
   }
+  // Golden v13 (§6.5 / §6.6): the QR seal stamp cases (internal switch) and the docId-rule cases, all byte-identical above.
+  const v13: [string, boolean][] = [
+    ["seal-qr-visible", true],
+    ["seal-qr-visible-en", true],
+    ["seal-qr-rotated90", true],
+    ["citizen-then-seal-qr", true],
+    ["seal-qr-then-citizen", false],
+    ["seal-qr-then-seal-qr", true],
+    ["sealv12-then-citizen", false],
+  ];
+  for (const [s, qr] of v13) {
+    assert.ok(M.cases.some((c) => c.name === s && c.prepare.appearance && (c.sealQr === true) === qr), `golden v13: ${s} алга`);
+  }
+  assert.equal(M.cases.filter((c) => c.sealQr).length, v13.filter(([, qr]) => qr).length, "golden v13: sealQr cases");
   assert.ok(M.cases.filter((c) => c.prepare.appearance).length >= 11, "харагдах golden case цөөн");
   for (const s of ["requested", "moved", "overlap"]) {
     assert.ok(M.cases.some((c) => (c.expect.placement as { status?: string } | undefined)?.status === s), `golden-д placement ${s} алга`);

@@ -9,6 +9,9 @@ import { PReal, PRef, PdfObjError, PStr, PStream, PdfParser, dget, isArr, isDict
 import { OWN_TEXT_LIMIT, errNotSignatureOnly, ownDate, pdfTextString, type Classifier } from "./revisions.js";
 
 export const AP_VERIFY_PREFIX = "https://ca.eidmongolia.mn/verify/";
+/** The /EIDVerify BDC line's first 10 bytes: on an e-Seal signature's form stream it selects the QR seal stamp (§6.3). */
+const AP_MARKER = latin1("/EIDVerify");
+const startsWith = (b: Uint8Array, p: Uint8Array): boolean => b.length >= p.length && p.every((x, i) => b[i] === x);
 const AP_URL_RE = /^\/EIDVerify <<\/URL \(https:\/\/ca\.eidmongolia\.mn\/verify\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/([1-9][0-9]?)\)>> BDC\n/;
 
 function onlyKeys(d: PDict, ...keys: string[]): boolean {
@@ -55,17 +58,20 @@ export function ownVisible(c: Classifier, d: PDict, widget: number): void {
   const ids = apIDs(c, nr);
   const form = c.fin.get(ids[0]!);
   if (!(form instanceof PStream)) throw fail();
-  // The certificate alone picks the variant (APPEARANCE_SPEC.md §6.1/§6.3): e-Seal → seal stamp (no URL / QR / role,
-  // step 6 skipped), anything else → citizen stamp. A stamp of the other variant never matches → fail.
+  // The certificate picks the variant (APPEARANCE_SPEC.md §6.1/§6.3): a citizen → the citizen stamp (§3, the /EIDVerify
+  // line is required); an e-Seal → a seal stamp, and the stored stream data (the /Length bytes, never decoded) decides
+  // which one: it begins with /EIDVerify → the QR seal stamp (§6.5: the citizen URL checks, no role line), else the
+  // QR-less seal stamp (§6.2: no URL / revIndex / docId). The marker decides; a failure is never retried as the other
+  // variant.
   const seal = meta.seal === true;
   let role = "";
   let url = "";
-  if (!seal) {
+  if (!seal || startsWith(form.data, AP_MARKER)) {
     let head = "";
     for (let i = 0; i < Math.min(form.data.length, 200); i++) head += String.fromCharCode(form.data[i]!);
     const sm = AP_URL_RE.exec(head);
     if (!sm || sm[2] !== String(meta.revIndex) || (c.docID !== "" && sm[1] !== c.docID)) throw fail();
-    role = meta.role;
+    if (!seal) role = meta.role;
     url = AP_VERIFY_PREFIX + sm[1] + "/" + sm[2];
   }
   const name = pdfTextString(ns);
