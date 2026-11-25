@@ -55,29 +55,29 @@ Smart-ID RP 的常见模式：浏览器中**一个按钮**，所有 eID 调用�
 import { EidClient, NATIONAL_ROOT_CA_PEM, createEidLogin } from "@gerege-systems/eid-mongolia-sdk";
 
 const eid = new EidClient({
-  credentials: { rpUUID: process.env.EID_RP_UUID!, rpName: "Интернэт банк", apiSecret: process.env.EID_SECRET! },
-  // Root (01) — итгэлийн тулгуур; завсрын 02 → 03 → 04 нь SDK-д суусан (CITIZEN_INTERMEDIATES_PEM, анхдагч).
+  credentials: { rpUUID: process.env.EID_RP_UUID!, rpName: "网上银行", apiSecret: process.env.EID_SECRET! },
+  // Root (01) 是信任锚；中间证书 02 → 03 → 04 已内置于 SDK（CITIZEN_INTERMEDIATES_PEM，默认）。
   trust: { trustAnchorsPem: [NATIONAL_ROOT_CA_PEM] },
 });
 
 export const eidLogin = createEidLogin({
   client: eid,
-  callbackUrl: "https://bank.example.mn/auth/eid/callback", // host нь RP-ийн callbackHosts-д; утасны урсгалд заавал
+  callbackUrl: "https://bank.example.mn/auth/eid/callback", // host 必须在 RP 的 callbackHosts 中；手机流程必须提供
   async onSuccess(id) {
-    // id.etsi (PNOMN-…) — хэрэглэгчийг ҮҮГЭЭР таньна; id.givenName/surname (латин), id.person (кирилл, байвал)
-    // id.sessionId, id.documentNumber, id.certificateDerB64 — дараагийн алхамд (гарын үсэг, гэрчилгээ холбох)
+    // id.etsi (PNOMN-…) —— 请据此识别用户；id.givenName/surname（拉丁文），id.person（西里尔文，如有）
+    // id.sessionId, id.documentNumber, id.certificateDerB64 —— 用于后续步骤（签名、关联证书）
     const user = await users.findOrCreateByEtsi(id.etsi);
-    const sid = await sessions.create(user.id); // ШИНЭ session (session fixation)
+    const sid = await sessions.create(user.id); // 新建 session（防 session fixation）
     return {
       redirect: "/dashboard",
       headers: { "Set-Cookie": `app_session=${sid}; Path=/; HttpOnly; Secure; SameSite=Lax` },
     };
   },
-  // store: redisStore,            // олон instance / serverless бол (анхдагч — процессын санах ой)
-  // rateLimit: { start: (key) => redisLimiter.allow(key) }, // анхдагчтай нэгтгэгдэнэ (push 3/мин хэвээр) — доор «Хязгаарлалт»
-  trustProxy: 1, // handle(Request)-д клиент IP: nginx/LB нэг hop бол 1 (доор «Клиент IP»)
-  onEvent: ({ kind, sessionId, meta }) => audit.record(`auth.eid_${kind}`, sessionId, meta), // таны аудит
-  // auditKey: process.env.EID_AUDIT_KEY, // pushKey-ийг instance/restart хооронд тогтвортой болгох
+  // store: redisStore,            // 多实例 / serverless 时使用（默认——进程内存）
+  // rateLimit: { start: (key) => redisLimiter.allow(key) }, // 与默认值合并（push 仍为 3/分钟）——见下文“限流”
+  trustProxy: 1, // handle(Request) 的客户端 IP：nginx/LB 为一跳时设为 1（见下文“客户端 IP”）
+  onEvent: ({ kind, sessionId, meta }) => audit.record(`auth.eid_${kind}`, sessionId, meta), // 您的审计
+  // auditKey: process.env.EID_AUDIT_KEY, // 使 pushKey 在多个实例/重启之间保持稳定
 });
 ```
 
@@ -117,10 +117,10 @@ IP 每分钟 20 次发起（自 0.19.0 起；已知 IP 时——`req.ip` / `trus
 
 ```ts
 import { defaultRateLimit } from "@gerege-systems/eid-mongolia-sdk";
-rateLimit: { start: { limit: 60, windowMs: 60_000 } },             // NAT-ын ард олон хэрэглэгчтэй бол; push 3/мин хэвээр
-rateLimit: { start: false },                                       // start-ийг өөрийн давхаргад (nginx/gateway) хязгаарладаг бол
-rateLimit: { ...defaultRateLimit, start: (k) => redis.allow(k) },  // ижил — анхдагчийг илэрхий бичсэн
-rateLimit: { push: (k) => redis.allow(k, 3, 60) },                 // олон instance: push-ийг Redis-ээр солино
+rateLimit: { start: { limit: 60, windowMs: 60_000 } },             // NAT 后有大量用户时；push 仍为 3/分钟
+rateLimit: { start: false },                                       // 若在自己的层（nginx/gateway）对 start 限流
+rateLimit: { ...defaultRateLimit, start: (k) => redis.allow(k) },  // 同上——显式写出默认值
+rateLimit: { push: (k) => redis.allow(k, 3, 60) },                 // 多实例：用 Redis 替换 push
 ```
 
 Go：`eidlogin.Config.RateLimits`（`map[string]eidlogin.RateRule{"start": {Max: 20, Window: time.Minute}}`，
@@ -142,7 +142,7 @@ app.use("/auth/eid", express.json(), async (req, res) => {
 <eid-login-button start-url="/auth/eid/start" status-url="/auth/eid/status" lang="mn"></eid-login-button>
 <script type="module">
   document.querySelector("eid-login-button").addEventListener("eid-login-success", (e) => {
-    // e.detail = { state: "OK", redirect, data } — preventDefault() хийвэл redirect хийхгүй
+    // e.detail = { state: "OK", redirect, data } — 调用 preventDefault() 则不跳转
   });
 </script>
 ```
@@ -197,12 +197,12 @@ document.querySelector("eid-login-button").addEventListener("eid-login-error", (
 Dark 的优先顺序：`--eid-<名称>-dark` → `--eid-<名称>` → dark 默认值。
 
 ```css
-:root {                                   /* эсвэл eid-login-button { … } */
-  --eid-accent: var(--brand);             /* хоёр theme-д */
-  --eid-accent-dark: var(--brand-400);    /* зөвхөн dark-д (өгөхгүй бол --eid-accent) */
+:root {                                   /* 或 eid-login-button { … } */
+  --eid-accent: var(--brand);             /* 对两个主题均生效 */
+  --eid-accent-dark: var(--brand-400);    /* 仅对 dark 生效（未设置则使用 --eid-accent） */
   --eid-radius: 6px; --eid-radius-lg: 8px;
 }
-eid-login-button::part(button) { width: 100%; }  /* part: button, icon, label, dialog (backdrop — зөвхөн fallback-д) */
+eid-login-button::part(button) { width: 100%; }  /* part: button, icon, label, dialog (backdrop——仅用于 fallback) */
 eid-login-button::part(label) { font-weight: 600; }
 eid-login-button::part(icon) { height: 18px; }
 ```
@@ -297,7 +297,7 @@ export const redisStore: EidLoginStore = {
     await redis.set(key(sid), JSON.stringify(tx), "PX", ttlMs);
   },
   async delete(sid) {
-    return (await redis.del(key(sid))) === 1; // DEL атомар — зэрэг хоёр status-ийн зөвхөн нэг нь onSuccess дуудна
+    return (await redis.del(key(sid))) === 1; // DEL 是原子的——两个并发的 status 调用中只有一个会触发 onSuccess
   },
 };
 ```
@@ -310,29 +310,29 @@ Tx 中包含 `sessionSecret`（用于生成 QR 的材料）——请将 Redis �
 import { EidClient, NATIONAL_ROOT_CA_PEM } from "@gerege-systems/eid-mongolia-sdk";
 
 const eid = new EidClient({
-  // baseUrl анхдагч https://rp.eidmongolia.mn (RP-API, /v3-гүй) — mTLS-тэй RP ч мөн энэ хост
+  // baseUrl 默认为 https://rp.eidmongolia.mn（RP-API，不带 /v3）——使用 mTLS 的 RP 也用此主机
   credentials: {
     rpUUID: process.env.EID_RP_UUID!,
-    rpName: "Интернэт банк", // дэд системийн нэр, ≤ 120 тэмдэгт (CA илүүг тэмдэгтээр таслана)
+    rpName: "网上银行", // 子系统名称，≤ 120 个字符（CA 会截断多余部分）
     apiSecret: process.env.EID_SECRET!, // rp_sk_…
   },
-  trust: { trustAnchorsPem: [NATIONAL_ROOT_CA_PEM] }, // ← Mongolian National Root CA, production-д ЗААВАЛ (завсрын 02–04 SDK-д суусан)
+  trust: { trustAnchorsPem: [NATIONAL_ROOT_CA_PEM] }, // ← Mongolian National Root CA, 生产环境必须配置（中间证书 02–04 已内置于 SDK）
 });
 
-// ETSI (PNOMN-<иргэний дугаар>) / регистр / иргэний дугаар — аль нь ч болно (сервер танина)
+// ETSI（PNOMN-<公民编号>）/ 注册号 / 公民编号——任一均可（服务器会识别）
 const s = await eid.auth.notificationByEtsi("PNOMN-12345678", [
-  { type: "displayTextAndPIN", displayText60: "Хаан Банк-д нэвтрэх" },
+  { type: "displayTextAndPIN", displayText60: "登录汗银行" },
 ]);
 
-showToUser(s.vc); // ← иргэний утсан дээр харагдах баталгаажуулах код (VC)
+showToUser(s.vc); // ← 公民手机上显示的验证码（VC）
 
-// long-poll; session-ий хугацаа дуустал хүлээнэ: expiresAt + 15 с (алга бол discovery sessionTtl, эс бөгөөс 600 с).
-// CA хугацаа дууссан session-ийг COMPLETE/TIMEOUT болгоно. { maxWaitMs } өгвөл түүгээр таслана (RUNNING буцна).
+// long-poll；等待至 session 到期：expiresAt + 15 s（缺省时用 discovery 的 sessionTtl，否则 600 s）。
+// CA 会将已过期的 session 置为 COMPLETE/TIMEOUT。若提供 { maxWaitMs }，则按其截止（返回 RUNNING）。
 const result = await eid.session.waitForResult(s.sessionId, { expiresAt: s.expiresAt });
-const who = eid.validator.validateAuth(result, s.acsp!); // ← гинж + ACSP_V2 крипто-баталгаажуулна (RUNNING бол ValidationError)
+const who = eid.validator.validateAuth(result, s.acsp!); // ← 对证书链 + ACSP_V2 做密码学验证（若为 RUNNING 则抛出 ValidationError）
 
-console.log(who.documentNumber, who.subject); // баталгаажсан иргэн
-const { name, serialNumber } = who.parsedSubject; // латин «givenName surname», "PNOMN-12345678" (givenName/surname/commonName/country…)
+console.log(who.documentNumber, who.subject); // 已验证的公民
+const { name, serialNumber } = who.parsedSubject; // 拉丁文“givenName surname”，"PNOMN-12345678"（givenName/surname/commonName/country…）
 ```
 
 Session 的 `person` 块（来自 CA 的登记——证书中没有的西里尔文姓名、出生日期、性别）**不包含在**签名中——
@@ -341,10 +341,10 @@ Session 的 `person` 块（来自 CA 的登记——证书中没有的西里尔�
 ```ts
 import { personMatchesCertificate } from "@gerege-systems/eid-mongolia-sdk";
 if (personMatchesCertificate(result.person, who.parsedSubject)) {
-  const { firstName, lastName /* ЭЦГИЙН нэр */, familyName /* УРГИЙН овог */, civilId, regNo, birthDate, gender, geID,
-    nationality /* «MNG» — ISO 3166-1 alpha-3, гэрчилгээний country биш; мэдэгдэхгүй бол undefined */ } = result.person!;
+  const { firstName, lastName /* 父名 */, familyName /* 姓氏 */, civilId, regNo, birthDate, gender, geID,
+    nationality /* “MNG”——ISO 3166-1 alpha-3，不是证书中的 country；未知则为 undefined */ } = result.person!;
 }
-// result.raw — серверийн түүхий JSON (SDK задлаагүй талбарт)
+// result.raw — 服务器的原始 JSON（用于 SDK 未解析的字段）
 ```
 
 Subject 的各字段（`parsedSubject`，`validateSign` 中同样提供）来自 `parseSubject(cert)`——OID 2.5.4.42/4/3/5/6/10/97，
@@ -361,15 +361,15 @@ UTF8String/PrintableString/BMPString。`parseSubject` 只做解析：不要信�
 ```ts
 import { sha256Base64 } from "@gerege-systems/eid-mongolia-sdk";
 
-const digest = sha256Base64(pdfBytes); // баримтын SHA-256 (base64)
+const digest = sha256Base64(pdfBytes); // 文档的 SHA-256（base64）
 
 const s = await eid.sign.digestByEtsi("PNOMN-12345678", digest, [
-  { type: "displayTextAndPIN", displayText60: "Зээлийн гэрээнд гарын үсэг зурах" },
+  { type: "displayTextAndPIN", displayText60: "签署贷款合同" },
 ]);
 showToUser(s.vc);
 
 const result = await eid.session.waitForResult(s.sessionId);
-const sig = eid.validator.validateSign(result, digest); // digest-ийн эсрэг баталгаажна
+const sig = eid.validator.validateSign(result, digest); // 针对 digest 进行验证
 
 console.log(sig.signatureValueB64, sig.subject);
 ```
@@ -380,7 +380,7 @@ console.log(sig.signatureValueB64, sig.subject);
 相同：不一致则抛出 `ValidationError`）。第三个参数是 `hashAlgorithm` 字符串（旧形式）或对象：
 
 ```ts
-eid.validator.validateSign(result, digest, { expectedFlowType: "QR" }); // эсвэл "Web2App" / "App2App" / "Notification"
+eid.validator.validateSign(result, digest, { expectedFlowType: "QR" }); // 或 "Web2App" / "App2App" / "Notification"
 eid.validator.validateSign(result, digest384, { hashAlgorithm: "SHA-384", expectedFlowType: "Web2App" });
 ```
 
@@ -409,18 +409,18 @@ certificate-choice 无效 / 已过期 / 已被使用 → 重新发起 cert-choic
 证书不匹配。
 
 ```ts
-const cc = await eid.sign.certificateChoiceByEtsi("PNOMN-12345678"); // эсвэл certificateChoiceDeviceLink() (QR; callbackUrl өгвөл Web2App/App2App ч)
+const cc = await eid.sign.certificateChoiceByEtsi("PNOMN-12345678"); // 或 certificateChoiceDeviceLink()（QR；提供 callbackUrl 时也支持 Web2App/App2App）
 const signer = eid.validator.validateCertificateChoice(await eid.session.waitForResult(cc.sessionId), cc.sessionId);
-const dtbs = myCmsBuilder.dtbs(signer.certificate); // таных: SHA-256(signedAttrs), 32 байт, стандарт base64 (PDF бол /pades prepare)
-const ix = [{ type: "displayTextAndPIN" as const, displayText60: "Гэрээнд гарын үсэг зурах" }];
-const s = await eid.sign.digestForSigner(signer, dtbs, ix, { fileName: "Гэрээ.pdf" }); // linked/{documentNumber}
+const dtbs = myCmsBuilder.dtbs(signer.certificate); // 由您自己提供：SHA-256(signedAttrs)，32 字节，标准 base64（PDF 则使用 /pades 的 prepare）
+const ix = [{ type: "displayTextAndPIN" as const, displayText60: "签署合同" }];
+const s = await eid.sign.digestForSigner(signer, dtbs, ix, { fileName: "合同.pdf" }); // linked/{documentNumber}
 // QR / Web2App: eid.sign.deviceLinkForSigner(signer, dtbs, ix, { callbackUrl })
 const r = await eid.session.waitForResult(s.sessionId);
 const sig = eid.validator.validateSign(r, s.sign!.digest, {
   hashAlgorithm: s.sign!.hashAlgorithm,
   expectedFlowType: "Notification",
-  expectedAlgorithm: s.sign!.signatureAlgorithm, // sha256WithRSAEncryption — PSS хариуг татгалзана
-  expectedCertificate: signer.certificate,       // өөр гэрчилгээгээр зурсан бол татгалзана
+  expectedAlgorithm: s.sign!.signatureAlgorithm, // sha256WithRSAEncryption——会拒绝 PSS 响应
+  expectedCertificate: signer.certificate,       // 若使用其他证书签名则拒绝
 });
 ```
 
@@ -436,17 +436,17 @@ EC P-256 证书时才接受它）。如果 digest 长度与 hash 不符，请求
 带有 RP 自己的 query（如 `value=<随机值>`）原样不变 + `sessionSecretDigest` + `sessionId`（certificate-choice 的）。
 
 ```ts
-// 1) cert-choice-ийг callback-тай эхлүүл; `value`-г эхэлсэн браузерийн cookie-д хадгал
+// 1) 带 callback 发起 cert-choice；将 `value` 存入发起该流程的浏览器的 cookie
 const cc = await eid.sign.certificateChoiceDeviceLink({ callbackUrl: `${origin}/auth/eid/callback?value=${value}` });
-const qr = buildDeviceLink(deviceLinkInput(cc, "QR", "mon"));        // desktop (секунд тутам шинэчил)
-const w2a = buildDeviceLink(deviceLinkInput(cc, "Web2App", "mon"));  // утсан дээрх товч (нэг session)
-// 2) validateCertificateChoice → 3) digestForSigner(signer, …) — дээрх linked sign
+const qr = buildDeviceLink(deviceLinkInput(cc, "QR", "mon"));        // desktop (每秒刷新)
+const w2a = buildDeviceLink(deviceLinkInput(cc, "Web2App", "mon"));  // 手机上的按钮（同一个 session）
+// 2) validateCertificateChoice → 3) digestForSigner(signer, …) — 即上文的 linked sign
 const signer = eid.validator.validateCertificateChoice(await eid.session.waitForResult(cc.sessionId), cc.sessionId);
 const s = await eid.sign.digestForSigner(signer, dtbs, ix);
 
-// 4) /auth/eid/callback дээр
+// 4) 在 /auth/eid/callback 处
 const ok = q.value === cookieValue && verifySessionSecretDigest(q.sessionSecretDigest, cc.sessionSecret!);
-// ok бол session-ийг ЗӨВХӨН НЭГ УДАА хүлээн зөвшөөр (дахин ашиглахгүй), дараа нь linked SIGN-ий үр дүнг уншина:
+// 若 ok，则仅接受该 session 一次（不得重复使用），然后读取 linked SIGN 的结果：
 const r = await eid.session.waitForResult(s.sessionId);
 ```
 
@@ -464,20 +464,20 @@ e-Seal 仅用于没有人参与的自动化系统的文档。前提条件：组�
 ```ts
 import { ForbiddenError, ApiError, ON_BEHALF_ERROR_CODES } from "@gerege-systems/eid-mongolia-sdk";
 
-// 1. Иргэн сүүлийн 24 цагт танай RP-ээр нэвтэрсэн байх ёстой.
+// 1. 公民必须在最近 24 小时内通过您的 RP 登录过。
 const { representations } = await eid.organization.getRepresentations("PNOMN-12345678");
-// → [{ orgEtsi: "NTRMN-6235972", orgName: "Гэрэгэ Системс ХХК", role: "ceo", roleLabel: "Гүйцэтгэх захирал",
-//      rightType: "ADMIN", rightTypeLabel: "Админ", source: "REGISTRY", sourceLabel: "Улсын бүртгэл", … }]
+// → [{ orgEtsi: "NTRMN-6235972", orgName: "Gerege Systems 有限责任公司", role: "ceo", roleLabel: "首席执行官",
+//      rightType: "ADMIN", rightTypeLabel: "管理员", source: "REGISTRY", sourceLabel: "国家登记", … }]
 
-// 2. PDF: §3d (клиент талын PAdES) — signPdfDigest({ …, onBehalfOf }) + prepare({ claimedRole: rep.claimedRole }).
-// 3. Raw digest гарын үсэг: eid.sign.digestByEtsi(id, digest, interactions, { onBehalfOf: "NTRMN-6235972" })
-//    — CMS-ийг та угсардаг тул мэдүүлсэн үүргийг (signer-attributes-v2) өөрөө нэмнэ.
+// 2. PDF：§3d（客户端 PAdES） — signPdfDigest({ …, onBehalfOf }) + prepare({ claimedRole: rep.claimedRole }).
+// 3. Raw digest 签名： eid.sign.digestByEtsi(id, digest, interactions, { onBehalfOf: "NTRMN-6235972" })
+//    ——由于 CMS 由您自行组装，需自行添加声明的角色（signer-attributes-v2）。
 try {
   /* … */
 } catch (e) {
   if ((e instanceof ForbiddenError || e instanceof ApiError) && e.code) {
     // REPRESENTATION_DENIED | REPRESENTATION_PENDING | REPRESENTATION_EXPIRED | ORG_NOT_ACTIVE |
-    // SIGNER_UNIDENTIFIED (403) · ORG_NOT_FOUND (404) · REPRESENTATION_REVOKED (403, бүртгэлийн үед)
+    // SIGNER_UNIDENTIFIED (403) · ORG_NOT_FOUND (404) · REPRESENTATION_REVOKED (403, 登记时)
   }
   throw e;
 }
@@ -510,7 +510,7 @@ Session 的 `onBehalfOf` 块（`role`/`roleLabel`/`rightType`/`rightTypeLabel`�
 
 ```ts
 const { certificates } = await eid.person.certificates(etsi);
-const byToken = new Map<string, typeof certificates>(); // Map.groupBy нь Node ≥ 21 — Node 18/20-д ажиллахгүй
+const byToken = new Map<string, typeof certificates>(); // Map.groupBy 需要 Node ≥ 21——在 Node 18/20 上不可用
 for (const c of certificates) if (c.tokenSerial) byToken.set(c.tokenSerial, [...(byToken.get(c.tokenSerial) ?? []), c]);
 ```
 
@@ -519,27 +519,27 @@ for (const c of certificates) if (c.tokenSerial) byToken.set(c.tokenSerial, [...
 ```ts
 import { verifyTokenCertificates, tokenAuthDigest, tokenLimitOf } from "@gerege-systems/eid-mongolia-sdk";
 
-// гэрчилгээ олголт (TOKEN_ISSUE эрх) — иргэн утсаараа PIN2-оор батална
-const input = { signerEtsi, csrAuth, csrSign, tokenSerial: "EP2003-0042A1" }; // onBehalfOf алга = хувийн
-// push-ээс ӨМНӨ: ижил оролтоор dryRun — session/push үүсэхгүй, алдааны код бодиттой ижил
-const pv = await eid.token.previewCertificate(input); // pv.supersedes байвал иргэнд анхааруулж зөвшөөрүүлээд ↓
+// 证书签发（TOKEN_ISSUE 权限）——公民在手机上用 PIN2 确认
+const input = { signerEtsi, csrAuth, csrSign, tokenSerial: "EP2003-0042A1" }; // 没有 onBehalfOf = 个人
+// push 之前：用相同输入做 dryRun——不创建 session/push，错误代码与真实调用相同
+const pv = await eid.token.previewCertificate(input); // 若 pv.supersedes 存在，先警告公民并取得同意，再 ↓
 const st = await eid.token.issueCertificate(input);
 // … eid.session.poll(st.sessionId) → result.tokenCertificate?.status === "ISSUED"
 const res = await eid.token.certificateResult(st.sessionId);
-verifyTokenCertificates(res, csrAuth, csrSign); // гэрчилгээ бүр CSR-ийн түлхүүртэй
+verifyTokenCertificates(res, csrAuth, csrSign); // 每个证书都与其 CSR 的密钥一致
 // 409 TOKEN_LIMIT_REACHED → tokenLimitOf(err): { kind, limit, organization? }
-// 409 TOKEN_IN_USE — serial өөр иргэнд; 409 TOKEN_SCOPE_CHANGE — сунгалт scope солих гэсэн (доор)
-// 400 APP_ATTESTATION_INVALID — appTransaction ирсэн боловч хүчингүй (доор)
+// 409 TOKEN_IN_USE — 该序列号属于另一位公民；409 TOKEN_SCOPE_CHANGE——续期会更改 scope（见下）
+// 400 APP_ATTESTATION_INVALID — 提供了 appTransaction 但无效（见下）
 
-// токеноор нэвтрэх (AUTH эрх)
+// 使用令牌登录（AUTH 权限）
 const ch = await eid.token.authChallenge();
-const digest = tokenAuthDigest(ch.rpUUID, ch.challenge); // токен CKM_ECDSA → түүхий r||s
-// 0.19.0-аас challenge-ийг бүтнээр нь өгнө (RP хадгалсан, эсвэл клиентээс буцаж ирсэн — CA challengeId-ээр тулгана):
-// SDK CA-ийн OK-д дангаар итгэхгүй — r||s-ийг гэрчилгээний түлхүүрээр, rpUUID-ийг өөрийнхтэй, гэрчилгээг trust-аар
-// (гинж, issuer, зориулалт auth) шалгаад дараа нь CA руу илгээнэ.
+const digest = tokenAuthDigest(ch.rpUUID, ch.challenge); // 令牌的 CKM_ECDSA → 原始 r||s
+// 自 0.19.0 起需完整传入 challenge（由 RP 保存，或由客户端回传——CA 通过 challengeId 比对）：
+// SDK 不会仅凭 CA 的 OK 就信任——它会用证书密钥验证 r||s，将 rpUUID 与自己的比对，并按 trust 验证证书
+// （证书链、颁发者、用途为 auth），然后才发送给 CA。
 const who = await eid.token.authVerify(ch, authCertDer, rs);
 
-// токеноор PDF: §3d — prepare() → токен CKM_ECDSA(dtbs) → r||s → complete() → registerSignature() (sessionID-гүй, medium "token")
+// 使用令牌签 PDF：§3d — prepare() → 令牌 CKM_ECDSA(dtbs) → r||s → complete() → registerSignature() (无 sessionID，medium 为 "token")
 ```
 
 **续期会保留 scope**（CA 2026-10-16，discovery `tokenCertificate.scopeLockedOnRenewal: true`——
@@ -608,42 +608,42 @@ CMS 签名、eID 颁发者、时间戳、DSS）。
 ### Web RP（浏览器 prepare/complete，后端 session）
 
 ```ts
-// ── браузер ─────────────────────────────────────────────────────────────────────────────
+// ── 浏览器 ─────────────────────────────────────────────────────────────────────────────
 import { prepare, complete } from "@gerege-systems/eid-mongolia-sdk/pades";
 
 const { certB64, documentNumber } = await api("/sign/pdf/signer");             // backend: person.certificates
-const signerCert = Uint8Array.from(atob(certB64), (ch) => ch.charCodeAt(0));     // prepare нь DER Uint8Array авна
+const signerCert = Uint8Array.from(atob(certB64), (ch) => ch.charCodeAt(0));     // prepare 接受 DER 格式的 Uint8Array
 const p = await prepare(pdfBytes, {
-  signerCert, verifyPage: true, fileName: "Гэрээ №12.pdf",
-  claimedRole, // байгууллагаар бол getRepresentations()-ийн claimedRole ЯГ ХЭВЭЭР
+  signerCert, verifyPage: true, fileName: "合同第12号.pdf",
+  claimedRole, // 若以组织名义签名，则原样使用 getRepresentations() 返回的 claimedRole
 });
-await idb.put("pades-state", p.state);                                           // хуудас дахин ачаалагдаж болно
-const s = await api("/sign/pdf/start", { dtbs: b64(p.dtbs), documentNumber, fileName: "Гэрээ №12.pdf" });
-showToUser(s.vc);                                                                // эсвэл backend-ийн QR (§4)
+await idb.put("pades-state", p.state);                                           // 页面可能会被重新加载
+const s = await api("/sign/pdf/start", { dtbs: b64(p.dtbs), documentNumber, fileName: "合同第12号.pdf" });
+showToUser(s.vc);                                                                // 或使用后端的 QR（§4）
 const { signature } = await api(`/sign/pdf/${s.sessionId}/result`);              // backend poll + validateSign
 const done = await complete(p.state, signature);                                 // TSA + OCSP/CRL + DSS
-const { pdf, signerCert: _c, ...meta } = done;                                     // PDF backend рүү очихгүй
+const { pdf, signerCert: _c, ...meta } = done;                                     // PDF 不会发送到后端
 await api(`/sign/pdf/${s.sessionId}/register`, { ...meta, cms: b64(done.cms) });
-download(done.pdf, "Гэрээ №12.pdf");
+download(done.pdf, "合同第12号.pdf");
 ```
 
 ```ts
 // ── RP backend (Node) ─────────────────────────────────────────────────────────────────────
 import { registrationFromCompleted } from "@gerege-systems/eid-mongolia-sdk";
 
-// /sign/pdf/start — sessionSecret (device-link) backend-ээс гарахгүй; s.digest-ийг session-д хадгал.
+// /sign/pdf/start — sessionSecret（device-link）绝不离开后端；请将 s.digest 保存在 session 中。
 const s = await eid.signPdfDigest({
   dtbs: req.body.dtbs, fileName: req.body.fileName,
-  signer: { documentNumber: req.body.documentNumber }, // эсвэл { etsi }
-  onBehalfOf: "NTRMN-6235972",                         // заавал биш
+  signer: { documentNumber: req.body.documentNumber }, // 或 { etsi }
+  onBehalfOf: "NTRMN-6235972",                         // 可选
 });
 store(s.sessionId, { digest: s.digest, fileName: req.body.fileName });
 // /sign/pdf/:id/result
 const r = await eid.session.waitForResult(sessionId);
 const sig = eid.validator.validateSign(r, store.get(sessionId).digest, { expectedFlowType: "Notification" });
 reply({ signature: sig.signatureValueB64 });
-// /sign/pdf/:id/register — CA CMS-ийг өөрөө шалгана (session digest = SHA-256(signedAttrs), cert, claimedRole)
-// registrationFromCompleted: CA dto-той яг ижил бие (hasPage илгээхгүй, pageSha256 зөвхөн хуудастай үед); cms base64 ч болно.
+// /sign/pdf/:id/register — CA 会自行验证 CMS（session digest = SHA-256(signedAttrs)、证书、claimedRole）
+// registrationFromCompleted：请求体与 CA 的 dto 完全一致（不发送 hasPage，仅在有页面时才有 pageSha256）；cms 也可以是 base64。
 const reg = await eid.registerSignature(registrationFromCompleted(req.body, {
   fileName: store.get(sessionId).fileName, sessionID: sessionId, onBehalfOf: "NTRMN-6235972" }));
 reply({ verifyUrl: reg.verifyUrl });
@@ -677,9 +677,9 @@ reply({ verifyUrl: reg.verifyUrl });
 `pades/PLACEMENT_SPEC.md`。
 
 ```ts
-const p = await prepare(pdfBytes, { signerCert, verifyPage: true, fileName: "Гэрээ №12.pdf",
+const p = await prepare(pdfBytes, { signerCert, verifyPage: true, fileName: "合同第12号.pdf",
   appearance: { page: 1, x: 340, y: 36, width: 220, height: 64 } });
-if (p.placement?.status === "overlap") notice("Гарын үсэг хуудасны агуулга дээр давхцаж байрлана");
+if (p.placement?.status === "overlap") notice("签名与页面内容重叠");
 ```
 
 **让公民自行选择位置（0.29.0+）。** `suggestPlacement(pdf, appearance)` 在没有证书、签名和网络的情况下运行 `prepare` 的
@@ -696,9 +696,9 @@ if (p.placement?.status === "overlap") notice("Гарын үсэг хуудас�
 签名人以及姓名是否放得下（这些由 `prepare` 检查）。规则：`PLACEMENT_SPEC.md` §6a/§6b。
 
 ```ts
-const s = await suggestPlacement(pdfBytes, { x: 340, y: 36, width: 220, height: 64 }); // анхдагч байрлал
-// … иргэн тэмдгийг preview дээр чирнэ → { page, x, y } (pt, зүүн доод эх) …
-const p = await prepare(pdfBytes, { signerCert, verifyPage: true, fileName: "Гэрээ №12.pdf",
+const s = await suggestPlacement(pdfBytes, { x: 340, y: 36, width: 220, height: 64 }); // 默认位置
+// … 公民在预览上拖动图章 → { page, x, y }（pt，原点在左下角） …
+const p = await prepare(pdfBytes, { signerCert, verifyPage: true, fileName: "合同第12号.pdf",
   appearance: { page, x, y, width: s.width, height: s.height, exact: true } });
 ```
 
@@ -709,8 +709,8 @@ const p = await prepare(pdfBytes, { signerCert, verifyPage: true, fileName: "Г�
 `PLACEMENT_SPEC.md` §1b。
 
 ```ts
-const p = await prepare(pdfBytes, { signerCert, verifyPage: true, verifyPagePosition: "first", fileName: "Гэрээ №12.pdf",
-  appearance: { page: 2, x: 340, y: 36, width: 220, height: 64, exact: true } }); // гаралтын 3-р хуудсан дээр
+const p = await prepare(pdfBytes, { signerCert, verifyPage: true, verifyPagePosition: "first", fileName: "合同第12号.pdf",
+  appearance: { page: 2, x: 340, y: 36, width: 220, height: 64, exact: true } }); // 位于输出的第 3 页
 ```
 
 ### 仅 Node（后端完成全部工作）
@@ -720,8 +720,8 @@ import { writeFileSync } from "node:fs";
 import { registrationFromCompleted } from "@gerege-systems/eid-mongolia-sdk";
 import { prepare, complete, PadesError } from "@gerege-systems/eid-mongolia-sdk/pades";
 
-const p = await prepare(pdfBytes, { signerCert, verifyPage: true, fileName: "Гэрээ №12.pdf" });
-const s = await eid.signPdfDigest({ dtbs: p.dtbs, fileName: "Гэрээ №12.pdf", signer: { documentNumber } });
+const p = await prepare(pdfBytes, { signerCert, verifyPage: true, fileName: "合同第12号.pdf" });
+const s = await eid.signPdfDigest({ dtbs: p.dtbs, fileName: "合同第12号.pdf", signer: { documentNumber } });
 showToUser(s.vc);
 const r = await eid.session.waitForResult(s.sessionId);
 const sig = eid.validator.validateSign(r, s.digest);
@@ -731,11 +731,11 @@ for (let i = 0; ; i++) {
     done = await complete(p.state, sig.signatureValueB64);
     break;
   } catch (e) {
-    if (e instanceof PadesError && e.retryable && i < 3) continue; // TSA_UNAVAILABLE / LTV_UNAVAILABLE — ижил state+гарын үсэг
+    if (e instanceof PadesError && e.retryable && i < 3) continue; // TSA_UNAVAILABLE / LTV_UNAVAILABLE — 相同的 state + 签名
     throw e;
   }
 }
-await eid.registerSignature(registrationFromCompleted(done, { fileName: "Гэрээ №12.pdf", sessionID: s.sessionId }));
+await eid.registerSignature(registrationFromCompleted(done, { fileName: "合同第12号.pdf", sessionID: s.sessionId }));
 writeFileSync("signed.pdf", done.pdf);
 ```
 
@@ -778,8 +778,8 @@ responder **发送**请求，仅在没有有效 CRL 时才用 OCSP（10 s）。�
 并让其确认“已检查”；转换可能导致字体、行、页面发生位移（`warnings`）。
 
 ```bash
-npm install @gerege-systems/eid-mongolia-sdk @matbee/libreoffice-converter@2.7.2   # optional peer — зөвхөн /convert-д
-npx eid-mongolia-convert-assets public/eid-convert                                 # build үед; git-д commit хийхгүй (~190 MB + .br/.gz)
+npm install @gerege-systems/eid-mongolia-sdk @matbee/libreoffice-converter@2.7.2   # optional peer——仅用于 /convert
+npx eid-mongolia-convert-assets public/eid-convert                                 # 在构建时执行；不要提交到 git (~190 MB + .br/.gz)
 ```
 
 ```ts
@@ -787,14 +787,14 @@ import { wordToPdf, converterStatus, isWordFile, ConvertError } from "@gerege-sy
 import { prepare } from "@gerege-systems/eid-mongolia-sdk/pades";
 
 if (isWordFile(file)) {
-  const s = await converterStatus({ assetsBase: "/eid-convert/" });   // { cached, downloadBytes } — мобайл датанд анхааруул
+  const s = await converterStatus({ assetsBase: "/eid-convert/" });   // { cached, downloadBytes } — 提醒移动数据流量
   const { pdf, pages, warnings } = await wordToPdf(file, {
     assetsBase: "/eid-convert/",
-    signal: controller.signal,                                        // цуцлах → DOMException AbortError
-    onProgress: ({ phase, percent, loaded, total }) => show(phase, percent), // download (зөвхөн эхний удаа) → init → convert
+    signal: controller.signal,                                        // 取消 → DOMException AbortError
+    onProgress: ({ phase, percent, loaded, total }) => show(phase, percent), // download（仅首次）→ init → convert
   });
-  preview(pdf);                       // иргэн шалгаад зөвшөөрнө
-  const p = await prepare(pdf, { signerCert, verifyPage: true, fileName: "Гэрээ.pdf" });   // §3d
+  preview(pdf);                       // 由公民检查并确认
+  const p = await prepare(pdf, { signerCert, verifyPage: true, fileName: "合同.pdf" });   // §3d
 }
 ```
 
@@ -827,10 +827,10 @@ if (isWordFile(file)) {
 
   ```nginx
   location /eid-convert/ {
-      brotli_static on;          # <файл>.br, Accept-Encoding: br үед
-      gzip_static   on;          # <файл>.gz, бусад үед
+      brotli_static on;          # <file>.br，当 Accept-Encoding 为 br 时
+      gzip_static   on;          # <file>.gz，其他情况
       types { application/wasm wasm; application/octet-stream data; text/javascript js; application/json json; }
-      add_header Cache-Control "public, max-age=31536000, immutable";   # + доорх worker CSP (*.js)
+      add_header Cache-Control "public, max-age=31536000, immutable";   # + 下文的 worker CSP（*.js）
       location = /eid-convert/manifest.json { add_header Cache-Control "no-cache"; }
   }
   ```
@@ -892,17 +892,17 @@ const info = await eid.shareInfo(); // { enabled, maxFileBytes, maxRecipients, q
 if (info.enabled) {
   try {
     const r = await eid.share({
-      file: signedPdf,                 // Uint8Array | ArrayBuffer | Blob/File; ≤ 3 080 192 байт
-      filename: "гэрээ.pdf",           // .pdf өргөтгөлтэй; анхдагч File-ийн нэр эсвэл document.pdf
-      to: ["next@example.mn"],         // 1–5, давхардалгүй
-      subject: "Гэрээ — гарын үсэг",   // ≤ 150; CA «‹RP нэр›: …» угтвар тавина
-      message: "Хоёр дахь гарын үсгийг зурна уу", // ≤ 1000
+      file: signedPdf,                 // Uint8Array | ArrayBuffer | Blob/File; ≤ 3 080 192 字节
+      filename: "合同.pdf",           // 须带 .pdf 扩展名；默认为 File 的名称或 document.pdf
+      to: ["next@example.mn"],         // 1–5 个，不可重复
+      subject: "合同——签名",   // ≤ 150; CA 会添加“‹RP 名称›: …”前缀
+      message: "请添加第二个签名", // ≤ 1000
       lang: "mn",                      // mn | en
     });
-    console.log(r.sent, r.sha256, r.signatures, r.docID); // docID — CA-д бүртгэлтэй бол (имэйлд verify холбоос)
+    console.log(r.sent, r.sha256, r.signatures, r.docID); // docID——若已在 CA 登记（邮件中会带 verify 链接）
   } catch (e) {
     if (e instanceof ShareError) {
-      // e.code: ShareErrorCode; 422 → e.reason; 502 → e.sent / e.failed / e.recipients ("sent" | "failed", to-гийн дарааллаар)
+      // e.code: ShareErrorCode; 422 → e.reason; 502 → e.sent / e.failed / e.recipients ("sent" | "failed", 按 to 的顺序)
     }
     throw e;
   }
@@ -931,7 +931,7 @@ Go SDK `pades.ValidatePDF`）相同，JSON 报告相同（snake_case）；三者
 import { validatePdf, ValidatePdfError } from "@gerege-systems/eid-mongolia-sdk/validate";
 
 try {
-  const rep = await validatePdf(new Uint8Array(await file.arrayBuffer())); // анхдагч: үндэсний Root CA, онлайн цуцлалт
+  const rep = await validatePdf(new Uint8Array(await file.arrayBuffer())); // 默认：国家 Root CA，在线吊销检查
   rep.indication; // "valid" | "invalid" | "indeterminate"
   for (const s of rep.signatures) {
     s.signer_name; s.signing_time; s.signature_level; s.certificate_level; s.problems; s.visible; s.key_medium;
@@ -977,22 +977,22 @@ RP 只需要 `QR_PRESENT` 权限。CA 不会将数据保存到数据库——在
 ```ts
 import { QrError, QrTokenInvalidError, SessionFailedError } from "@gerege-systems/eid-mongolia-sdk";
 
-const s = await eid.qr.start({ qr: scanned, nonce: orderId }); // nonce өгөөгүй бол base64url(16 байт); VC алга
-// s ({ sessionId, nonce })-ийг JSON-оор хадгалж болно — result/check-д nonce, session-ийг тулгана.
+const s = await eid.qr.start({ qr: scanned, nonce: orderId }); // 若未提供 nonce，则为 base64url(16 字节)；没有 VC
+// s（{ sessionId, nonce }）可以保存为 JSON——result/check 会核对 nonce 和 session。
 try {
-  const p = await eid.qr.result(s); // эсвэл polling UI: await eid.qr.check(s) → { complete: false } | { complete: true, result }
-  p.data;          // { birth_date: "1990-01-01", given_name: "Бат", … } — payload-ийн дарааллаар, түлхүүр verbatim
+  const p = await eid.qr.result(s); // 或用于轮询 UI： await eid.qr.check(s) → { complete: false } | { complete: true, result }
+  p.data;          // { birth_date: "1990-01-01", given_name: "巴特", … } — 按 payload 的顺序，键保持原样
   p.source;        // "dan" | "passport" | "citizenid" | "gsign" | "guardian" | "unknown" | …
   p.photo;         // Uint8Array (JPEG) | undefined
-  p.signer;        // { certificate, etsi: "PNOMN-…", givenName, surname, commonName } — гэрчилгээнээс
+  p.signer;        // { certificate, etsi: "PNOMN-…", givenName, surname, commonName } — 来自证书
   p.signedAt;      // Date (iat)
-  p.sha256;        // hex SHA-256(signingInput) = CA-ийн аудитын qrsha (маргаанд тулгах)
+  p.sha256;        // hex SHA-256(signingInput) = CA 审计中的 qrsha（用于争议核对）
 } catch (e) {
-  if (e instanceof QrTokenInvalidError) {/* start: 404 — шинэ QR гаргуул */}
+  if (e instanceof QrTokenInvalidError) {/* start：404——请重新生成 QR */}
   else if (e instanceof SessionFailedError) {/* USER_REFUSED, TIMEOUT … */}
-  else if (e instanceof QrError && e.code === "QR_PRESENTATION_GONE") {/* аль хэдийн уншигдсан / хугацаа дууссан — шинэ QR */}
-  else if (e instanceof QrError && e.code === "QR_REVOCATION_UNKNOWN") {/* OCSP хариугүй — түр, дахин verify */}
-  else if (e instanceof QrError) {/* QR_* шалгалт унасан — ИТГЭХГҮЙ */}
+  else if (e instanceof QrError && e.code === "QR_PRESENTATION_GONE") {/* 已被读取 / 已过期——请使用新的 QR */}
+  else if (e instanceof QrError && e.code === "QR_REVOCATION_UNKNOWN") {/* OCSP 无响应——暂时性，请重新验证 */}
+  else if (e instanceof QrError) {/* QR_* 检查失败——不要信任 */}
   else throw e;
 }
 ```
@@ -1026,8 +1026,8 @@ KeyUsage contentCommitment，QUALIFIED（qcStatements），颁发者 allowlist�
 ```ts
 import { sealPdf, PadesError } from "@gerege-systems/eid-mongolia-sdk/pades";
 
-const done = await sealPdf(eid.seal, "NTRMN-6235972", pdfBytes, { reason: "Нэхэмжлэх" });
-writeFileSync("sealed.pdf", done.pdf); // PAdES-BASELINE-LT, байгууллагын тамгатай
+const done = await sealPdf(eid.seal, "NTRMN-6235972", pdfBytes, { reason: "发票" });
+writeFileSync("sealed.pdf", done.pdf); // PAdES-BASELINE-LT, 带有组织印章
 ```
 
 - 流程：`eid.seal.getCertificate(org)`（`GET /seal/certificate/{orgEtsi}`）→ `prepare`（signerCert = 印章证书）→
@@ -1093,25 +1093,25 @@ import {
 } from "@gerege-systems/eid-mongolia-sdk";
 import { sealPdf } from "@gerege-systems/eid-mongolia-sdk/pades";
 
-// 1. Захирлыг нэвтрүүлнэ (танай RP-ийн auth session, OK-оор дууссан) — sessionId-г хадгална.
-const session = await eid.auth.notificationByEtsi("PNOMN-12345678", [{ type: "displayTextAndPIN", displayText60: "Нэвтрэх" }]);
+// 1. 让 CEO 登录（您的 RP 的 auth session，以 OK 结束）——保存 sessionId。
+const session = await eid.auth.notificationByEtsi("PNOMN-12345678", [{ type: "displayTextAndPIN", displayText60: "登录" }]);
 const result = await eid.session.waitForResult(session.sessionId, { expiresAt: session.expiresAt });
-eid.validator.validateAuth(result, session.acsp!); // нэвтрэлт OK байх ёстой
+eid.validator.validateAuth(result, session.acsp!); // 登录必须为 OK
 
-// 2. Нэвтрэлтээс хойш 5 минутын дотор хүсэлт илгээнэ — push зөвхөн тэр захирал руу очно.
+// 2. 在登录后 5 分钟内发送申请——push 只会发给该 CEO。
 try {
   const g = await eid.seal.requestGrant("NTRMN-6235972", session.sessionId); // 202 {grantId, status: "PENDING", expiresAt}
-  // 3. Захирал PIN2-оор зөвшөөрөх хүртэл хүлээнэ.
+  // 3. 等待 CEO 用 PIN2 批准。
   await eid.seal.waitForGrant(g.grantId, { timeoutMs: 10 * 60_000 });
-  // 4. Одоо /seal/{orgEtsi} ажиллана.
+  // 4. 现在 /seal/{orgEtsi} 可用。
   const sealed = await sealPdf(eid.seal, "NTRMN-6235972", pdfBytes);
 } catch (e) {
   if (e instanceof ForbiddenError && e.code === "NOT_ORG_CEO") {
-    // нэвтэрсэн хүн байгууллагын улсын бүртгэлээр баталгаажсан Гүйцэтгэх захирал биш
+    // 登录的人不是经国家登记验证的该组织首席执行官
   } else if (e instanceof AuthSessionTooOldError || e instanceof AuthSessionAlreadyUsedError) {
-    // захирлыг дахин нэвтрүүлж шинэ session-оор хүснэ
+    // 让 CEO 重新登录，并用新的 session 申请
   } else if (e instanceof SealGrantRequestError) {
-    // e.outcome: "REJECTED" | "EXPIRED" | "FAILED" | "REVOKED" → шинэ нэвтрэлт + хүсэлт; "TIMEOUT" → ижил grantId-аар дахин хүлээж болно
+    // e.outcome: "REJECTED" | "EXPIRED" | "FAILED" | "REVOKED" → 新的登录 + 申请；"TIMEOUT" → 可用相同的 grantId 继续等待
   } else throw e;
 }
 ```
@@ -1185,9 +1185,9 @@ try {
   await sealPdf(eid.seal, org, pdfBytes);
 } catch (e) {
   if (e instanceof SealNotIssuedError || e instanceof SealCertRevokedError || e instanceof SealCertExpiredError) {
-    // идэвхтэй тамганы гэрчилгээ алга → eid.seal.requestCertificate(org) (байгууллагын ADMIN PIN2-оор батална)
+    // 没有有效的印章证书 → eid.seal.requestCertificate(org)（组织的 ADMIN 用 PIN2 确认）
   } else if (e instanceof OrgNotActiveError) {
-    // байгууллага түр зогссон / цуцлагдсан — давтахгүй
+    // 组织已暂停 / 已吊销——不要重试
   } else throw e;
 }
 ```
@@ -1205,12 +1205,12 @@ import { SealApproverUnavailableError, SealCertificateRequestError } from "@gere
 const req = await eid.seal.requestCertificate("NTRMN-6235972"); // 202 {requestId, status: "PENDING", expiresAt, approvers}
 try {
   const cert = await eid.seal.waitForCertificate("NTRMN-6235972", req.requestId, { timeoutMs: 10 * 60_000 });
-  // cert: {certificate (DER), serialNumber, notBefore, notAfter, certificateLevel, …} — getCertificate-тэй ижил хэлбэр
+  // cert: {certificate (DER), serialNumber, notBefore, notAfter, certificateLevel, …} — 与 getCertificate 的形式相同
 } catch (e) {
   if (e instanceof SealCertificateRequestError) {
-    // e.outcome: "REJECTED" | "EXPIRED" | "FAILED" → шинэ хүсэлт; "TIMEOUT" → ижил requestId-аар дахин хүлээж болно
+    // e.outcome: "REJECTED" | "EXPIRED" | "FAILED" → 新的申请；"TIMEOUT" → 可用相同的 requestId 继续等待
   } else if (e instanceof SealApproverUnavailableError) {
-    // (requestCertificate) байгууллагад идэвхтэй eID-тэй ADMIN алга
+    // （requestCertificate）该组织没有拥有有效 eID 的 ADMIN
   } else throw e;
 }
 ```
@@ -1249,7 +1249,7 @@ try {
   await sealPdf(eid.seal, "NTRMN-6235972", pdfBytes);
 } catch (e) {
   if (e instanceof SealServiceDisabledError) {
-    // e.service: "issuance" | "sealing" | undefined — хэрэглэгчид «үйлчилгээ түр унтраалттай»; автоматаар давтахгүй
+    // e.service: "issuance" | "sealing" | undefined — 向用户显示“服务暂时关闭”；不要自动重试
   } else throw e;
 }
 ```
@@ -1290,14 +1290,14 @@ Web2App: {deviceLinkBase}?deviceLinkType=Web2App&sessionToken={T}&sessionType=au
 ```ts
 import { buildDeviceLink, type DeviceLinkSession } from "@gerege-systems/eid-mongolia-sdk";
 
-// backend — session эхлүүлээд бүх хариуг СЕРВЕРТ хадгална (sessionToken/sessionSecret/receivedAt/acsp)
+// 后端——发起 session，并将完整响应保存在服务器上 (sessionToken/sessionSecret/receivedAt/acsp)
 const s = await eid.auth.deviceLinkAnonymous(
-  [{ type: "displayTextAndPIN", displayText60: "Хаан Банк-д нэвтрэх" }],
-  { callbackUrl: "https://bank.example.mn/auth/eid/callback?state=…" }, // товч харуулах бол; host нь callbackHosts-д,
-  // зам нь үргэлж /auth/eid/callback болж нормчлогдоно (зөвхөн query хадгалагдана), https заавал
+  [{ type: "displayTextAndPIN", displayText60: "登录汗银行" }],
+  { callbackUrl: "https://bank.example.mn/auth/eid/callback?state=…" }, // 如需显示按钮；host 必须在 callbackHosts 中，
+  // 路径始终会被规范化为 /auth/eid/callback（仅保留 query），必须使用 https
 );
 store.put(s.sessionId, s);
-res.json({ sessionId: s.sessionId, vc: s.vc }); // браузерт ЗӨВХӨН эдгээр
+res.json({ sessionId: s.sessionId, vc: s.vc }); // 只有这些会发送给浏览器
 
 const link = (s: DeviceLinkSession, type: "QR" | "Web2App" | "App2App") =>
   buildDeviceLink({
@@ -1307,20 +1307,20 @@ const link = (s: DeviceLinkSession, type: "QR" | "Web2App" | "App2App") =>
     sessionSecret: s.sessionSecret!,
     sessionType: "auth",
     lang: "mon",
-    receivedAt: s.receivedAt, // SDK хариу хүлээн авсан мөчийг тэмдэглэнэ
+    receivedAt: s.receivedAt, // SDK 会记录收到响应的时刻
     rpChallenge: s.acsp!.rpChallenge,
     relyingPartyName: s.acsp!.relyingPartyName,
     interactions: s.acsp!.interactions,
-    initialCallbackUrl: s.acsp!.initialCallbackUrl, // QR-д authCode-д орохгүй
+    initialCallbackUrl: s.acsp!.initialCallbackUrl, // 对 QR 而言不参与 authCode
   });
 
-// GET /eid/qr?sessionId=…  → браузер 1 секунд тутам дуудаж QR-ийг дахин зурна (Cache-Control: no-store)
+// GET /eid/qr?sessionId=…  → 浏览器每秒调用一次并重新绘制 QR (Cache-Control: no-store)
 app.get("/eid/qr", (req, res) => {
-  const s = store.get(String(req.query.sessionId)); // өөрийн browser session-д хамаарахыг шалга
+  const s = store.get(String(req.query.sessionId)); // 检查它是否属于调用者自己的浏览器 session
   if (!s) return res.sendStatus(404);
   res.set("Cache-Control", "no-store").json({ link: link(s, "QR") });
 });
-// гар утсанд: товчны href = link(s, "Web2App") (нэг удаа, шинэчлэхгүй)
+// 手机端：按钮的 href = link(s, "Web2App")（一次性，无需刷新）
 ```
 
 若通过 SSE/WebSocket 推送，请使用 `qrDeviceLinkTicker(input, (link) => send(link))`——它会立即发出一个链接，之后每秒
@@ -1329,12 +1329,12 @@ app.get("/eid/qr", (req, res) => {
 **务必核对您所展示的类型（防中继）。** `expectedFlowType` = RP 所展示链接的类型：
 
 ```ts
-// QR хуудас → poll-оор дууссан үр дүн
+// QR 页面 → 通过轮询完成的结果
 eid.validator.validateAuth(result, s.acsp!, { expectedFlowType: "QR" });
 
-// Web2App/App2App товч → апп callback URL-д `userChallengeVerifier` нэмж буцна
+// Web2App/App2App 按钮 → 应用会在 callback URL 中附加 `userChallengeVerifier` 后返回
 eid.validator.validateAuth(result, s.acsp!, {
-  expectedFlowType: "Web2App", // RP-ийн апп дахь товч бол "App2App"
+  expectedFlowType: "Web2App", // 若按钮位于 RP 的应用内，则为 "App2App"
   userChallengeVerifier: callbackQuery.get("userChallengeVerifier") ?? undefined,
 });
 // push (notificationBy*) → "Notification"
@@ -1427,11 +1427,11 @@ const eid = new EidClient({
 
 ```bash
 npm install
-npm run lint          # tsc --noEmit (үндсэн + tsconfig.button.json)
-npm test              # build + node --test (pades golden — Go reference-тэй байт-ижил)
-npm run golden:check  # test/fixtures/pades/golden + src/pades/assets ↔ бэхэлсэн Go commit
-npm run size:pades    # /pades хөтчийн bundle gzip ≤ 300 KB
-npm run test:convert-e2e   # /convert жинхэнэ LibreOffice Chromium-д (BROWSER=webkit — WebKit)
+npm run lint          # tsc --noEmit (主配置 + tsconfig.button.json)
+npm test              # build + node --test (pades golden——与 Go reference 字节一致)
+npm run golden:check  # test/fixtures/pades/golden + src/pades/assets ↔ 固定的 Go commit
+npm run size:pades    # /pades 浏览器 bundle 的 gzip ≤ 300 KB
+npm run test:convert-e2e   # /convert 在 Chromium 中使用真实的 LibreOffice（BROWSER=webkit——WebKit）
 ```
 
 `/pades` 的 conformance fixture（golden：输入、测试 PKI 的证书、TSA/OCSP/CRL 的固定响应、预期的
