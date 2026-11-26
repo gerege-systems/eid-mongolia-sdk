@@ -1,6 +1,50 @@
 # Changelog
 ## 0.50.0 — 2026-11-27
 
+### Security
+
+- **validatePdf shadow attack fixed:** an object of the signed revision whose stream ran past the signed bytes and was
+  completed by a later revision kept the signature `valid`; it is now `modified_after_signing`.
+- **Later-signature trust:** only later signatures that pass integrity count as signature-only extensions, and an
+  own-signer visible stamp's `/Name` must equal the certificate's display name — a forged later revision with a visible
+  stamp no longer keeps earlier signatures `valid`. `platform_attested` is never reported together with
+  `modified_after_signing`; SHA-1/MD5 SignerInfo signature algorithms are `weak_algorithm`; RSA-PSS parameters are
+  checked strictly.
+- **Reader DoS limits** in `validatePdf`, `prepare` and `sealPdf` (no signature needed to trigger them; a 5 MB OID or a
+  1.2 MB object-stream file took hours) — see «New limits».
+- **`ResponseValidator` / My QR / OCSP hardening** (corpus `rp-conformance/2`): weak RSA citizen keys rejected;
+  duplicate SERIALNUMBER/CN rejected; the issuer allowlist is bound to the issuer actually found in the trust pool (a
+  leaf under an SKI-less CA could name the allowed CA in its own AKI); SHA-1/MD5 chain signatures no longer verify; the
+  OCSP issuer must have issued the certificate and the response CertID must match it; empty, `.` or `..` RP-API path
+  parameters throw before any request.
+- **`createEidLogin`:** `__Host-` login cookie, rate-limit keys no longer contain the citizen's id (`push:<hmac>`), a
+  request without a client IP is rate-limited, IPv6 clients are keyed by /64, the in-memory limiter table cannot be
+  exhausted.
+
+### Upgrade notes
+
+- **Login cookie name:** with a secure, host-only, `path: "/"` cookie the default name is now `__Host-eid_login` (was
+  `eid_login`; an explicit `cookie.name` is kept). **Logins in progress during the upgrade restart once.**
+- **Custom rate-limit functions** (`rateLimit`) now receive `push:<hmac>` instead of `push:<idCode>` — update any
+  limiter that parsed the citizen id from the key.
+- **PDF limits:** documents with more than 128 incremental updates (xref sections) or object streams with very many
+  members are `PDF_INVALID` in `validatePdf` and are also refused by `prepare` / `sealPdf`.
+- **Visible stamp name:** an own-signer visible stamp whose `/Name` differs from the certificate display name (e.g. a
+  custom `signerName` in `prepare`) now makes the earlier signatures `modified_after_signing`.
+- **RSA-PSS:** certificate/CRL/OCSP signatures with non-standard RSA-PSS parameters (hash other than SHA-256/384/512, a
+  different MGF1 hash, salt ≠ hash length, or absent parameters that used to default to SHA-1) no longer verify.
+- **Validator behaviour changes:** weak RSA citizen keys, duplicate SERIALNUMBER/CN, SHA-1/MD5 chain signatures and an
+  unknown `requiredLevel` now throw (the production eID chain is unaffected). Every `validatePdf` extraction/evaluation
+  error is `PDF_INVALID`; an out-of-memory `RangeError` is rethrown.
+- **New limits:** > 128 xref sections (`/Prev` chain); xref stream rows of width 0 or `/W` entries outside 0…8; xref
+  stream rows > max(`/Size`, 2^21); multi-filter xref/object streams; inflation ≤ 256 MiB per document and a 32 MiB
+  structural inflate budget (xref + object streams); object-stream lookup work ≤ 1 GiB; OID ≤ 128 bytes / arcs ≤ 63
+  bits (all `PDF_INVALID`); per signature ≤ 32 CMS certificates, RSA modulus ≤ 8192 bits / exponent ≤ 2^32−1, serial ≤
+  160 bits; DSS ≤ 8 MiB decoded in total; in-memory rate limiter rule option `maxKeys` default 10 000.
+- **New API:** seal registration `eid.seal.registerSealedPdf` (`POST /seal/{orgEtsi}/registrations`),
+  `eid.seal.sealForDocument`, `sealPdf({ qr: true })` (QR seal stamp, APPEARANCE_SPEC §6.5). Default `sealPdf` output is
+  unchanged (golden v12 byte-identical); `prepare` stays QR-less.
+
 ### README: кодын жишээний коммент орчуулсан
 
 - Юу: `README.en.md`, `README.zh-CN.md` дахь кодын жишээнүүдийн монгол коммент ба дэлгэцэнд харагдах жишээ мөр (reason, fileName, displayText г.м.)-ийг тус тусын хэл рүү орчуулсан. Танигч, API нэр, протоколын утга (`"mn"`, URL, хувилбар), бүтэц хэвээр; `README.md` өөрчлөгдөөгүй.
@@ -94,7 +138,7 @@ closed here together with the Go reference SDK (PR gerege-systems/eid-mongolia-s
 
 Two independent reviews of the .NET and Java ports of `validatePdf` found weaknesses that were already in this
 implementation and in Go `pades.ValidatePDF`. Fixed in both; the validate corpus is vendored from Go PR 76 head
-`15921a09ecdb` (`scripts/sync-pades-golden.mjs`; re-pin to the merge commit once that PR is merged). The 67 earlier
+`15921a09ecdb` (`scripts/sync-pades-golden.mjs`; re-pinned to Go main 222acbd6e769 for this release, byte-identical). The 67 earlier
 reports are unchanged; 13 new cases (README «v14» in `test/fixtures/pades/validate`).
 
 - **Shadow attack** (`src/pades/validate/revisions.ts`): an unchanged object of the signed revision must parse completely
