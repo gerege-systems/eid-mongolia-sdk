@@ -6,9 +6,9 @@ import { TAG, children, expect, intValue, oidString, parseOne, parsePreciseTime,
 import { concat, equal, fromLatin1, toHex } from "../bytes.js";
 import { digest, sha256 } from "../crypto.js";
 import { StructureError, checkStructure } from "../pdf/nesting.js";
-import { PRef, Reader, type Value } from "../pdf/reader.js";
+import { PRef, Reader, isOOM, type Value } from "../pdf/reader.js";
 import { OID, parseCertificate, sealCertificateDER, verifySignature, type Certificate } from "../x509.js";
-import { fromPrecise, hexSerial, pdfText, ZERO_TIME, type GoTime } from "./gofmt.js";
+import { commonName, fromPrecise, hexSerial, pdfText, subjectNames, ZERO_TIME, type GoTime } from "./gofmt.js";
 import { Revisions, type SigMeta } from "./revisions.js";
 
 /** PDF-ийн дээд хэмжээ (CA MaxPDFBytes). */
@@ -100,7 +100,8 @@ export async function extract(doc: Uint8Array, profile: Profile = "own"): Promis
   let rdr: Reader;
   try {
     rdr = new Reader(doc);
-  } catch {
+  } catch (e) {
+    if (isOOM(e)) throw e;
     // Go: digitorus AES-256 / нууц үгтэй баримтыг нээхгүй — /Encrypt лавлагаагаар encrypted.
     throw new ExtractError(ENCRYPT_REF.test(fromLatin1(doc)) ? "encrypted" : "not_pdf");
   }
@@ -136,15 +137,18 @@ export async function extract(doc: Uint8Array, profile: Profile = "own"): Promis
     dss = extractDSS(rdr.trailerValue().key("Root").key("DSS"));
   } catch (e) {
     if (e instanceof ExtractError) throw e;
+    if (isOOM(e)) throw e; // санах ой дууссан — «задрахгүй баримт» биш
     throw new ExtractError("not_pdf"); // Go: panic → recover → ErrNotPDF
   }
   if (dss) for (const s of sigs) s.dss = dss;
   const known = new Map<number, number[]>();
   const metas = new Map<number, SigMeta>();
+  // Зөвхөн бүрэн бүтэн (integrity) гарын үсэг л «гарын үсгийн өргөтгөл» (Go extract.go): криптографаар таараагүй гарын
+  // үсэгтэй revision DSS-only горимд орж татгалзагдана. name — дардасны /Name-тэй тулгах гэрчилгээний нэр.
   for (const s of sigs) {
-    if (!s.malformed) {
+    if (!s.malformed && s.integrity) {
       known.set(s.objNum, s.byteRange!);
-      metas.set(s.objNum, { revIndex: 1, role: "", roleOK: s.claimedRoles.length <= 1, seal: sealCertificateDER(s.leaf) });
+      metas.set(s.objNum, { revIndex: 1, role: "", roleOK: s.claimedRoles.length <= 1, seal: sealCertificateDER(s.leaf), name: certDisplayNameDER(s.leaf) });
     }
   }
   for (const [num, m] of metas) {
@@ -168,6 +172,20 @@ export async function extract(doc: Uint8Array, profile: Profile = "own"): Promis
     s.laterVisible = later.visible;
   }
   return { sigs, metas, docID };
+}
+
+/** Go certDisplayName: DER гэрчилгээний харуулах нэр (GIVENNAME SURNAME, эс бөгөөс CN); задрахгүй бол "". */
+function certDisplayNameDER(der: Uint8Array | undefined): string {
+  if (!der) return "";
+  let c: Certificate;
+  try {
+    c = parseCertificate(der);
+  } catch {
+    return "";
+  }
+  const { given, surname } = subjectNames(c.rawSubject);
+  const n = `${given} ${surname}`.trim();
+  return n !== "" ? n : commonName(c.rawSubject);
 }
 
 /** widget харагдах: /AP-тэй эсвэл /Rect-ийн өргөн, өндөр хоёулаа 0 биш. */
@@ -228,7 +246,7 @@ async function extractSignature(doc: Uint8Array, obj: Value): Promise<RawSignatu
   s.subFilter = obj.key("SubFilter").name();
 
   const p7 = parsePKCS7(contents);
-  if (!p7 || p7.signers.length !== 1) {
+  if (!p7 || p7.signers.length !== 1 || !boundedCerts(p7.certs)) {
     s.malformed = true;
     return s;
   }
@@ -252,7 +270,8 @@ async function extractSignature(doc: Uint8Array, obj: Value): Promise<RawSignatu
     }
   }
   for (const c of p7.certs) if (!equal(c.raw, leaf.raw)) s.certs.push(c.raw);
-  s.weakDigest = !STRONG.has(si.digestAlg);
+  // SignerInfo-ийн гарын үсгийн алгоритм сул бол (sha1WithRSAEncryption, ecdsa-with-SHA1 …) digest SHA-256 байсан ч сул (Go).
+  s.weakDigest = !STRONG.has(si.digestAlg) || WEAK_SIG_ALGS.has(si.encAlg);
   s.integrity = await verifyPKCS7(p7, sb.signed);
   s.timestamp = await extractTimestamp(si);
   return s;
@@ -271,6 +290,56 @@ const O = {
 };
 
 const STRONG = new Set<string>([OID.sha256, OID.sha384, OID.sha512]);
+
+/** Go weakSignatureOIDs: SignerInfo.signatureAlgorithm-д сул (MD2/MD5/SHA-1-тэй RSA, DSA, ECDSA). */
+const WEAK_SIG_ALGS = new Set<string>([
+  "1.2.840.113549.1.1.2", // md2WithRSAEncryption
+  "1.2.840.113549.1.1.4", // md5WithRSAEncryption
+  "1.2.840.113549.1.1.5", // sha1WithRSAEncryption
+  "1.2.840.10040.4.3", // dsa-with-sha1
+  "1.2.840.10045.4.1", // ecdsa-with-SHA1
+  "1.3.14.3.2.29", // sha1WithRSASignature (OIW)
+]);
+
+/** Баримтад суулгасан гэрчилгээний хязгаар (Go extract.go): CMS бүрд ≤ 32, RSA модуль ≤ 8192 бит, илтгэгч ≤ 2^32−1, serial ≤ 160 бит. */
+const MAX_CMS_CERTS = 32;
+const MAX_RSA_BITS = 8192;
+const MAX_SERIAL_BITS = 160;
+
+/** Эерэг big-endian байтын (тэргүүлэх 0x00-ийг алгасаад) битийн урт. */
+function bitLength(b: Uint8Array): number {
+  let i = 0;
+  while (i < b.length && b[i] === 0) i++;
+  if (i === b.length) return 0;
+  return (b.length - i - 1) * 8 + (32 - Math.clz32(b[i]!));
+}
+
+/** INTEGER агуулгын (two's complement) абсолют утгын битийн урт — Go big.Int.BitLen. */
+function intBitLength(v: Uint8Array): number {
+  if (v.length === 0 || !(v[0]! & 0x80)) return bitLength(v);
+  if (v.length > 64) return v.length * 8; // сөрөг, хэт урт — хязгаараас ихийг л мэдэхэд хангалттай
+  const x = -intValue(v);
+  return x.toString(2).length;
+}
+
+/** Go boundedCert: serial ≤ 160 бит; RSA бол модуль ≤ 8192 бит, илтгэгч ≤ 2^32−1 (задрахгүй RSA түлхүүр — хязгаараас гадна). */
+export function boundedCert(c: Certificate): boolean {
+  if (intBitLength(c.serial) > MAX_SERIAL_BITS) return false;
+  if (c.keyAlg !== OID.rsaEncryption) return true;
+  try {
+    const [n, e] = children(expect(parseOne(c.publicKey), TAG.SEQUENCE, "RSAPublicKey"));
+    const nv = expect(n, TAG.INTEGER, "n").value;
+    const ev = expect(e, TAG.INTEGER, "e").value;
+    return bitLength(nv) <= MAX_RSA_BITS && bitLength(ev) <= 32;
+  } catch {
+    return false;
+  }
+}
+
+/** Go boundedCerts: ≤ MAX_CMS_CERTS, тус бүр boundedCert. */
+export function boundedCerts(cs: Certificate[]): boolean {
+  return cs.length <= MAX_CMS_CERTS && cs.every(boundedCert);
+}
 
 interface Attr {
   type: string;
@@ -621,14 +690,17 @@ async function extractTimestamp(si: SignerInfo): Promise<RawTimestamp | undefine
       hashAlg = oidString(expect(children(expect(mi[0], TAG.SEQUENCE, "alg"))[0], TAG.OID, "alg").value);
       hashed = expect(mi[1], TAG.OCTET_STRING, "hashedMessage").value;
       if (hashed.length === 0) return out;
-      serial = hexSerial(expect(info[3], TAG.INTEGER, "serial").value);
+      const sv = expect(info[3], TAG.INTEGER, "serial").value;
+      // TSTInfo serialNumber ≤ 160 бит (Go extract.go: timestamp.Parse-ийн дараа, цаг/serial тавихаас өмнө).
+      if (intBitLength(sv) > MAX_SERIAL_BITS) return out;
+      serial = hexSerial(sv);
       time = fromPrecise(parsePreciseTime(expect(info[4], TAG.GeneralizedTime, "genTime")));
     } catch {
       return out;
     }
     out.time = time;
     out.serial = serial;
-    if (tok.signers.length !== 1) return out;
+    if (tok.signers.length !== 1 || !boundedCerts(tok.certs)) return out;
     const tsa = onlySigner(tok);
     if (!tsa) return out;
     out.tsaCert = tsa.raw;
@@ -696,23 +768,37 @@ export function parsePDFDate(raw: string): GoTime | undefined {
 
 const MAX_DSS_ITEMS = 64;
 const MAX_DSS_STREAM = 1 << 20;
+/** /Certs /OCSPs /CRLs-ийн тайлсан нийт байт (Go maxDSSTotal). */
+const MAX_DSS_TOTAL = 8 << 20;
 
-/** /DSS-ийн /Certs /OCSPs /CRLs stream-уудыг тайлж уншина; задрахгүй / хязгаар хэтэрсэнийг алгасна. */
+/**
+ * /DSS-ийн /Certs /OCSPs /CRLs stream-уудыг тайлж уншина; задрахгүй / хязгаар хэтэрсэнийг алгасна. Нэг массив дахь ижил
+ * объектын давхар заалтыг нэг удаа; /Certs → /OCSPs → /CRLs дарааллаар нийт MAX_DSS_TOTAL-аас хэтрэхийг алгасна (Go).
+ */
 function extractDSS(dss: Value): RawDSS | undefined {
   if (dss.kind() !== "dict") return undefined;
+  let total = 0;
   const read = (key: string): Uint8Array[] => {
     const arr = dss.key(key);
     const out: Uint8Array[] = [];
+    const seen = new Set<number>();
     for (let i = 0; i < arr.len() && i < MAX_DSS_ITEMS; i++) {
       const e = arr.index(i);
       if (e.kind() !== "stream") continue;
+      const id = e.ptr.id;
+      if (id !== 0) {
+        if (seen.has(id)) continue;
+        seen.add(id);
+      }
       let b: Uint8Array;
       try {
         b = e.streamData();
-      } catch {
+      } catch (err) {
+        if (isOOM(err)) throw err;
         continue;
       }
-      if (b.length > MAX_DSS_STREAM) continue;
+      if (b.length > MAX_DSS_STREAM || total + b.length > MAX_DSS_TOTAL) continue;
+      total += b.length;
       out.push(b);
     }
     return out;

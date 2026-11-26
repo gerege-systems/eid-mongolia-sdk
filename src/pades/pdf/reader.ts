@@ -9,6 +9,23 @@ import { zlibInflate } from "./inflate.js";
 
 export class PdfError extends Error {}
 
+/**
+ * Санах ой дууссан (V8 RangeError: «Invalid array length», «Array buffer allocation failed» …) эсэх — дуудлагын стек
+ * хэтэрсэнээс (бас RangeError) бусад. Ийм алдааг «задрахгүй баримт» / «алгасах» гэж залгихгүй, дамжуулна.
+ */
+export function isOOM(e: unknown): boolean {
+  return e instanceof RangeError && !/call stack/i.test(e.message);
+}
+
+/** Нэг Reader-ийн (нэг баримт) нийт FlateDecode тайлалтын төсөв (xref stream, ObjStm, DSS …; .NET MaxDocInflate). */
+export const MAX_DOC_INFLATE = 256 << 20;
+/** Нэг stream-ийн тайлсан хэмжээний дээд хязгаар. */
+const MAX_STREAM_INFLATE = 64 << 20;
+/** xref /Prev гинжийн дээд урт — хэсгийн тоо (Go validate maxXrefSections). */
+export const MAX_XREF_SECTIONS = 128;
+/** xref stream-ийн мөрийн нийт тоо: max(/Size, 2^21) (Go maxXrefSize). */
+const MAX_XREF_ROWS = 1 << 21;
+
 export interface ObjPtr {
   id: number;
   gen: number;
@@ -461,8 +478,11 @@ export class Value {
     return fromLatin1(b);
   }
 
-  /** Stream-ийн тайлсан өгөгдөл (Value.Reader). */
-  streamData(): Uint8Array {
+  /**
+   * Stream-ийн тайлсан өгөгдөл (Value.Reader). structural — xref stream / ObjStm: олон шүүлтүүрийн гинжийг татгалзана
+   * (FlateDecode-ийг давхарлаж тайлалтыг өсгөхгүй). Тайлалт бүр Reader-ийн нийт төсвөөс (MAX_DOC_INFLATE) хасагдана.
+   */
+  streamData(structural = false): Uint8Array {
     const x = this.data;
     if (!(x instanceof PStream)) throw new PdfError("stream not present");
     const n = this.key("Length").int64();
@@ -474,10 +494,11 @@ export class Value {
       case "null":
         break;
       case "name":
-        data = applyFilter(data, filter.name(), param);
+        data = applyFilter(this.r, data, filter.name(), param);
         break;
       case "array":
-        for (let i = 0; i < filter.len(); i++) data = applyFilter(data, filter.index(i).name(), param.index(i));
+        if (structural && filter.len() > 1) throw new PdfError("multiple filters on a structural stream");
+        for (let i = 0; i < filter.len(); i++) data = applyFilter(this.r, data, filter.index(i).name(), param.index(i));
         break;
       default:
         throw new PdfError("unsupported filter");
@@ -486,9 +507,11 @@ export class Value {
   }
 }
 
-function applyFilter(data: Uint8Array, name: string, param: Value): Uint8Array {
+function applyFilter(r: Reader, data: Uint8Array, name: string, param: Value): Uint8Array {
   if (name !== "FlateDecode") throw new PdfError(`unknown filter ${name}`);
-  const out = zlibInflate(data);
+  if (r.inflateLeft <= 0) throw new PdfError("zlib: баримтын тайлалтын төсөв дууссан");
+  const out = zlibInflate(data, Math.min(MAX_STREAM_INFLATE, r.inflateLeft));
+  r.inflateLeft -= out.length;
   const pred = param.key("Predictor");
   if (pred.kind() === "null") return out;
   if (pred.int64() !== 12) throw new PdfError("unknown predictor");
@@ -509,6 +532,52 @@ function applyFilter(data: Uint8Array, name: string, param: Value): Uint8Array {
   return res;
 }
 
+/**
+ * Нэг ObjStm-ийн задалсан өгөгдөл ба толгойн «дугаар offset» хосын индекс — хэрэгтэй хүртлээ л уншина (lazy). Толгойн
+ * лексерийн алдаа (PdfError) нь тэр байрлалаас хойшхи хосыг хайсан lookup бүрд дахин шидэгдэнэ (өмнөх давталттай ижил).
+ */
+class ObjStmIndex {
+  private readonly lx: Lexer;
+  private readonly offs = new Map<number, number>();
+  private read = 0;
+  private done = false;
+  private err: unknown;
+
+  constructor(
+    readonly data: Uint8Array,
+    private readonly n: number,
+  ) {
+    this.lx = new Lexer(data, 0, true);
+  }
+
+  lookup(id: number): number | undefined {
+    const hit = this.offs.get(id);
+    if (hit !== undefined) return hit;
+    if (this.err !== undefined) throw this.err;
+    while (!this.done && this.read < this.n) {
+      let idt: Token;
+      let offt: Token;
+      try {
+        idt = this.lx.readToken();
+        offt = this.lx.readToken();
+      } catch (e) {
+        this.err = e;
+        throw e;
+      }
+      this.read++;
+      if (idt === EOF_TOKEN || offt === EOF_TOKEN) {
+        this.done = true; // /N нь stream-ээс урт — үлдсэн мөр байхгүй
+        break;
+      }
+      const idn = idt instanceof PInt ? Number(BigInt.asUintN(32, idt.v)) : 0;
+      const o = offt instanceof PInt ? Number(offt.v) : 0;
+      if (!this.offs.has(idn)) this.offs.set(idn, o);
+      if (idn === id) return o;
+    }
+    return undefined;
+  }
+}
+
 /** digitorus pdf.Reader. */
 export class Reader {
   xref: Xref[] = [];
@@ -521,6 +590,12 @@ export class Reader {
   /** Header-ийн "1.x". */
   pdfVersion = "";
   private readonly cache = new Map<string, Value>();
+  /** Үлдсэн FlateDecode тайлалтын төсөв (applyFilter). */
+  inflateLeft = MAX_DOC_INFLATE;
+  /** Уншсан xref stream-ийн мөрийн нийт тоо (MAX_XREF_ROWS). */
+  private xrefRows = 0;
+  /** ObjStm бүрийн задалсан өгөгдөл ба толгойн индекс (гишүүн бүрд дахин задалж толгойг эхнээс нь уншихгүй). */
+  private readonly objStms = new Map<string, ObjStmIndex>();
 
   constructor(readonly bytes: Uint8Array) {
     const b = bytes;
@@ -566,6 +641,7 @@ export class Reader {
       if (!(prevoff instanceof PInt)) throw new PdfError("malformed PDF: xref Prev is not integer");
       const off = Number(prevoff.v);
       if (seen.has(off)) throw new PdfError("malformed PDF: xref Prev loop detected");
+      if (seen.size + 1 >= MAX_XREF_SECTIONS) throw new PdfError("malformed PDF: xref Prev chain too long");
       seen.add(off);
       if (off < 0 || off >= this.bytes.length) throw new PdfError("xref Prev буруу");
       const pd = new Lexer(this.bytes, off).readObject();
@@ -596,7 +672,17 @@ export class Reader {
     });
     if (w.length < 3) throw new PdfError("invalid W array");
     const wtotal = w.reduce((a, c) => a + c, 0);
-    const data = new Value(this, NO_PTR, strm).streamData();
+    // /W [0 0 0] — мөр бүр 0 байт: том /Index-ээр хязгааргүй давталт / хүснэгтийн өсөлт (Go precheck xrefStm-тэй ижил).
+    if (wtotal <= 0) throw new PdfError("xref stream: zero row width");
+    const maxRows = Math.max(size, MAX_XREF_ROWS);
+    for (let k = 0; k + 1 < index.length; k += 2) {
+      const n = index[k + 1];
+      if (n instanceof PInt && n.v > 0n) {
+        this.xrefRows += Number(n.v > BigInt(maxRows) ? BigInt(maxRows) + 1n : n.v);
+        if (this.xrefRows > maxRows) throw new PdfError("xref stream: too many entries");
+      }
+    }
+    const data = new Value(this, NO_PTR, strm).streamData(true);
     let p = 0;
     const dec = (n: number): number => {
       let x = 0;
@@ -642,6 +728,7 @@ export class Reader {
       if (!(prevoff instanceof PInt)) throw new PdfError("malformed PDF: xref Prev is not integer");
       const off = Number(prevoff.v);
       if (seen.has(off)) throw new PdfError("malformed PDF: xref Prev loop detected");
+      if (seen.size + 1 >= MAX_XREF_SECTIONS) throw new PdfError("malformed PDF: xref Prev chain too long");
       seen.add(off);
       if (off < 0 || off >= this.bytes.length) throw new PdfError("xref Prev буруу");
       const pb = new Lexer(this.bytes, off);
@@ -698,6 +785,16 @@ export class Reader {
     return new Value(this, parent, x);
   }
 
+  private objStmIndex(strm: Value, n: number): ObjStmIndex {
+    const key = `${strm.ptr.id} ${strm.ptr.gen}`;
+    let ix = this.objStms.get(key);
+    if (!ix) {
+      ix = new ObjStmIndex(strm.streamData(true), n);
+      if (strm.ptr.id !== 0) this.objStms.set(key, ix);
+    }
+    return ix;
+  }
+
   private load(ptr: PRef): Value {
     if (ptr.id >= this.xref.length) return new Value(this, NO_PTR, undefined);
     const xr = this.xref[ptr.id]!;
@@ -713,25 +810,15 @@ export class Reader {
         const n = strm.key("N").int64();
         const first = strm.key("First").int64();
         if (first === 0) throw new PdfError("missing First");
-        const data = strm.streamData();
-        const b = new Lexer(data, 0, true);
-        let found: PObj | undefined;
-        let ok = false;
-        for (let i = 0; i < n; i++) {
-          const id = b.readToken();
-          const off = b.readToken();
-          if (id === EOF_TOKEN || off === EOF_TOKEN) break; // /N нь stream-ээс урт — үлдсэн мөр байхгүй
-          const idn = id instanceof PInt ? Number(BigInt.asUintN(32, id.v)) : 0;
-          if (idn === ptr.id) {
-            const o = off instanceof PInt ? Number(off.v) : 0;
-            b.seek(first + o);
-            found = asObj(b.readObject());
-            ok = true;
-            break;
-          }
-        }
-        if (ok) {
-          x = found ?? null;
+        // Толгойг нэг л удаа (хэрэгтэй хүртлээ) уншиж индекслэнэ — гишүүн бүрд stream-ийг дахин задалж толгойг эхнээс нь
+        // уншвал n гишүүнтэй ObjStm-д O(n × өгөгдөл). Утга нь өмнөх давталттай ижил: эхний таарсан хос, бүхэл биш id/off
+        // → 0, /N эсвэл EOF хүртэл; толгойн алдаа зөвхөн тэр хүртэл олдоогүй гишүүнд.
+        const ix = this.objStmIndex(strm, n);
+        const o = ix.lookup(ptr.id);
+        if (o !== undefined) {
+          const b = new Lexer(ix.data, 0, true);
+          b.seek(first + o);
+          x = asObj(b.readObject()) ?? null;
           break;
         }
         const ext = strm.key("Extends");

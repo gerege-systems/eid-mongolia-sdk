@@ -962,6 +962,22 @@ try {
   нь «good»-ийг үргэлж давна. **Өмнө `valid` байсан зарим баримт одоо `indeterminate` эсвэл `invalid`.**
 - Итгэлгүй PDF: задлахын өмнө массив/толийн давхарлалт > 256 → `PDF_INVALID` (`prepare` ч мөн; `complete` —
   `STATE_INVALID`). Хамгаалалтын нэг давхарга л — хэмжээ (≤ 10 MiB) ба хугацааг хязгаарла.
+- **Хатууруулалтын хязгаар (validate корпус v14).** Задлахын өмнө: xref хэсэг ≤ 128 (trailer + xref stream), xref stream-ийн
+  `/W` элемент бүр 0…8 байт, нийлбэр > 0, `/Index`-ийн start + count ≤ 2^21, бүх xref stream-ийн мөр ≤ 2^21, xref/object
+  stream ганц шүүлтүүртэй, задалсан xref + object stream нийт ≤ 32 MiB, object stream-ийн гишүүн хайлтын ажил (толгойн хос ×
+  задалсан урт, нийлбэр) ≤ 1 GiB → эс бөгөөс `PDF_INVALID`. Гарын үсэг бүрд: CMS-д (ба цагийн тэмдгийн токенд) ≤ 32
+  гэрчилгээ, RSA модуль ≤ 8192 бит, илтгэгч ≤ 2^32−1, гэрчилгээ/TSTInfo-ийн serial ≤ 160 бит → эс бөгөөс
+  `malformed_signature` (цагийн тэмдэг → `timestamp_invalid`). DSS: массив бүрд ≤ 64 мөр, тус бүр ≤ 1 MiB, нийт тайлсан
+  ≤ 8 MiB, нэг массивт хоёр удаа заасан stream-ийг нэг удаа; OCSP/CRL бүрийг нэг шалгалтад нэг удаа задалж шалгана.
+  SignerInfo-ийн SHA-1/MD5 гарын үсгийн алгоритм (жишээ нь `sha1WithRSAEncryption`) → digest SHA-256 байсан ч
+  `weak_algorithm`. Гарын үсэг зурсан revision-ий объект хожмын revision-оор л гүйцдэг бол (shadow attack) →
+  `modified_after_signing`; хожмын гарын үсэг өөрөө бүрэн бүтэн бол л «зөвхөн гарын үсгийн өргөтгөл», харагдах дардасны нэр
+  нь гэрчилгээний харуулах нэртэй яг тэнцүү байх ёстой; гарын үсгийн дараа өөрчлөгдсөн баримтад `platform_attested` хэзээ ч үгүй.
+  Go `pades.ValidatePDF`-тэй ижил (golden validate v14). Зөвхөн TS: 128 байтаас урт эсвэл arc нь 63 битээс их OID задрахгүй
+  (өмнө нь квадрат хугацаатай байв); гэрчилгээ/CRL/OCSP-ийн RSA-PSS гарын үсэгт SHA-256/384/512, ижил MGF1 hash, salt = hash-ийн
+  урт заавал (Go `crypto/x509` шиг); PDF уншигч object stream-ийг нэг удаа индекслэж, `/Prev` гинжийг 128 хэсгээр, xref stream-ийн
+  мөрийг max(`/Size`, 2^21)-ээр, задлалтыг баримтад 256 MiB-ээр хязгаарлана. Задлах үе шатны алдаа бүр `PDF_INVALID`; санах ой
+  дууссан `RangeError` дамжина — тайлан болгохгүй.
 - Options: `roots`, `intermediates`, `issuers` (DER, тест), `time`, `offline`, `fetch`, `signal`.
 - `key_medium` — гэрчилгээнээс л: qcStatements-тэй иргэний SIGN → `phone`, бусад `unknown`. CA (`POST /v3/validate/pdf`)
   өөрийн бүртгэлээс `token`, мөн eID-ийн олгосон байгууллагын тамганд `server_software` / `server_hsm`-ийг (түлхүүр сервер
