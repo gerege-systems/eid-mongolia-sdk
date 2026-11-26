@@ -419,7 +419,13 @@ export class ResponseValidator {
     if (!result.certificateDerB64) throw new ValidationError("Хариунд гэрчилгээ алга");
     if (!result.documentNumber) throw new ValidationError("Хариунд documentNumber алга");
 
-    const leaf = new X509Certificate(Buffer.from(result.certificateDerB64, "base64"));
+    let leaf: X509Certificate;
+    try {
+      leaf = new X509Certificate(Buffer.from(result.certificateDerB64, "base64"));
+    } catch {
+      // X.509 биш хариу — хуурамч/эвдэрсэн хариу (ValidationError; дотоод алдаа биш — Go leafOf-той ижил).
+      throw new ValidationError("Гэрчилгээ задарсангүй");
+    }
     this.checkValidity(leaf);
     this.verifyCertificate(leaf, protocol);
     const level = effectiveLevel(String(result.certificateLevel ?? ""), certificateLevelOf(leaf, protocol));

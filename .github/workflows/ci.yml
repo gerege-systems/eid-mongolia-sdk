@@ -27,6 +27,11 @@ jobs:
       # (scripts/sync-pades-golden.mjs-ийн GO_SDK_COMMIT).
       - name: pades golden ↔ Go reference
         run: npm run golden:check
+      # RP conformance корпус (rp-validate, wire, interactions, ACSP, OCSP, eidlogin): test/fixtures/conformance нь
+      # бэхэлсэн Go reference commit-ийн testdata/conformance-тэй байт-ижил (scripts/sync-rp-conformance.mjs-ийн
+      # RP_CONFORMANCE_COMMIT); бүх тохиолдлыг test/conformance.test.ts (`npm test`) ажиллуулна.
+      - name: rp conformance ↔ Go reference
+        run: npm run conformance:check
       - run: npm test
       - name: pades browser bundle ≤ 300 KB gzip
         run: npm run size:pades
