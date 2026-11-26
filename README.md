@@ -45,7 +45,7 @@ Smart-ID-тэй RP-үүдийн хэв маяг: хөтөчид **нэг тов�
 
 | | Хүсэлт | Хариу |
 |---|---|---|
-| `POST /auth/eid/start` | `{"mode":"qr"}` эсвэл `{"mode":"push","idCode":"УБ12345678"}` (JSON заавал) | `{mode, vc, qr?, expiresIn}` + `Set-Cookie: eid_login` |
+| `POST /auth/eid/start` | `{"mode":"qr"}` эсвэл `{"mode":"push","idCode":"УБ12345678"}` (JSON заавал) | `{mode, vc, qr?, expiresIn}` + `Set-Cookie: __Host-eid_login` |
 | `GET /auth/eid/start?mode=web2app` | утасны хөтөч (товчны навигаци) | `302` → eID апп |
 | `GET /auth/eid/status` | cookie | `PENDING` (+шинэ `qr`, `expiresIn`) · `WAIT_CALLBACK` · `OK` (`redirect`, `data`) · `FAILED` (`error`) · `EXPIRED` |
 | `GET /auth/eid/callback` | апп буцаана: `?sessionId&userChallengeVerifier` | `303` → `onSuccess`-ийн `redirect` / `successRedirect`, алдаа бол `failureRedirect?eid_error=<код>` |
@@ -102,11 +102,11 @@ export const POST = (req: Request) => eidLogin.handle(req);
 Аль нь ч үгүй бол IP-ээр хязгаарлахгүй (эхний хүсэлтэд `onError`-оор нэг удаа анхааруулна). `handleRequest`-д `req.ip`
 (Express `req.ip`, `app.set("trust proxy", …)`-тэй) шууд хэрэглэгдэнэ. Go: `eidlogin.Config.ClientIP` (`eidlogin.ForwardedClientIP(n)`) — ижил дүрэм.
 
-**Хязгаарлалт** (`rateLimit`). Түлхүүр: `start:<ip>` (IP мэдэгдэж байвал), `push:<idCode>`; татгалзвал 429 + `Retry-After: 60`.
+**Хязгаарлалт** (`rateLimit`). Түлхүүр: `start:<ip>` (IP мэдэгдэж байвал; IPv6 → `/64` угтвар; `trustProxy` / `getClientIp` тохируулсан ч IP хоосон бол нийтийн `start:unknown`), `push:<pushKey>` (0.50.0-аас регистр биш аудитын HMAC); татгалзвал 429 + `Retry-After: 60`.
 Анхдагч `defaultRateLimit` = `{ start: { limit: 20, windowMs: 60_000 }, push: { limit: 3, windowMs: 60_000 } }` — нэг
 IP-ээс минутад 20 эхлэл (0.19.0-аас; IP мэдэгдэж байвал — `req.ip` / `trustProxy`), нэг дугаарт минутад 3 мэдэгдэл
-(MFA fatigue). Санах ойн хязгаарлагч төрөл тус бүрд ≤ 10 000 түлхүүр: дүүрвэл цонх нь өнгөрсөнийг цэвэрлэж, хоосроогүй
-бол **шинэ** түлхүүрийг 429-өөр татгалзана (fail-closed) — байгаа тоолуурыг хэзээ ч арилгахгүй тул олон IP/дугаараар
+(MFA fatigue). Санах ойн хязгаарлагч төрөл тус бүрд ≤ 10 000 түлхүүр: дүүрвэл цонх нь өнгөрсөнийг цэвэрлэж, хоосроогүй (`maxKeys`)
+бол **шинэ** түлхүүрүүдийг нэг нийтийн overflow bucket-д тоолно (0.50.0-аас; өмнө нь 429) — байгаа тоолуурыг хэзээ ч арилгахгүй тул олон IP/дугаараар
 дүүргэж хязгаарыг тойрох боломжгүй. `memoryLoginStore(max = 10_000)` ч мөн адил: дүүрвэл start 503 `{ error: "busy" }`,
 эхэлсэн нэвтрэлтийг устгахгүй. Олон instance бол Redis store/limiter.
 
@@ -251,7 +251,7 @@ RP талд нэмэлт шалгалт хэрэггүй. Эх сурвалж: e
   5 оронтой — eID-тэй ижил хэлбэр), expiresIn}`, ижил cookie; `status` нь eID-ээс асуулгүй `pollMs`-ийн хугацаанд барьж
   `PENDING`, TTL-ийн дараа `EXPIRED` — утсаа аваагүй иргэнтэй ялгаагүй (бодит push-ийн CA `TIMEOUT` ч `EXPIRED` болно). Push start-ийн хариу бүр (бодит, decoy, 502)
   `pushFloorMs`-оос (анхдагч 1000) хурдан гарахгүй — decoy-г цагаар ялгахгүйн тулд (`handle(Request)`-д хүсэлт тасарвал
-  хүлээхгүй; `handleRequest`-д `signal` өг). Хязгаар (`push:<idCode>`, `start:<ip>`) decoy-д ч үйлчилнэ; хязгаарлагчийн 429 ба 400
+  хүлээхгүй; `handleRequest`-д `signal` өг). Хязгаар (`push:<pushKey>`, `start:<ip>`) decoy-д ч үйлчилнэ; хязгаарлагчийн 429 ба 400
   (`invalid_id` — хэлбэрийн алдаа, бүртгэлээс хамааралгүй) нь floor-гүй (eID-ийн 429 ба 503 `busy` floor-той). eID-ийн 5xx, холболтын алдаа, JSON бус 4xx (eID-ийн
   өмнөх proxy, ж: mTLS татгалзал), 401/403 (RP-ийн нууц/эрх) ба 429 нь **decoy биш** — `502 eid_unavailable` / `429` (eID
   порталын зан: тасалдлыг decoy-оор нуувал иргэн дуусахгүй spinner харна; эдгээр нь дугаараас хамаардаггүй тул oracle

@@ -172,10 +172,16 @@ export interface EidLoginEvent {
 /** Хязгаарлагч: true — зөвшөөрөх, false — 429. */
 export type EidLoginRateLimitFn = (key: string) => boolean | Promise<boolean>;
 
-/** Нэг төрлийн хязгаар: санах ойн гулсах цонх, өөрийн функц, эсвэл `false` (хязгааргүй). */
-export type EidLoginRateRule = { limit: number; windowMs: number } | EidLoginRateLimitFn | false;
+/**
+ * Нэг төрлийн хязгаар: санах ойн гулсах цонх, өөрийн функц, эсвэл `false` (хязгааргүй). `maxKeys` (0.50.0-аас) — цонхны
+ * дээд түлхүүрийн тоо (анхдагч 10 000); дүүрвэл шинэ түлхүүрүүд нэг нийтийн overflow bucket-д тоологдоно.
+ */
+export type EidLoginRateRule = { limit: number; windowMs: number; maxKeys?: number } | EidLoginRateLimitFn | false;
 
-/** Төрөл тус бүрийн хязгаар: `start` — `start:<ip>`, `push` — `push:<idCode>`. */
+/**
+ * Төрөл тус бүрийн хязгаар: `start` — `start:<ip>` (IPv6 → `/64` угтвар, IP эх үүсвэр тохируулсан ч хоосон бол
+ * `start:unknown`), `push` — `push:<pushKey>` (0.50.0-аас регистр биш аудитын HMAC, `onEvent`-ийн `meta.pushKey`).
+ */
 export interface EidLoginRateLimits {
   start?: EidLoginRateRule;
   push?: EidLoginRateRule;
@@ -196,20 +202,25 @@ const LIMITER_MAX_KEYS = 10_000;
 
 const RATE_KINDS = ["start", "push"] as const;
 
+/** Хүснэгт дүүрсэн үед шинэ түлхүүрүүдийн нийтийн bucket (хүчинтэй "kind:value" түлхүүр биш). */
+const LIMITER_OVERFLOW_KEY = "\0overflow";
+
 /**
  * Санах ойн гулсах цонх (түлхүүр тус бүрд), дээд тал нь {@link LIMITER_MAX_KEYS} түлхүүр. Дүүрвэл цонх нь өнгөрсөн
- * түлхүүрийг цэвэрлээд, хоосроогүй бол ШИНЭ түлхүүрийг татгалзана (fail-closed) — байгаа түлхүүрийн тоолуурыг хэзээ ч
- * арилгахгүй тул олон түлхүүрээр дүүргэж тухайн дугаарын хязгаарыг тойрох боломжгүй (0.18.x бүгдийг цэвэрлэдэг байв).
+ * түлхүүрийг цэвэрлээд, хоосроогүй бол ШИНЭ түлхүүрийг нэг нийтийн overflow bucket-д (ижил limit/window) тоолно (0.50.0-аас;
+ * өмнө нь шинэ түлхүүр бүрийг татгалздаг байв) — байгаа түлхүүрийн тоолуурыг хэзээ ч арилгахгүй тул олон түлхүүрээр дүүргэж
+ * тухайн дугаарын хязгаарыг тойрох боломжгүй. Go `windowLimiter`, Java `EidLogin.windowLimiter`-тэй ижил.
  */
 function windowLimiter(limit: number, windowMs: number, maxKeys = LIMITER_MAX_KEYS): (key: string) => boolean {
   const hits = new Map<string, number[]>();
-  return (key) => {
+  return (k) => {
+    let key = k;
     const now = Date.now();
-    const h = (hits.get(key) ?? []).filter((t) => now - t < windowMs);
     if (!hits.has(key) && hits.size >= maxKeys) {
-      for (const [k, ts] of hits) if (!ts.some((t) => now - t < windowMs)) hits.delete(k);
-      if (hits.size >= maxKeys) return false;
+      for (const [x, ts] of hits) if (!ts.some((t) => now - t < windowMs)) hits.delete(x);
+      if (hits.size >= maxKeys) key = LIMITER_OVERFLOW_KEY; // overflow bucket нь maxKeys-ээс нэгээр илүү байж болно
     }
+    const h = (hits.get(key) ?? []).filter((t) => now - t < windowMs);
     if (h.length >= limit) {
       hits.set(key, h);
       return false;
@@ -239,7 +250,7 @@ function buildRateLimit(opt: EidLoginOptions["rateLimit"]): EidLoginRateLimitFn 
     if (!(Number.isInteger(r.limit) && r.limit > 0 && r.windowMs > 0)) {
       throw new Error(`createEidLogin: rateLimit.${k} — limit (бүхэл > 0), windowMs (> 0)`);
     }
-    perKind.set(k, windowLimiter(r.limit, r.windowMs));
+    perKind.set(k, windowLimiter(r.limit, r.windowMs, r.maxKeys && r.maxKeys > 0 ? r.maxKeys : LIMITER_MAX_KEYS));
   }
   return async (key) => {
     const fn = perKind.get(key.slice(0, key.indexOf(":")));
@@ -276,9 +287,16 @@ export interface EidLoginOptions {
   /** Status-ийн нэг дуудлагад eID-ийг хүлээх (мс). Анхдагч 1000. */
   pollMs?: number;
   store?: EidLoginStore;
+  /**
+   * Нэвтрэлтийн cookie. `name` анхдагч (0.50.0-аас): `__Host-eid_login` (secure, domain алга, path `/` — хөтөч дэд домэйн /
+   * өөр замаас тарьсан cookie-г энэ нэрээр хүлээн авахгүй), эс бөгөөс `eid_login`; өгсөн нэрийг хэвээр. Хүсэлтэд энэ
+   * нэртэй cookie нэгээс олон бол холбогдоогүй гэж үзнэ (status → EXPIRED, callback → `eid_error=expired`).
+   */
   cookie?: { name?: string; path?: string; secure?: boolean; domain?: string };
   /**
-   * Хязгаарлалт. Түлхүүр: `start:<ip>` (ip мэдэгдэж байвал), `push:<idCode>`; false → 429.
+   * Хязгаарлалт. Түлхүүр: `start:<ip>` (ip мэдэгдэж байвал; IPv6 → `/64` угтвар; `trustProxy` / `getClientIp` тохируулсан
+   * ч IP хоосон бол нийтийн `start:unknown`), `push:<pushKey>` (0.50.0-аас регистр биш аудитын HMAC — `onEvent`-ийн
+   * `meta.pushKey`); false → 429.
    * Анхдагч {@link defaultRateLimit}: push-д нэг дугаарт 60 секундэд 3 (санах ойд) — MFA fatigue-ээс; start-д нэг IP-ээс
    * 60 секундэд 20 (0.19.0-аас).
    *
@@ -429,12 +447,77 @@ function header(h: EidLoginRequest["headers"], name: string): string {
   return (Array.isArray(v) ? v[0] : v) ?? "";
 }
 
+/**
+ * `name`-тэй cookie ЯГ НЭГ байвал түүний утга, эс бөгөөс "" (0.50.0-аас: давхар cookie — дэд домэйн / өөр замаас тарьсан нь
+ * жинхэнийг сүүдэрлэхээс — холбогдоогүй гэж үзнэ). Бүх Cookie header-ийг уншина. Go `singleCookie`-той ижил дүрэм.
+ */
 function readCookie(h: EidLoginRequest["headers"], name: string): string {
-  for (const part of header(h, "cookie").split(";")) {
-    const i = part.indexOf("=");
-    if (i > 0 && part.slice(0, i).trim() === name) return part.slice(i + 1).trim();
+  const raw = h["cookie"] ?? h["Cookie"];
+  let value = "";
+  let n = 0;
+  for (const line of [raw ?? ""].flat()) {
+    for (const part of line.split(";")) {
+      const i = part.indexOf("=");
+      if (i > 0 && part.slice(0, i).trim() === name) {
+        value = part.slice(i + 1).trim();
+        n++;
+      }
+    }
   }
-  return "";
+  return n === 1 ? value : "";
+}
+
+/**
+ * `start:<value>`-ийн value-ийн IP хэсэг: IPv6 литерал (`[…]`, `%zone` зөвшөөрнө) → `/64` угтвар (`2001:db8:1:2::/64` —
+ * 4 hextet, жижиг үсэг, тэг хураахгүй); IPv4-mapped → IPv4; бусад хэвээр. DNS асуухгүй. Go `ipKey`, Java `EidLogin.ipKey`.
+ */
+function clientIpKey(ip: string): string {
+  if (!ip.includes(":")) return ip;
+  let lit = ip;
+  if (lit.startsWith("[") && lit.endsWith("]")) lit = lit.slice(1, -1);
+  const zone = lit.indexOf("%");
+  if (zone >= 0) lit = lit.slice(0, zone);
+  const words = ipv6Words(lit);
+  if (!words) return ip;
+  if (words.slice(0, 5).every((w) => w === 0) && words[5] === 0xffff) {
+    return `${words[6]! >> 8}.${words[6]! & 0xff}.${words[7]! >> 8}.${words[7]! & 0xff}`;
+  }
+  return `${words.slice(0, 4).map((w) => w.toString(16)).join(":")}::/64`;
+}
+
+/**
+ * IPv6 литерал → 8 үг (16 бит); хүчингүй бол undefined. node:net-гүй (edge runtime): hextet 1–4 hex, "::" дээд тал нь нэг,
+ * сүүлд нь IPv4 (4 аравтын октет, 0–255, тэргүүлэх тэггүй) байж болно.
+ */
+function ipv6Words(s: string): number[] | undefined {
+  if (!/^[0-9A-Fa-f:.]+$/.test(s) || s.split("::").length > 2) return undefined;
+  let tail: number[] = [];
+  const lastColon = s.lastIndexOf(":");
+  if (lastColon < 0) return undefined;
+  if (s.includes(".", lastColon)) {
+    const oct = s.slice(lastColon + 1).split(".");
+    if (oct.length !== 4 || !oct.every((o) => /^(0|[1-9][0-9]{0,2})$/.test(o) && Number(o) <= 255)) return undefined;
+    const v4 = oct.map(Number);
+    tail = [(v4[0]! << 8) | v4[1]!, (v4[2]! << 8) | v4[3]!];
+    s = s.slice(0, lastColon + 1) + "0:0";
+  }
+  const groups = (x: string): number[] | undefined => {
+    if (x === "") return [];
+    const g = x.split(":");
+    return g.every((h) => /^[0-9A-Fa-f]{1,4}$/.test(h)) ? g.map((h) => parseInt(h, 16)) : undefined;
+  };
+  const halves = s.split("::");
+  let words: number[] | undefined;
+  if (halves.length === 1) words = groups(s);
+  else {
+    const a = groups(halves[0]!);
+    const b = groups(halves[1]!);
+    if (!a || !b || a.length + b.length > 7) return undefined;
+    words = [...a, ...new Array<number>(8 - a.length - b.length).fill(0), ...b];
+  }
+  if (!words || words.length !== 8) return undefined;
+  if (tail.length) words = [...words.slice(0, 6), ...tail];
+  return words;
 }
 
 const sha256hex = (s: string) => createHash("sha256").update(s).digest("hex");
@@ -530,9 +613,10 @@ export function createEidLogin(opts: EidLoginOptions): EidLogin {
   const store = opts.store ?? memoryLoginStore();
   const ttl = opts.ttlMs ?? 120_000;
   const pollMs = opts.pollMs ?? 1000;
-  const cookieName = opts.cookie?.name ?? "eid_login";
   const cookiePath = opts.cookie?.path ?? "/";
   const secure = opts.cookie?.secure ?? true;
+  // "__Host-" угтвар зөвхөн хөтөч хүлээн авах нөхцөлд (Secure, Domain алга, Path=/) — 0.50.0-аас анхдагч.
+  const cookieName = opts.cookie?.name || (secure && !opts.cookie?.domain && cookiePath === "/" ? "__Host-eid_login" : "eid_login");
   const successRedirect = opts.successRedirect ?? "/";
   const failureRedirect = opts.failureRedirect ?? "/";
   const onError = opts.onError ?? ((e: unknown) => console.error("eid-login:", e instanceof Error ? e.message : e));
@@ -578,6 +662,15 @@ export function createEidLogin(opts: EidLoginOptions): EidLogin {
     if (d > 0) caTtl = d;
   }
   const pushKey = (idCode: string) => createHmac("sha256", auditKey).update(`eid-push-audit:${idCode}`).digest("hex").slice(0, 32);
+  /** handle(Request)-ээр getClientIp-тэй ирсэн хүсэлтүүд — IP эх үүсвэр тохируулсан (хоосон IP → start:unknown). */
+  const ipSourced = new WeakSet<EidLoginRequest>();
+  let warnedNoIp = false;
+  /** IP-ийн эх үүсвэр огт алга (req.ip, trustProxy, getClientIp үгүй) — start:<ip> хязгааргүй; нэг удаа onError. */
+  function warnNoIp(ctx: EidLoginContext) {
+    if (warnedNoIp) return;
+    warnedNoIp = true;
+    onError(new Error("eid-login: клиент IP алга — `start:<ip>` хязгаар ажиллахгүй; req.ip, trustProxy эсвэл getClientIp өг"), ctx);
+  }
 
   async function emit(kind: EidLoginEventKind, sessionId: string | null, meta: Record<string, unknown>, ctx: EidLoginContext) {
     if (!opts.onEvent) return;
@@ -755,9 +848,17 @@ export function createEidLogin(opts: EidLoginOptions): EidLogin {
       if (mode === "push") await emit("push_limited", null, { mode, pushKey: pushKey(idCode) }, ctx);
       return json(429, { error: "rate_limited" }, { "Retry-After": "60" });
     };
-    const ip = req.ip || (opts.trustProxy ? forwardedClientIp(req.headers, opts.trustProxy) : undefined);
-    if (ip && !(await rateLimit(`start:${ip}`))) return limited();
-    if (mode === "push" && !(await rateLimit(`push:${idCode}`))) return limited();
+    // start:<value> (Go startKey, Java EidLogin.startKey): IP эх үүсвэр (trustProxy / getClientIp) тохируулсан ч хоосон →
+    // нийтийн "unknown" bucket (0.50.0-аас; өмнө нь хязгааргүй); эх үүсвэр огт алга, req.ip ч алга → хязгааргүй (нэг удаа
+    // анхааруулна). IPv6 → /64.
+    const ip = (req.ip || (opts.trustProxy ? forwardedClientIp(req.headers, opts.trustProxy) : undefined) || "").trim();
+    let startKey: string | undefined;
+    if (ip) startKey = clientIpKey(ip);
+    else if (opts.trustProxy || ipSourced.has(req)) startKey = "unknown";
+    else warnNoIp(ctx);
+    if (startKey !== undefined && !(await rateLimit(`start:${startKey}`))) return limited();
+    // Түлхүүрт регистрийн дугаар биш аудитын HMAC (0.50.0-аас) — хязгаарлагчийн hook/Redis-д PII хадгалагдахгүй.
+    if (mode === "push" && !(await rateLimit(`push:${pushKey(idCode)}`))) return limited();
 
     const began = Date.now();
     let ttlMs = ttl;
@@ -932,20 +1033,15 @@ export function createEidLogin(opts: EidLoginOptions): EidLogin {
     return json(404, { error: "not_found" });
   }
 
-  let warnedNoIp = false;
   async function handle(req: Request): Promise<Response> {
     const headers: Record<string, string> = {};
     req.headers.forEach((v, k) => (headers[k] = v));
     const body = req.method === "POST" ? await req.text() : undefined;
     const ip = opts.getClientIp?.(req) || undefined;
-    if (!ip && !opts.getClientIp && !opts.trustProxy && !warnedNoIp) {
-      warnedNoIp = true;
-      onError(new Error("eid-login: handle(Request)-д клиент IP алга — `start:<ip>` хязгаар ажиллахгүй; getClientIp эсвэл trustProxy өг"), {
-        request: { method: req.method, url: req.url, headers },
-        mode: "qr",
-      });
-    }
-    const r = await handleRequest({ method: req.method, url: req.url, headers, body, ip, signal: req.signal });
+    const r0: EidLoginRequest = { method: req.method, url: req.url, headers, body, ip, signal: req.signal };
+    // getClientIp өгсөн бол хоосон хариу ч «эх үүсвэр тохируулсан» → start:unknown (start-д).
+    if (opts.getClientIp) ipSourced.add(r0);
+    const r = await handleRequest(r0);
     const h = new Headers();
     for (const [k, v] of Object.entries(r.headers)) for (const x of [v].flat()) h.append(k, x);
     return new Response(r.status === 302 || r.status === 303 || r.body === "" ? null : r.body, { status: r.status, headers: h });

@@ -45,7 +45,7 @@ It only uses the RP-API from §2/§4 (device link v3, push, `ResponseValidator`)
 
 | | Request | Response |
 |---|---|---|
-| `POST /auth/eid/start` | `{"mode":"qr"}` or `{"mode":"push","idCode":"УБ12345678"}` (JSON required) | `{mode, vc, qr?, expiresIn}` + `Set-Cookie: eid_login` |
+| `POST /auth/eid/start` | `{"mode":"qr"}` or `{"mode":"push","idCode":"УБ12345678"}` (JSON required) | `{mode, vc, qr?, expiresIn}` + `Set-Cookie: __Host-eid_login` |
 | `GET /auth/eid/start?mode=web2app` | mobile browser (button navigation) | `302` → eID app |
 | `GET /auth/eid/status` | cookie | `PENDING` (+ new `qr`, `expiresIn`) · `WAIT_CALLBACK` · `OK` (`redirect`, `data`) · `FAILED` (`error`) · `EXPIRED` |
 | `GET /auth/eid/callback` | the app returns: `?sessionId&userChallengeVerifier` | `303` → `onSuccess`'s `redirect` / `successRedirect`, on error `failureRedirect?eid_error=<code>` |
@@ -102,11 +102,11 @@ export const POST = (req: Request) => eidLogin.handle(req);
 If neither is set, no per-IP limiting is applied (a one-time warning goes to `onError` on the first request). With `handleRequest`, `req.ip` is used directly
 (Express `req.ip`, with `app.set("trust proxy", …)`). Go: `eidlogin.Config.ClientIP` (`eidlogin.ForwardedClientIP(n)`) — same rules.
 
-**Rate limiting** (`rateLimit`). Keys: `start:<ip>` (when the IP is known), `push:<idCode>`; when rejected: 429 + `Retry-After: 60`.
+**Rate limiting** (`rateLimit`). Keys: `start:<ip>` (when the IP is known; IPv6 → its `/64` prefix; with `trustProxy` / `getClientIp` configured but no IP → the shared `start:unknown` bucket), `push:<pushKey>` (since 0.50.0 the audit HMAC, never the id number); when rejected: 429 + `Retry-After: 60`.
 The default `defaultRateLimit` = `{ start: { limit: 20, windowMs: 60_000 }, push: { limit: 3, windowMs: 60_000 } }` — 20 starts per minute from one
 IP (since 0.19.0; when the IP is known — `req.ip` / `trustProxy`), 3 notifications per minute to one number
-(MFA fatigue). The in-memory limiter holds ≤ 10 000 keys per type: when full, it purges expired windows, and if it is still not empty
-it rejects a **new** key with 429 (fail-closed) — existing counters are never evicted, so the limit cannot be bypassed by
+(MFA fatigue). The in-memory limiter holds ≤ 10 000 keys per type: when full, it purges expired windows, and if it is still full (`maxKeys`)
+it counts **new** keys in one shared overflow bucket (since 0.50.0; before: 429) — existing counters are never evicted, so the limit cannot be bypassed by
 filling it with many IPs/numbers. `memoryLoginStore(max = 10_000)` behaves the same way: when full, start returns 503 `{ error: "busy" }`
 and does not delete logins already in progress. With multiple instances, use a Redis store/limiter.
 
@@ -251,7 +251,7 @@ the RP side needs no extra check. Sources: the eID CA's `docs/DEVICE_LINK_V3.md`
   5 digits — same shape as eID's), expiresIn}`, same cookie; `status` holds `PENDING` for `pollMs` without asking eID,
   then `EXPIRED` after the TTL — indistinguishable from a citizen who did not pick up their phone (a real push's CA `TIMEOUT` also becomes `EXPIRED`). Every push start response (real, decoy, 502)
   takes at least `pushFloorMs` (default 1000) — so the decoy cannot be told apart by timing (with `handle(Request)` it does not
-  wait if the request is aborted; with `handleRequest` pass a `signal`). The limits (`push:<idCode>`, `start:<ip>`) also apply to the decoy; the limiter's 429 and 400
+  wait if the request is aborted; with `handleRequest` pass a `signal`). The limits (`push:<pushKey>`, `start:<ip>`) also apply to the decoy; the limiter's 429 and 400
   (`invalid_id` — a format error, independent of registration) have no floor (eID's 429 and 503 `busy` do have it). eID's 5xx, connection errors, non-JSON 4xx (a proxy in front of
   eID, e.g. an mTLS rejection), 401/403 (the RP's secret/permission) and 429 are **not decoyed** — `502 eid_unavailable` / `429` (the eID
   portal's behaviour: hiding an outage behind a decoy would leave the citizen with an endless spinner; these do not depend on the number, so they are not

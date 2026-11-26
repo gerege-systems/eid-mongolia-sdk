@@ -219,7 +219,15 @@ export class ResponseValidator {
   constructor(trust: TrustConfig = {}) {
     this.anchors = (trust.trustAnchorsPem ?? []).map((p) => new X509Certificate(p));
     this.intermediates = (trust.intermediatesPem ?? CITIZEN_INTERMEDIATES_PEM).map((p) => new X509Certificate(p));
-    this.requiredLevel = trust.requiredLevel ?? "QUALIFIED";
+    // 0.50.0-аас: trust pool-ийн сул RSA түлхүүртэй CA, үл мэдэх requiredLevel — тохиргооны алдаа (.NET/Go-той ижил).
+    for (const [name, list] of [["trustAnchorsPem", this.anchors], ["intermediatesPem", this.intermediates]] as const) {
+      const weak = list.find((c) => weakRsaKey(c));
+      if (weak) throw new Error(`ResponseValidator: ${name}: RSA түлхүүр сул (< ${MIN_RSA_BITS} бит эсвэл буруу exponent; serial ${weak.serialNumber})`);
+    }
+    if (trust.requiredLevel && LEVEL_RANK[trust.requiredLevel] === undefined) {
+      throw new Error(`ResponseValidator: requiredLevel "${trust.requiredLevel}" үл мэдэх (ADVANCED | QUALIFIED | QSCD)`);
+    }
+    this.requiredLevel = trust.requiredLevel || "QUALIFIED";
     this.skew = trust.clockSkewMs ?? 0;
     this.allowUntrusted = trust.allowUntrusted ?? false;
     this.revocation = trust.revocation;
@@ -426,6 +434,7 @@ export class ResponseValidator {
       // X.509 биш хариу — хуурамч/эвдэрсэн хариу (ValidationError; дотоод алдаа биш — Go leafOf-той ижил).
       throw new ValidationError("Гэрчилгээ задарсангүй");
     }
+    checkLeafKeyAndSubject(leaf);
     this.checkValidity(leaf);
     this.verifyCertificate(leaf, protocol);
     const level = effectiveLevel(String(result.certificateLevel ?? ""), certificateLevelOf(leaf, protocol));
@@ -439,6 +448,7 @@ export class ResponseValidator {
    * @internal
    */
   verifyTokenAuthCertificate(leaf: X509Certificate): void {
+    checkLeafKeyAndSubject(leaf);
     this.checkValidity(leaf);
     this.verifyCertificate(leaf, "ACSP_V2");
   }
@@ -451,6 +461,7 @@ export class ResponseValidator {
    */
   verifyQrSigner(leaf: X509Certificate, nowMs: number, skewMs: number): X509Certificate | undefined {
     if (isCa(leaf)) throw new ValidationError("Гарын үсэгтний гэрчилгээ CA байна");
+    if (duplicateSubjectIdentity(leaf)) throw new ValidationError("Гарын үсэгтний гэрчилгээний subject-д SERIALNUMBER эсвэл CN давхардсан");
     if (this.anchors.length === 0) throw new ValidationError("Trust anchor тохируулаагүй");
     this.checkValidity(leaf, nowMs, skewMs);
     if (!(keyUsageBits(leaf) & 0x40)) throw new ValidationError("Гарын үсгийн гэрчилгээнд KeyUsage nonRepudiation (contentCommitment) алга");
@@ -495,11 +506,16 @@ export class ResponseValidator {
     if (!(ku & 0x40)) throw new ValidationError("Гарын үсгийн гэрчилгээнд KeyUsage nonRepudiation (contentCommitment) алга");
   }
 
-  /** allowedIssuerSkis үед leaf-ийн шууд issuer-ийн SKI (issuer-т алга бол leaf-ийн AKI) жагсаалтад байх ёстой. */
+  /**
+   * allowedIssuerSkis үед leaf-ийн шууд issuer-ийн түлхүүрийн танигч жагсаалтад байх ёстой. 0.50.0-аас issuer trust
+   * pool-оос олдвол ЗӨВХӨН түүний SKI (SKI extension-гүй бол RFC 5280 арга 1-ээр тооцсон) — leaf-ийн өөрөө бичсэн AKI-д
+   * итгэхгүй (SKI-гүй CA-ийн доорх leaf AKI-гаа зөвшөөрөгдсөн SKI болгож allowlist-ийг тойрч болдог байв). Leaf-ийн AKI
+   * зөвхөн issuer олдоогүй үед (allowUntrusted).
+   */
   private checkIssuer(leaf: X509Certificate): void {
     if (!this.allowedIssuers) return;
     const issuer = this.findIssuer(leaf);
-    const ski = (issuer && subjectKeyId(issuer)) ?? authorityKeyId(leaf);
+    const ski = issuer ? issuerKeyId(issuer) : authorityKeyId(leaf);
     if (!ski || !this.allowedIssuers.has(ski)) {
       throw new ValidationError("Гэрчилгээг гаргасан CA зөвшөөрөгдсөн иргэний issuer биш (allowedIssuerSkis)");
     }
@@ -515,7 +531,8 @@ export class ResponseValidator {
   private checkLevel(level: string): void {
     // Дараалал ADVANCED < QUALIFIED < QSCD: шаардсанаас дээш түвшнийг хүлээн авна (QSCD нь QUALIFIED-ийг хангана).
     const got = LEVEL_RANK[level] ?? 0;
-    const need = LEVEL_RANK[this.requiredLevel] ?? 2;
+    const need = LEVEL_RANK[this.requiredLevel];
+    if (need === undefined) throw new ValidationError(`requiredLevel ${this.requiredLevel} үл мэдэх`);
     if (got < need) throw new ValidationError(`Гэрчилгээний түвшин хүрэлцэхгүй: ${level} < ${this.requiredLevel}`);
   }
 
@@ -557,9 +574,8 @@ export class ResponseValidator {
 
   /** leaf-ийн шууд issuer-ийг trust pool-оос буцаана (revocation шалгагчид issuer хэрэгтэй). */
   private findIssuer(leaf: X509Certificate): X509Certificate | undefined {
-    return [...this.intermediates, ...this.anchors].find(
-      (c) => isCa(c) && leaf.checkIssued(c) && leaf.verify(c.publicKey),
-    );
+    // signedBy: нэр, AKI/SKI, гарын үсгийн алгоритм (SHA-1/MD5 үгүй), гарын үсэг — verifyChain-тай ижил дүрэм.
+    return [...this.intermediates, ...this.anchors].find((c) => isCa(c) && signedBy(leaf, c));
   }
 
   /**
@@ -910,9 +926,162 @@ const HANDLED_CRITICAL = new Set([
   "1.3.6.1.5.5.7.1.1", // authorityInfoAccess
 ]);
 
-/** child-ийг cand гаргасан эсэх: issuer нэр = subject, AKI/SKI (хоёулаа байвал) таарах, гарын үсэг. */
+// ── 0.50.0 хатуужуулалт (rp-conformance/2; Go validator.go weakRSAKey / duplicateSubjectIdentity / issuerKeyID) ──
+
+/** SDK-ийн хүлээн авах хамгийн бага RSA modulus (иргэн, CA, OCSP responder). */
+const MIN_RSA_BITS = 2048;
+
+/** tbsCertificate-ийн талбарууд: serial, signature, issuer, validity, subject, spki, … ([0] version-гүй). */
+function tbsFields(der: Uint8Array): { tag: number; start: number; end: number; tlvStart: number }[] {
+  const top = tlv(der, 0, der.length);
+  const tbs = tlv(der, top.start, top.end);
+  const out: { tag: number; start: number; end: number; tlvStart: number }[] = [];
+  for (let p = tbs.start; p < tbs.end; ) {
+    const t = tlv(der, p, tbs.end);
+    if (!(out.length === 0 && t.tag === 0xa0)) out.push({ ...t, tlvStart: p });
+    p = t.end;
+  }
+  return out;
+}
+
+/** SubjectPublicKeyInfo: algorithm OID ба subjectPublicKey BIT STRING-ийн агуулга (unused-bits байтгүй). */
+function spkiOf(der: Uint8Array): { alg: string; key: Uint8Array } {
+  const spki = tbsFields(der)[5]!;
+  const algSeq = tlv(der, spki.start, spki.end);
+  const bits = tlv(der, algSeq.end, spki.end);
+  if (bits.tag !== 0x03 || bits.end <= bits.start) throw new ValidationError("Гэрчилгээ задарсангүй (subjectPublicKey)");
+  return { alg: oidOf(der, tlv(der, algSeq.start, algSeq.end)), key: der.subarray(bits.start + 1, bits.end) };
+}
+
+const bigOf = (b: Uint8Array): bigint => (b.length ? BigInt("0x" + Buffer.from(b).toString("hex")) : 0n);
+
+/**
+ * RSA түлхүүр сул: modulus < 2048 бит, эсвэл public exponent тэгш / < 3 (.NET v0.17.0 `cert.weak_key`, Go `weakRSAKey`).
+ * RSA бус түлхүүр → false. DER-ээс шууд уншина (сул exponent-тэй түлхүүрийг node:crypto импортлохгүй байж болно).
+ * @internal
+ */
+export function weakRsaKey(cert: X509Certificate | Uint8Array): boolean {
+  const der = cert instanceof Uint8Array ? cert : new Uint8Array(cert.raw);
+  const { alg, key } = spkiOf(der);
+  if (alg !== "1.2.840.113549.1.1.1" && alg !== "1.2.840.113549.1.1.10") return false;
+  const seq = tlv(key, 0, key.length);
+  const n = tlv(key, seq.start, seq.end);
+  const e = tlv(key, n.end, seq.end);
+  if (n.tag !== 0x02 || e.tag !== 0x02) return true;
+  const nv = bigOf(key.subarray(n.start, n.end));
+  const ev = bigOf(key.subarray(e.start, e.end));
+  return nv.toString(2).length < MIN_RSA_BITS || nv <= 0n || ev < 3n || ev % 2n === 0n;
+}
+
+/**
+ * Subject-д SERIALNUMBER (2.5.4.5) эсвэл CN (2.5.4.3) нэгээс олон (бүх RDN-ийн бүх atv, утгын төрлөөс үл хамааран) —
+ * SDK-ууд олон утгатай атрибутаас өөр өөр утга авч болох тул татгалзана (`subject.duplicate_identity`).
+ */
+function duplicateSubjectIdentity(cert: X509Certificate): boolean {
+  const der = new Uint8Array(cert.raw);
+  const name = tbsFields(der)[4]!;
+  let cn = 0;
+  let sn = 0;
+  for (let sp = name.start; sp < name.end; ) {
+    const rdn = tlv(der, sp, name.end);
+    for (let ap = rdn.start; ap < rdn.end; ) {
+      const atv = tlv(der, ap, rdn.end);
+      const oid = oidOf(der, tlv(der, atv.start, atv.end));
+      if (oid === "2.5.4.3") cn++;
+      if (oid === "2.5.4.5") sn++;
+      ap = atv.end;
+    }
+    sp = rdn.end;
+  }
+  return cn > 1 || sn > 1;
+}
+
+/** Иргэний гэрчилгээг задалсны дараах эхний шалгалт (Go checkLeafKeyAndSubject; .NET-тэй ижил дараалал). */
+function checkLeafKeyAndSubject(leaf: X509Certificate): void {
+  if (weakRsaKey(leaf)) {
+    throw new ValidationError(`Гэрчилгээний RSA түлхүүр сул (< ${MIN_RSA_BITS} бит эсвэл буруу exponent; serial ${leaf.serialNumber})`);
+  }
+  if (duplicateSubjectIdentity(leaf)) {
+    throw new ValidationError(`Гэрчилгээний subject-д SERIALNUMBER эсвэл CN давхардсан (serial ${leaf.serialNumber})`);
+  }
+}
+
+/** CA-ийн түлхүүрийн танигч: SKI, алга бол RFC 5280 §4.2.1.2 арга 1 — SHA-1(subjectPublicKey BIT STRING). */
+function issuerKeyId(ca: X509Certificate): string {
+  return subjectKeyId(ca) ?? createHash("sha1").update(spkiOf(new Uint8Array(ca.raw)).key).digest("hex");
+}
+
+const HASH_OIDS: Record<string, number> = {
+  "2.16.840.1.101.3.4.2.1": 32, // SHA-256
+  "2.16.840.1.101.3.4.2.2": 48, // SHA-384
+  "2.16.840.1.101.3.4.2.3": 64, // SHA-512
+};
+/** Гинжийн гарын үсэгт зөвшөөрөх алгоритм (Go crypto/x509 CheckSignatureFrom-той ижил; SHA-1, MD5 үгүй). */
+const CERT_SIG_ALGS = new Set([
+  "1.2.840.113549.1.1.11", // sha256WithRSAEncryption
+  "1.2.840.113549.1.1.12", // sha384WithRSAEncryption
+  "1.2.840.113549.1.1.13", // sha512WithRSAEncryption
+  "1.2.840.10045.4.3.2", // ecdsa-with-SHA256
+  "1.2.840.10045.4.3.3", // ecdsa-with-SHA384
+  "1.2.840.10045.4.3.4", // ecdsa-with-SHA512
+  "1.3.101.112", // Ed25519
+]);
+
+/**
+ * Гэрчилгээний (outer) signatureAlgorithm хүлээн авах эсэх: SHA-256/384/512-тай RSA/ECDSA, Ed25519, RSASSA-PSS
+ * (hash SHA-256/384/512, MGF1 ижил hash, saltLength = hLen, trailerField 1 — Go x509-тэй ижил). SHA-1, MD5 → false.
+ */
+function certSigAlgAllowed(cert: X509Certificate): boolean {
+  try {
+    const der = new Uint8Array(cert.raw);
+    const top = tlv(der, 0, der.length);
+    const tbs = tlv(der, top.start, top.end);
+    const alg = tlv(der, tbs.end, top.end);
+    const id = tlv(der, alg.start, alg.end);
+    const oid = oidOf(der, id);
+    if (CERT_SIG_ALGS.has(oid)) return true;
+    if (oid !== "1.2.840.113549.1.1.10" || id.end >= alg.end) return false;
+    const params = tlv(der, id.end, alg.end);
+    let hash: string | undefined;
+    let mgfHash: string | undefined;
+    let salt = 20;
+    let trailer = 1;
+    for (let p = params.start; p < params.end; ) {
+      const f = tlv(der, p, params.end);
+      const inner = tlv(der, f.start, f.end);
+      if (f.tag === 0xa0) hash = oidOf(der, tlv(der, inner.start, inner.end));
+      else if (f.tag === 0xa1) {
+        const mgfOid = tlv(der, inner.start, inner.end);
+        if (oidOf(der, mgfOid) !== "1.2.840.113549.1.1.8") return false;
+        const h = tlv(der, mgfOid.end, inner.end);
+        mgfHash = oidOf(der, tlv(der, h.start, h.end));
+      } else if (f.tag === 0xa2) salt = Number(bigOf(der.subarray(inner.start, inner.end)));
+      else if (f.tag === 0xa3) trailer = Number(bigOf(der.subarray(inner.start, inner.end)));
+      p = f.end;
+    }
+    return hash !== undefined && HASH_OIDS[hash] !== undefined && mgfHash === hash && salt === HASH_OIDS[hash] && trailer === 1;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * child-ийг parent гаргасан эсэх (OCSP checker-т; Go `issuedBy`): parent нь CA, сул RSA түлхүүргүй, нэр/AKI/SKI, гарын
+ * үсгийн алгоритм, гарын үсэг.
+ * @internal
+ */
+export function issuedByCa(child: X509Certificate, parent: X509Certificate): boolean {
+  try {
+    return isCa(parent) && !weakRsaKey(parent) && signedBy(child, parent);
+  } catch {
+    return false;
+  }
+}
+
+/** child-ийг cand гаргасан эсэх: issuer нэр = subject, AKI/SKI (хоёулаа байвал) таарах, гарын үсгийн алгоритм, гарын үсэг. */
 function signedBy(child: X509Certificate, cand: X509Certificate): boolean {
   if (child.issuer !== cand.subject) return false;
+  if (!certSigAlgAllowed(child)) return false;
   const aki = authorityKeyId(child);
   const ski = subjectKeyId(cand);
   if (aki && ski && aki !== ski) return false;

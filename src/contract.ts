@@ -118,12 +118,17 @@ export const SEAL_GRANT_REQUEST_FIELDS = ["orgEtsi", "sessionId"] as const;
 
 export const SHARE_FORM_FIELDS = ["file", "filename", "to", "subject", "message", "lang"] as const;
 
-/** Template-ийн `{param}`-уудыг дарааллаар нь `encodeURIComponent` хийсэн `args`-аар орлуулна. */
+/**
+ * Template-ийн `{param}`-уудыг дарааллаар нь `encodeURIComponent` хийсэн `args`-аар орлуулна. 0.50.0-аас хоосон, "." эсвэл
+ * ".." параметр → Error (хүсэлт илгээхгүй): `encodeURIComponent` цэгүүдийг хэвээр үлдээдэг тул `/session/..` өөр endpoint
+ * болж задрах байсан. Go `ErrInvalidPathParameter`-тэй ижил.
+ */
 export function routePath(route: RpRoute, ...args: string[]): string {
   let i = 0;
   const out = route.path.replace(/\{[^}]*\}/g, () => {
     const a = args[i++];
     if (a === undefined) throw new Error(`eid: route ${route.path}: параметр дутуу`);
+    if (a === "" || a === "." || a === "..") throw new Error(`eid: route ${route.path}: замын параметр хоосон, «.» эсвэл «..» байж болохгүй`);
     return encodeURIComponent(a);
   });
   if (i !== args.length) throw new Error(`eid: route ${route.path}: параметр илүү`);
