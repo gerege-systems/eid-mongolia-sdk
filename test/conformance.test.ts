@@ -1,4 +1,4 @@
-// RP SDK conformance корпус (rp-conformance/1) — Go reference-ийн testdata/conformance-ийн хуулбар
+// RP SDK conformance корпус (rp-conformance/2) — Go reference-ийн testdata/conformance-ийн хуулбар
 // (scripts/sync-rp-conformance.mjs). Формат: test/fixtures/conformance/README.md. Мессежийн текст корпуст орохгүй —
 // алдааг REASONS хүснэгтээр тогтвортой reason key болгож харьцуулна.
 import { test } from "node:test";
@@ -33,7 +33,7 @@ type Obj = Record<string, any>;
 
 test("conformance: manifest — файл бүрийн sha256, devicelink/myqr pin", () => {
   const m = load("manifest.json");
-  assert.equal(m.version, "rp-conformance/1");
+  assert.equal(m.version, "rp-conformance/2");
   for (const [rel, sum] of Object.entries(m.files as Record<string, string>)) {
     assert.equal(createHash("sha256").update(read(rel)).digest("hex"), sum, rel);
   }
@@ -50,6 +50,8 @@ const REASONS: [RegExp, string][] = [
   [/хариунд гарын үсэг алга/iu, "response.no_signature"],
   [/documentNumber алга/iu, "response.no_document_number"],
   [/гэрчилгээ (задарсангүй|base64 буруу)/iu, "cert.malformed"],
+  [/RSA түлхүүр сул/iu, "cert.weak_key"],
+  [/SERIALNUMBER эсвэл CN давхардсан/iu, "subject.duplicate_identity"],
   [/гинжийн гэрчилгээний хугацаа/iu, "chain.expired"],
   [/хүчинтэй болоогүй/iu, "cert.not_yet_valid"],
   [/гэрчилгээний хугацаа дууссан/iu, "cert.expired"],
@@ -411,6 +413,7 @@ function checkStep(e: Obj, r: Res, all: Res[]) {
     assert.ok(c, "Set-Cookie алга");
     if (e.setCookie.cleared) assert.ok(c[""] === "" && c["max-age"] === "0", `cookie цэвэрлэгдээгүй ${JSON.stringify(c)}`);
     if (e.setCookie.value !== undefined) match(e.setCookie.value, c[""], all, "cookie value");
+    for (const k of (e.setCookie.absentAttributes ?? []) as string[]) assert.ok(!(k.toLowerCase() in c), `cookie ${k} байх ёсгүй`);
     for (const [k, v] of Object.entries((e.setCookie.attributes ?? {}) as Obj)) {
       if (v === true) assert.ok(k.toLowerCase() in c, `cookie ${k}`);
       else match(v, c[k.toLowerCase()], all, `cookie ${k}`);
@@ -441,6 +444,13 @@ test("conformance: eidlogin scenarios", async () => {
       credentials: { rpUUID: cfg.rpUUID, rpName: cfg.rpName, apiSecret: cfg.apiSecret } });
     const events: EidLoginEvent[] = [];
     const keys: string[] = [];
+    // wireCookieName — хөтчийн харах нэр (cookieName "" = SDK-ийн анхдагч, README §eidlogin).
+    const wire: string = cfg.wireCookieName || cfg.cookieName;
+    const rateLimits = cfg.rateLimits
+      ? Object.fromEntries(Object.entries(cfg.rateLimits as Record<string, Obj>).map(([k, r]) =>
+        [k, { limit: r.max, windowMs: r.windowSeconds * 1000, ...(r.maxKeys ? { maxKeys: r.maxKeys } : {}) }]))
+      : undefined;
+    const ipSource = cfg.clientIp !== "none"; // эх үүсвэр: trustProxy (X-Real-IP)
     const login = createEidLogin({
       client,
       onSuccess: () => ({ redirect: "/dashboard" }),
@@ -450,11 +460,18 @@ test("conformance: eidlogin scenarios", async () => {
       ttlMs: cfg.ttlSeconds * 1000,
       pollMs: cfg.pollMs,
       pushFloorMs: cfg.pushFloorMs,
-      cookie: { name: cfg.cookieName },
+      cookie: {
+        ...(cfg.cookieName ? { name: cfg.cookieName } : {}),
+        ...(cfg.cookieDomain ? { domain: cfg.cookieDomain } : {}),
+        ...(cfg.cookiePath ? { path: cfg.cookiePath } : {}),
+      },
       ...(cfg.revocation === "disabled" ? { revocation: false } : {}),
       decoy: cfg.decoy !== false,
       onError: () => {},
       onEvent: (e) => void events.push(e),
+      ...(ipSource ? { trustProxy: 1 } : {}),
+      ...(cfg.auditKeyHex ? { auditKey: Buffer.from(cfg.auditKeyHex, "hex") } : {}),
+      ...(rateLimits ? { rateLimit: rateLimits } : {}),
       ...(cfg.recordRateLimitKeys ? { rateLimit: async (k: string) => (keys.push(k), true) } : {}),
     });
     const results: Res[] = [];
@@ -466,15 +483,19 @@ test("conformance: eidlogin scenarios", async () => {
           const headers: Record<string, string> = {};
           if (q.json !== undefined) headers["content-type"] = "application/json";
           for (const [k, v] of Object.entries((q.headers ?? {}) as Record<string, string>)) headers[k.toLowerCase()] = v;
-          if (q.cookieFrom !== undefined && results[q.cookieFrom]?.cookie) headers.cookie = `${cfg.cookieName}=${results[q.cookieFrom]!.cookie![""]}`;
+          if (q.cookieFrom !== undefined && results[q.cookieFrom]?.cookie) {
+            const pair = `${wire}=${results[q.cookieFrom]!.cookie![""]}`;
+            headers.cookie = q.cookieHeader ? String(q.cookieHeader).split("$cookieFrom").join(pair) : pair;
+          }
+          if (q.ip && ipSource) headers["x-real-ip"] = q.ip;
           const req: EidLoginRequest = { method: q.method, url: q.path, headers,
-            ...(q.json !== undefined ? { body: q.json } : q.text !== undefined ? { body: q.text } : {}), ...(q.ip ? { ip: q.ip } : {}) };
+            ...(q.json !== undefined ? { body: q.json } : q.text !== undefined ? { body: q.text } : {}) };
           const res = await login.handleRequest(req);
           const h: Record<string, string[]> = {};
           for (const [k, v] of Object.entries(res.headers)) h[k.toLowerCase()] = [v].flat();
           const r: Res = { status: res.status, headers: h };
           if ((h["content-type"]?.[0] ?? "").startsWith("application/json")) r.json = JSON.parse(res.body);
-          const sc0 = (h["set-cookie"] ?? []).find((x) => x.startsWith(`${cfg.cookieName}=`));
+          const sc0 = (h["set-cookie"] ?? []).find((x) => x.startsWith(`${wire}=`));
           if (sc0) r.cookie = parseCookie(sc0);
           results[i] = r;
           try {

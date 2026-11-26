@@ -20,6 +20,7 @@ import {
   type RevocationChecker,
   type RevocationStatus,
   type TrustConfig,
+  weakRsaKey,
 } from "./validator.js";
 
 /** Иргэний аппын QR-ийн угтвар: `EIDMN-QR1:<token>`. */
@@ -289,6 +290,18 @@ export async function verifyQrPresentation(jws: string, expect: QrExpect, trust:
 
   // 4. гинж (x5c[1] — зөвхөн завсрын нэр дэвшигч, хэзээ ч anchor биш)
   const nowMs = (expect.now ?? new Date()).getTime();
+  // x5c[1] сул RSA түлхүүртэй бол ResponseValidator үүсгэх нь алдаа (0.50.0-аас) — QR_CHAIN_INVALID.
+  const weak = (c: X509Certificate) => {
+    try {
+      return weakRsaKey(c);
+    } catch {
+      return true;
+    }
+  };
+  if (weak(certs[1]!)) throw fail("QR_CHAIN_INVALID", "x5c[1]-ийн RSA түлхүүр сул");
+  if (weak(leaf) || !["rsa", "rsa-pss"].includes(leaf.publicKey.asymmetricKeyType ?? "")) {
+    throw fail("QR_CHAIN_INVALID", "гарын үсэгтний түлхүүр RSA ≥ 2048 биш (эсвэл exponent буруу)");
+  }
   const validator = new ResponseValidator({
     ...trust,
     trustAnchorsPem: trust.trustAnchorsPem?.length ? trust.trustAnchorsPem : [NATIONAL_ROOT_CA_PEM],
@@ -301,10 +314,6 @@ export async function verifyQrPresentation(jws: string, expect: QrExpect, trust:
     issuer = validator.verifyQrSigner(leaf, nowMs, QR_CLOCK_SKEW_SECONDS * 1000);
   } catch (e) {
     throw fail("QR_CHAIN_INVALID", e instanceof Error ? e.message : "гинж хүчингүй");
-  }
-  const kt = leaf.publicKey.asymmetricKeyType;
-  if ((kt !== "rsa" && kt !== "rsa-pss") || (leaf.publicKey.asymmetricKeyDetails?.modulusLength ?? 0) < 2048) {
-    throw fail("QR_CHAIN_INVALID", "гарын үсэгтний түлхүүр RSA ≥ 2048 биш");
   }
 
   // 5. цуцлалт

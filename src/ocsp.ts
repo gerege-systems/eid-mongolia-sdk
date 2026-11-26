@@ -5,8 +5,9 @@ import type { X509Certificate } from "node:crypto";
 import { createHash } from "node:crypto";
 import { intValue } from "./pades/asn1.js";
 import { ocspRequest, parseOCSPFrom, sameCertKey } from "./pades/ltv.js";
+import { ocspCertIDMatches } from "./pades/revocation.js";
 import { OID, parseCertificate, type Certificate } from "./pades/x509.js";
-import type { RevocationChecker, RevocationStatus } from "./validator.js";
+import { issuedByCa, weakRsaKey, type RevocationChecker, type RevocationStatus } from "./validator.js";
 
 export interface OcspCheckerOptions {
   /** fetch (тест/proxy). Анхдагч globalThis.fetch. Redirect дагахгүй ("manual"). */
@@ -34,7 +35,9 @@ const MAX_AGE_MS = 48 * 3600_000;
  *   `revocationMode` шийднэ: soft-fail — зөвшөөрнө ("unchecked"), hard-fail — татгалзана.
  *
  * Хариуг олгогч эсвэл олгогчийн id-kp-OCSPSigning EKU-тэй (одоо хүчинтэй) responder зурсан, энэ serial-ийн тухай,
- * thisUpdate ∈ [now−48ц, now+5мин], nextUpdate өнгөрөөгүй байх ёстой.
+ * thisUpdate ∈ [now−48ц, now+5мин], nextUpdate өнгөрөөгүй байх ёстой. 0.50.0-аас: issuer нь гэрчилгээг гаргаагүй (эсвэл
+ * сул RSA түлхүүртэй) бол кэш/сүлжээнээс өмнө "unknown"; хариуны CertID (issuerNameHash/issuerKeyHash, SHA-1/256/384/512)
+ * issuer-ийнхтэй таарахгүй, эсвэл delegated responder-ийн RSA < 2048 бол хариуг хүлээн авахгүй.
  */
 export function ocspRevocationChecker(opts: OcspCheckerOptions = {}): RevocationChecker {
   const doFetch = opts.fetchImpl ?? globalThis.fetch;
@@ -69,7 +72,10 @@ export function ocspRevocationChecker(opts: OcspCheckerOptions = {}): Revocation
         if (rc && !sameCertKey(rc, issuer)) {
           if (!rc.extKeyUsage.includes(OID.kpOCSPSigning)) continue;
           if (t < rc.notBefore.getTime() || t > rc.notAfter.getTime()) continue;
+          if (weakRsaKey(rc.raw)) continue; // 0.50.0-аас: responder-ийн RSA < 2048 / буруу exponent
         }
+        // 0.50.0-аас: serial-аар сонгосон хариуны CertID (issuerNameHash/issuerKeyHash) энэ issuer-ийнх байх ёстой.
+        if (!(await ocspCertIDMatches(der, leaf, issuer))) continue;
         const tu = resp.thisUpdate.date.getTime();
         if (tu > t + CLOCK_SKEW_MS || tu < t - MAX_AGE_MS) continue;
         if (resp.nextUpdate && resp.nextUpdate.getTime() < t) continue;
@@ -90,6 +96,9 @@ export function ocspRevocationChecker(opts: OcspCheckerOptions = {}): Revocation
     } catch {
       return "unknown";
     }
+    // 0.50.0-аас (Go/.NET/Java-тай ижил): өгсөн issuer энэ гэрчилгээг гаргасан эсэхийг кэш ба сүлжээнээс ӨМНӨ шалгана —
+    // буруу issuer өөр хэн нэгний CertID-д холбогдсон «good» авахгүй.
+    if (!issuedByCa(cert, issuer)) return "unknown";
     const key = createHash("sha256").update(issuer.raw).digest("hex").slice(0, 16) + ":" + cert.serialNumber;
     const exp = cache.get(key);
     if (exp !== undefined && now() < exp) return "good";
