@@ -4,8 +4,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { DEFAULT_BASE_URL, PDF_REGISTER_ERROR_CODES, SEAL_ERROR_CODES, SEAL_GRANT_ERROR_CODES } from "../dist/index.js";
-import { PDF_SIGNATURE_REGISTER_FIELDS, RP_ROUTES, RP_ROUTES_UNDISCOVERED, SHARE_FORM_FIELDS } from "../src/contract.ts";
+import { DEFAULT_BASE_URL, PDF_REGISTER_ERROR_CODES, SEAL_ERROR_CODES, SEAL_GRANT_ERROR_CODES, SEAL_REGISTER_ERROR_CODES } from "../dist/index.js";
+import { PDF_SIGNATURE_REGISTER_FIELDS, RP_ROUTES, RP_ROUTES_UNDISCOVERED, SEAL_REGISTER_FIELDS, SEAL_RESERVATION_FIELDS, SHARE_FORM_FIELDS } from "../src/contract.ts";
 
 const EID_DISCOVERY = "https://rp.eidmongolia.mn/.well-known/eid";
 
@@ -184,4 +184,24 @@ test("PAdES клиент тал: pdfSigning.registerErrorCodes == SDK PDF_REGIST
   const codes = ((d.pdfSigning ?? {}) as { registerErrorCodes?: unknown }).registerErrorCodes;
   assert.ok(Array.isArray(codes) && codes.every((c) => typeof c === "string"), "registerErrorCodes мөрийн массив биш");
   assert.deepEqual([...new Set(codes as string[])].sort(), [...PDF_REGISTER_ERROR_CODES].sort(), "CA ↔ SDK кодын олонлог зөрсөн");
+});
+
+// CA V158 (PR #78, 2026-11-25): endpoints.seal.registration (замын дараах {талбарууд} = SEAL_REGISTER_FIELDS),
+// seal.registerErrorCodes == SEAL_REGISTER_ERROR_CODES (олонлогоор), endpoints.seal.seal нь {docId, revIndex} нөөцийг
+// зарласан (SEAL_RESERVATION_FIELDS, sealForDocument). Go TestContractSealRegistration-тэй ижил.
+test("Seal registration: endpoints.seal.registration-ийн талбарууд, seal.registerErrorCodes, {docId, revIndex} нөөц", async () => {
+  const d = await getJson(EID_DISCOVERY);
+  const base = String(d.rp_api_base);
+  const eps = (((d.endpoints ?? {}) as Record<string, unknown>).seal ?? {}) as Record<string, unknown>;
+  const desc = String(eps.registration ?? "");
+  const lead = `POST ${base}${RP_ROUTES.sealRegistrations.path} `;
+  assert.ok(desc.startsWith(lead), `endpoints.seal.registration: ${desc}`);
+  const m = /\{([^}]*)\}/.exec(desc.slice(lead.length)); // замын {orgEtsi}-ийн дараах эхний {…}
+  assert.ok(m, "endpoints.seal.registration-д {талбарууд} алга");
+  const live = m[1]!.split(",").map((x) => x.trim().replace(/\?$/, "")).filter(Boolean).sort();
+  assert.deepEqual(live, [...SEAL_REGISTER_FIELDS].sort(), "SDK-ийн бие ↔ CA dto.SealRegisterRequest");
+  assert.ok(String(eps.seal ?? "").includes(`{${SEAL_RESERVATION_FIELDS.join(", ")}}`), `endpoints.seal.seal-д нөөц алга: ${eps.seal}`);
+  const codes = ((d.seal ?? {}) as { registerErrorCodes?: unknown }).registerErrorCodes;
+  assert.ok(Array.isArray(codes) && codes.every((c) => typeof c === "string"), "seal.registerErrorCodes мөрийн массив биш");
+  assert.deepEqual([...new Set(codes as string[])].sort(), [...SEAL_REGISTER_ERROR_CODES].sort(), "CA ↔ SDK тамганы бүртгэлийн кодын олонлог зөрсөн");
 });

@@ -1035,8 +1035,8 @@ writeFileSync("sealed.pdf", done.pdf); // PAdES-BASELINE-LT, with the organizati
   the 32-byte DTBS to `eid.seal.seal(org, dtbs, "SHA-256")` (`POST /seal/{orgEtsi}`, `{digest, hashType}`) → `complete`.
   The PDF does not go to eID.
 - **An RFC 3161 timestamp is required** (the eID TSA, `complete.tsaUrl`): if the TSA is unreachable, `TSA_UNAVAILABLE`, and a file
-  without a timestamp is never returned; OCSP/CRL + DSS → B-LT. There is no verification (QR) page — a seal does not enter the citizen signature
-  registry (`registerSignature`), so no `/verify/{docId}` link is provided.
+  without a timestamp is never returned; OCSP/CRL + DSS → B-LT. No verification page is added; registering the seal on
+  `/verify/{docId}` — see «Registering the seal» below.
 - The verifier (`validatePdf`, the CA's `/v3/validate/pdf`) classifies this signature as `certificate.usage: "seal"` — show it to users
   as an "Organization seal".
 - **The visible seal stamp — `sealPdf`'s default CHANGED** (APPEARANCE_SPEC.md §6.4, the same as Go's `SealPDF`):
@@ -1058,9 +1058,9 @@ writeFileSync("sealed.pdf", done.pdf); // PAdES-BASELINE-LT, with the organizati
   also accepts a seal stamp with a QR: if the e-Seal certificate's form stream starts with `/EIDVerify`, it is regenerated and compared with the same
   structure as the citizen stamp (QR, the `/EIDVerify` BDC, the URL's rev/docId check) as a stamp with the "eID Mongolia-аар тамгалсан" ("Sealed with eID Mongolia") label and no role line;
   if it does not start with it, as a stamp without a QR. The marker decides the variant — the other one is not tried, and on a mismatch
-  the earlier signatures become `modified_after_signing`. **Writers still emit the stamp without a QR:** `sealPdf`
-  and `prepare` have no public option to produce a seal with a QR (`sealPdf`'s output is byte-identical to 0.48.x); a stamp without a QR
-  stays valid forever. No writer will emit a seal with a QR until the CA validator and the `/verify` bundle ship §6.5.
+  the earlier signatures become `modified_after_signing`. **By default writers still emit the stamp without a QR** (`sealPdf`'s
+  default output is byte-identical to 0.48.x; `prepare` stays QR-less); the QR stamp is `sealPdf({qr: true})` together with
+  seal registration (below). A stamp without a QR stays valid forever.
 - **`prepare`'s docId (APPEARANCE_SPEC.md §6.6):** if a signed document has no verify-page link, it takes the docId of the earliest-signed
   `/EIDVerify` stamp among the verified **e-Seal** signatures (the marker's rev = that signature's
   order, `/V` not indirect, a single widget per signature, `/Filter` absent or a direct `null`); a citizen stamp never becomes
@@ -1081,6 +1081,40 @@ writeFileSync("sealed.pdf", done.pdf); // PAdES-BASELINE-LT, with the organizati
   a new one; if not issued / revoked / outside the validity period, **409** (`SealNotIssuedError` | `SealCertRevokedError` |
   `SealCertExpiredError` | `SealCertNotYetValidError`) — an invalid certificate is never returned with 200. Go: `pades.SealPDF`; .NET:
   `EidPades.SealAsync`.
+
+### Registering the seal with the CA — `eid.seal.registerSealedPdf`, the QR stamp (Unreleased, CA V158)
+
+```ts
+const done = await sealPdf(eid.seal, org, pdfBytes, { qr: true, fileName: "Invoice.pdf" });
+// done.pdf — stamp with QR (/verify/<docId>/<revIndex>); done.sealRegistration — the ready registration body
+const reg = await eid.seal.registerSealedPdf(org, done.sealRegistration!);
+// reg.verifyUrl — https://ca.eidmongolia.mn/verify/<docID>; reg.created: 201 true, replay of the same body 200 false
+```
+
+- `POST /seal/{orgEtsi}/registrations` (`SEAL:<orgEtsi>`): shows the seal on `/verify/{docID}` as an organisation row (no
+  person's name) — the seal counterpart of the citizen `eid.sign.registerSignature`. Body (`SealRegisterInput`,
+  `SEAL_REGISTER_FIELDS`): `docID, revIndex, cms, fileName?, inSha256, sigRevSha256, outSha256, priorCmsSha256?,
+  priorRevisionSha256?` — **no** `medium`, `sessionID`, `onBehalfOf`, `signerEtsi`, `pageSha256`. `buildSealRegisterBody`
+  checks the CA's format rules offline (`ValidationError`). Conditions: **this RP** requested the seal, **within 7 days** of
+  sealing, 600 per RP per 10 minutes.
+- `qr: true` — the QR seal stamp (APPEARANCE_SPEC §6.5); sealing reserves `{docId, revIndex}` via `eid.seal.sealForDocument`
+  (`PadesSealer.sealForDocument`). A QR promises a registration — always register it. Default — the QR-less stamp,
+  byte-identical to before; it can be registered too. `docId` — required for a signed document without a verify page / QR
+  seal stamp (else no `sealRegistration`; with QR, `REQUEST_INVALID`). `pades.sealRegistration(done, { fileName })` builds
+  the body by hand.
+- On 409 `PRIOR_MISMATCH` it retries with `priorSignatures` using the same combinations as the citizen registration.
+
+| Code (`SEAL_REGISTER_ERROR_CODES`) | HTTP | Meaning |
+|---|---|---|
+| `REQUEST_INVALID` / `CMS_INVALID` / `SIGNATURE_INVALID` / `TIMESTAMP_INVALID` | 400 | format / CMS profile / signature / TST (−5 min…+1 h of the sealing time) |
+| `REQUEST_TOO_LARGE` | 413 | body > 64 KiB |
+| `SEAL_NOT_FOUND` | 409 | no seal by this RP for this digest, or older than 7 days |
+| `SEAL_DOC_MISMATCH` | 409 | the reserved docId/revIndex differs from the registration |
+| `DOC_ID_RESERVED` | 409 | another, unregistered QR seal reserved the docID at a lower position |
+| `SIGNER_MISMATCH` / `SIGNER_CERT_INVALID` | 409 | the certificate's organisation ≠ URL / invalid certificate |
+| `DOC_ID_CONFLICT` / `PRIOR_MISMATCH` / `REGISTRY_CONFLICT` | 409 | the same chain rule as the citizen registration |
+| `RATE_LIMITED` / `STATE_UNAVAILABLE` | 429 / 503 | `ApiError.retryable`, `retryAfterMs` |
+| — | 403 | `ForbiddenError` — no `SEAL:<orgEtsi>` permission |
 
 ### Requesting seal permission — RP-initiated (0.47.0)
 
