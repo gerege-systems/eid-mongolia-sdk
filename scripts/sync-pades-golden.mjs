@@ -16,11 +16,12 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const GO_SDK_REPO = "https://github.com/gerege-systems/eid-mongolia-sdk-go";
-// validate corpus v14 — Go PR 76 «fix/validate-pdf-hardening»-ийн head 15921a09ecdb (merge болсны дараа main-ийн commit
-// руу шилжүүлнэ; golden-д өөрчлөлтгүй, зөвхөн pades/testdata/validate). Өмнөх: Go v0.31.0 (tag = merge commit
+// validate corpus v15 — Go main 9f6839060115 (merge of Go #78: the stamp /Name is not compared with the certificate
+// name; only later-stamp-name-mismatch's expected report changed). v14 = Go PR 76 head 15921a09ecdb (main 222acbd6e769;
+// golden-д өөрчлөлтгүй, зөвхөн pades/testdata/validate). Өмнөх: Go v0.31.0 (tag = merge commit
 // 67e05f1ac750; golden v13: seal stamp with QR, APPEARANCE_SPEC.md §6.5/§6.6 — #68 + #69 docIDFromStamps parity).
 // v12 = 692dffa55035 (Go #65), v11 = d5a68ae90582 (Go #61).
-export const GO_SDK_COMMIT = "15921a09ecdbc75649c646f4e40f57da53ffb81c";
+export const GO_SDK_COMMIT = "9f6839060115bbbfb9559f7ab2086ff9b6a2d800";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const check = process.argv.includes("--check");

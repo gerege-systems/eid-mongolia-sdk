@@ -972,9 +972,10 @@ try {
   verified once per validation. A SHA-1/MD5 SignerInfo signature algorithm (e.g. `sha1WithRSAEncryption`) →
   `weak_algorithm` even with a SHA-256 digest. An object of the signed revision that only completes in a later revision
   (shadow attack) → `modified_after_signing`; a later signature counts as a signature-only extension only if its own
-  integrity holds, and its visible stamp's name must equal its certificate's display name; `platform_attested` is never
-  reported for a document modified after signing.
-  The same in Go `pades.ValidatePDF` (golden validate v14). TS only: an OID longer than 128 bytes or with an arc over 63
+  integrity holds (its stamp's `/Name` is not compared with its certificate's name — the eID desktop client writes the
+  Cyrillic portal name there and `signerName` may set any name; `signer_name` always comes from the certificate);
+  `platform_attested` is never reported for a document modified after signing.
+  The same in Go `pades.ValidatePDF` (golden validate v15). TS only: an OID longer than 128 bytes or with an arc over 63
   bits is a parse error (it was quadratic); RSA-PSS certificate/CRL/OCSP signatures need SHA-256/384/512 with the same
   MGF1 hash and salt = hash length (like Go `crypto/x509`); the PDF reader indexes an object stream once, caps `/Prev`
   chains at 128 sections, xref stream rows at max(`/Size`, 2^21) and inflation at 256 MiB per document. Every

@@ -51,11 +51,6 @@ export interface SigMeta {
   roleOK: boolean;
   /** The signer certificate is an e-Seal certificate (APPEARANCE_SPEC.md §6.1) — only the seal stamp is accepted (§6.3). */
   seal?: boolean;
-  /**
-   * Гарын үсэг зурагчийн гэрчилгээний харуулах нэр (eidcrypto.SubjectDisplayName; задрахгүй бол ""). Дардасны /Name яг
-   * үүнтэй тэнцүү байх ёстой (Go appearance.go sigMeta.name).
-   */
-  name?: string;
 }
 
 /** Гарын үсгийн мужийн дараах revision-уудын дүгнэлт. */

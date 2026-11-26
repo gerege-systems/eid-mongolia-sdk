@@ -1,4 +1,4 @@
-// validatePdf hardening (Go pades/testdata/validate v14): уншигч/ASN.1-ийн DoS-ийн регресс — оролт бүр хугацааны хязгаартай
+// validatePdf hardening (Go pades/testdata/validate v14, v15): уншигч/ASN.1-ийн DoS-ийн регресс — оролт бүр хугацааны хязгаартай
 // (засварын өмнө эдгээр нь минут-цаг гацдаг эсвэл санах ой дуусгадаг байв). Корпусын тайлан (shadow, later-signature,
 // platform_attested, weak algorithm) validate-golden.test.ts-д Go-той deep-equal.
 import { test } from "node:test";
@@ -212,4 +212,27 @@ test("D: RSA-PSS-ийн параметр — SHA-256/384/512, ижил MGF1, sal
   await reject("saltLength алга", alg(seq(ctx(0, sha256), ctx(1, mgf(sha256)))));
   // Зөв параметр — гарын үсэг таарахгүй (false), алгоритм дэмжигдэнэ (шидэхгүй).
   assert.equal(await I.verifySignature(pub, alg(seq(ctx(0, sha256), ctx(1, mgf(sha256)), ctx(2, "020120"))), new Uint8Array(1), new Uint8Array(256)), false);
+});
+
+// B (corpus v15): own-signer дардасны /Name-ийг гэрчилгээний нэртэй харьцуулахгүй — бүрэн бүтэн хожмын гарын үсгийн /Name
+// (GOLDEN TESTOV) гэрчилгээнийхээс (QUALIFIED TESTOV) зөрсөн ч өмнөх гарын үсэг valid, зөвхөн гарын үсгээр өргөтгөгдсөн.
+test("B: хожмын дардасны /Name ≠ гэрчилгээний нэр — өмнөх гарын үсэг modified_after_signing БИШ", async () => {
+  const M = JSON.parse(readFileSync(new URL("validate/manifest.json", F), "utf8")) as { time: string; roots: string[]; issuers: string[] };
+  const der = (p: string) => new Uint8Array(new X509Certificate(readFileSync(new URL(p, F))).raw);
+  const rep = await validatePdf(read("validate/input/later-stamp-name-mismatch.pdf"), {
+    roots: M.roots.map(der),
+    issuers: M.issuers.map(der),
+    time: new Date(M.time),
+    offline: true,
+  });
+  assert.equal(rep.signatures.length, 2);
+  const [first, later] = rep.signatures;
+  assert.equal(first!.indication, "valid");
+  assert.deepEqual(first!.problems, []);
+  assert.equal(first!.extended_by_signatures_only, true);
+  assert.equal(first!.visible_later_signature, true);
+  assert.equal(first!.later_signatures, 1);
+  assert.equal(later!.signer_name, "QUALIFIED TESTOV");
+  assert.equal(later!.claimed_name, "GOLDEN TESTOV");
+  assert.equal(later!.visible, true);
 });
