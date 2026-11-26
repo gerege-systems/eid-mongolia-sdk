@@ -961,6 +961,19 @@ try {
   始终压过“good”。**此前为 `valid` 的部分文档现在会变为 `indeterminate` 或 `invalid`。**
 - 不受信任的 PDF：在解析之前，数组/字典嵌套 > 256 → `PDF_INVALID`（`prepare` 同样；`complete`——
   `STATE_INVALID`）。这只是一层防护——请限制大小（≤ 10 MiB）和时间。
+- **加固限制（validate 语料 v14）。** 解析之前：xref 段 ≤ 128（trailer + xref stream），xref stream 的 `/W` 每项 0…8 字节且总和大于 0，
+  `/Index` 的 start + count ≤ 2^21，所有 xref stream 的行数合计 ≤ 2^21，xref/object stream 仅允许单个过滤器，解压后的
+  xref + object stream 合计 ≤ 32 MiB，object stream 成员查找工作量（头部对数 × 解压长度之和）≤ 1 GiB → 否则 `PDF_INVALID`。
+  每个签名：CMS（以及时间戳令牌）中 ≤ 32 个证书，RSA 模数 ≤ 8192 位，指数 ≤ 2^32−1，证书/TSTInfo 序列号 ≤ 160 位 → 否则
+  `malformed_signature`（时间戳 → `timestamp_invalid`）。DSS：每个数组 ≤ 64 项，每项 ≤ 1 MiB，解码合计 ≤ 8 MiB，同一数组中
+  重复引用的 stream 只读一次；每个 OCSP/CRL 在一次验证中只解析和验证一次。SignerInfo 的 SHA-1/MD5 签名算法（如
+  `sha1WithRSAEncryption`）→ 即使摘要为 SHA-256 也为 `weak_algorithm`。已签名修订中的对象若只在后续修订中才完整
+  （shadow attack）→ `modified_after_signing`；后续签名只有其自身完整性成立时才算“仅签名扩展”，其可见印章的名称必须等于其证书的
+  显示名称；签名后被修改的文档永远不会报告 `platform_attested`。
+  与 Go `pades.ValidatePDF` 相同（golden validate v14）。仅 TS：长度超过 128 字节或某一弧超过 63 位的 OID 视为解析错误（此前为
+  二次复杂度）；证书/CRL/OCSP 的 RSA-PSS 签名要求 SHA-256/384/512、相同的 MGF1 哈希且 salt = 哈希长度（与 Go `crypto/x509`
+  相同）；PDF 读取器对 object stream 只建立一次索引，`/Prev` 链上限 128 段，xref stream 行数上限 max(`/Size`, 2^21)，每个文档
+  解压上限 256 MiB。提取阶段的所有错误均为 `PDF_INVALID`；内存耗尽的 `RangeError` 会继续抛出，绝不作为结果返回。
 - 选项：`roots`、`intermediates`、`issuers`（DER，测试用）、`time`、`offline`、`fetch`、`signal`。
 - `key_medium`——仅来自证书：带 qcStatements 的公民 SIGN → `phone`，其他为 `unknown`。CA（`POST /v3/validate/pdf`）
   根据自己的登记确定 `token`，以及 eID 签发的组织印章的 `server_software` / `server_hsm`（密钥位于

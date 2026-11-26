@@ -9,6 +9,7 @@ import { Fetcher, isBrowser, type FetchFn } from "./pades/fetch.js";
 import { parseCertificate, type Certificate } from "./pades/x509.js";
 import { DSSStatus, Evaluator, OnlineStatus, signLevelOf, type PdfReport, type SignatureReport, type StatusSource } from "./pades/validate/evaluate.js";
 import { ExtractError, MAX_PDF_BYTES, extract } from "./pades/validate/extract.js";
+import { isOOM } from "./pades/pdf/reader.js";
 import { fromDate } from "./pades/validate/gofmt.js";
 
 export type { CertInfo, Indication, LTVInfo, PdfReport, Revocation, SignatureReport, TimestampInfo } from "./pades/validate/evaluate.js";
@@ -96,6 +97,8 @@ export async function validatePdf(pdf: Uint8Array | ArrayBuffer, opts: ValidateP
       if (e.code === "too_many") throw new ValidatePdfError("PDF_TOO_MANY_SIGNATURES", e.message);
       if (e.code === "encrypted") throw new ValidatePdfError("PDF_ENCRYPTED", e.message);
     }
+    // Задлах үе шатны бусад бүх алдаа PDF_INVALID — санах ой дууссан (RangeError) нь «эвдэрсэн баримт» биш тул дамжина.
+    if (isOOM(e)) throw e;
     throw new ValidatePdfError("PDF_INVALID", "PDF задарсангүй");
   }
   const now = fromDate(opts.time ?? new Date());
@@ -108,7 +111,14 @@ export async function validatePdf(pdf: Uint8Array | ArrayBuffer, opts: ValidateP
   const ev = new Evaluator({ roots, intermediates: [...embedded(INTERMEDIATES), ...extraInter], issuers, status, now });
   const rep: PdfReport = { indication: "valid", signatures: [] };
   for (const r of ex.sigs) {
-    const s = await ev.evaluateSignature(r);
+    let s: SignatureReport;
+    try {
+      s = await ev.evaluateSignature(r);
+    } catch (e) {
+      // Go: v.ValidatePDF-ийн алдаа → PDF_INVALID «шалгаж чадсангүй» (халдагчийн өгөгдлөөс гарсан гэнэтийн алдаа); OOM дамжина.
+      if (isOOM(e) || e instanceof ValidatePdfError || opts.signal?.aborted) throw e;
+      throw new ValidatePdfError("PDF_INVALID", "шалгаж чадсангүй");
+    }
     if (s.chain_trusted && r.leaf) {
       const lvl = signLevelOf(parseCertificate(r.leaf));
       if (lvl) s.certificate_level = lvl;

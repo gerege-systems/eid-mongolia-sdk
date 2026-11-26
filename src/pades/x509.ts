@@ -1,7 +1,7 @@
 // X.509-ийн PAdES-д хэрэгтэй хэсэг: задлах (issuer/subject/serial/SPKI/extensions), Web Crypto-оор гарын үсэг шалгах,
 // Go x509 CheckSignatureFrom-ийн хязгаарлалт, TSA гинжийн шалгалт (Go x509.Verify-ийн PAdES-д хэрэгтэй дэд хэсэг).
 
-import { Asn1Error, TAG, children, expect, oidString, parseOne, parseTime, type Node } from "./asn1.js";
+import { Asn1Error, TAG, children, expect, intValue, oidString, parseOne, parseTime, type Node } from "./asn1.js";
 import { equal } from "./bytes.js";
 import { subtle } from "./crypto.js";
 
@@ -271,13 +271,6 @@ export function certEqual(a: Certificate, b: Certificate): boolean {
 
 type Hash = "SHA-1" | "SHA-256" | "SHA-384" | "SHA-512";
 
-const HASH_BY_OID: Record<string, Hash> = {
-  [OID.sha1]: "SHA-1",
-  [OID.sha256]: "SHA-256",
-  [OID.sha384]: "SHA-384",
-  [OID.sha512]: "SHA-512",
-};
-
 interface SigScheme {
   kind: "rsa" | "pss" | "ecdsa";
   hash: Hash;
@@ -304,18 +297,50 @@ function schemeFor(alg: Node): SigScheme {
       return { kind: "ecdsa", hash: "SHA-384" };
     case OID.ecdsaSHA512:
       return { kind: "ecdsa", hash: "SHA-512" };
-    case OID.rsaPSS: {
-      // RSASSA-PSS-params { [0] hashAlgorithm, [1] maskGen, [2] saltLength }
-      let hash: Hash = "SHA-1";
-      let salt = 20;
-      for (const f of p[1] ? children(p[1]) : []) {
-        if (f.tag === 0xa0) hash = HASH_BY_OID[oidString(children(children(f)[0]!)[0]!.value)] ?? hash;
-        if (f.tag === 0xa2) salt = Number(children(f)[0]!.value[0]);
-      }
-      return { kind: "pss", hash, saltLength: salt };
-    }
+    case OID.rsaPSS:
+      return pssScheme(p[1]);
   }
   throw new CertError(`гарын үсгийн алгоритм дэмжигдэхгүй: ${o}`);
+}
+
+const PSS_HASHES: Record<string, { hash: Hash; len: number }> = {
+  [OID.sha256]: { hash: "SHA-256", len: 32 },
+  [OID.sha384]: { hash: "SHA-384", len: 48 },
+  [OID.sha512]: { hash: "SHA-512", len: 64 },
+};
+const OID_MGF1 = "1.2.840.113549.1.1.8";
+
+/** AlgorithmIdentifier-ийн параметр байхгүй эсвэл NULL. */
+const noParams = (alg: Node[]): boolean => alg.length === 1 || (alg.length === 2 && alg[1]!.tag === TAG.NULL && alg[1]!.value.length === 0);
+
+/**
+ * RSASSA-PSS-params (Go x509 signatureAlgorithmFromAI): { [0] hashAlgorithm, [1] maskGenAlgorithm, [2] saltLength,
+ * [3] trailerField OPTIONAL } — hash заавал SHA-256/384/512 (параметргүй эсвэл NULL), MGF1 ижил hash-тай, salt = hLen,
+ * trailerField = 1. Өөр бүх хэлбэр (параметр байхгүй → SHA-1 анхдагч, танихгүй hash, MGF1-ийн өөр hash) дэмжигдэхгүй.
+ */
+function pssScheme(params: Node | undefined): SigScheme {
+  const bad = (): never => {
+    throw new CertError("RSASSA-PSS-ийн параметр дэмжигдэхгүй");
+  };
+  if (!params || params.tag !== TAG.SEQUENCE) return bad();
+  const f = children(params);
+  if (f.length < 3 || f.length > 4 || f[0]!.tag !== 0xa0 || f[1]!.tag !== 0xa1 || f[2]!.tag !== 0xa2 || (f[3] && f[3].tag !== 0xa3)) return bad();
+  const one = (n: Node): Node => {
+    const c = children(n);
+    if (c.length !== 1) bad();
+    return c[0]!;
+  };
+  const hashAlg = children(expect(one(f[0]!), TAG.SEQUENCE, "hashAlgorithm"));
+  const h = PSS_HASHES[oidString(expect(hashAlg[0], TAG.OID, "hash").value)];
+  if (!h || !noParams(hashAlg)) return bad();
+  const mgf = children(expect(one(f[1]!), TAG.SEQUENCE, "maskGenAlgorithm"));
+  if (mgf.length !== 2 || oidString(expect(mgf[0], TAG.OID, "mgf").value) !== OID_MGF1) return bad();
+  const mgfHash = children(expect(mgf[1], TAG.SEQUENCE, "mgf1 hash"));
+  if (PSS_HASHES[oidString(expect(mgfHash[0], TAG.OID, "mgf1 hash").value)] !== h || !noParams(mgfHash)) return bad();
+  const salt = intValue(expect(one(f[2]!), TAG.INTEGER, "saltLength").value);
+  if (salt !== BigInt(h.len)) return bad();
+  if (f[3] && intValue(expect(one(f[3]), TAG.INTEGER, "trailerField").value) !== 1n) return bad();
+  return { kind: "pss", hash: h.hash, saltLength: h.len };
 }
 
 const CURVES: Record<string, { name: string; size: number }> = {

@@ -8,7 +8,7 @@
 
 import { fromLatin1 } from "../bytes.js";
 import { InflateLimitError, zlibInflatePrefix } from "./inflate.js";
-import { PRef, PStream, Reader, type ObjPtr, type PObj } from "./reader.js";
+import { PRef, PStream, Reader, isOOM, type ObjPtr, type PObj } from "./reader.js";
 
 /** PDF объектын массив/толийн давхарлалтын дээд гүн (Go validate.MaxNesting). */
 export const MAX_NESTING = 256;
@@ -18,6 +18,13 @@ const MAX_OBJSTM_BYTES = 32 << 20; // бүх ObjStm-ийн задалсан ни
 export const MAX_XREF_SIZE = 1 << 21;
 /** /Extends гинжийн дээд урт (Go maxObjStmChain). */
 const MAX_OBJSTM_CHAIN = 64;
+/** xref хэсгийн дээд тоо (Go maxXrefSections). */
+const MAX_XREF_SECTIONS = 128;
+/**
+ * ObjStm-ийн гишүүн хайлтын ажлын дээд хэмжээ (Go maxObjStmWork): Σ (толгойд уншсан хосын тоо × задалсан өгөгдлийн урт).
+ * Индексгүй уншигч (Go-ийн digitorus) гишүүн бүрд stream-ийг дахин задалж толгойг эхнээс нь уншдаг.
+ */
+const MAX_OBJSTM_WORK = 2 ** 30;
 
 export class StructureError extends Error {
   constructor() {
@@ -150,11 +157,28 @@ interface ObjStmInfo {
   indirect: boolean;
   first: number;
   nCount: number;
+  /** xref stream: /W, /Index-ийн бүхэл утгууд (давхар түлхүүрийн сүүлийнх); бүхэл биш элемент → *Bad. */
+  w: number[];
+  index: number[];
+  wBad: boolean;
+  indexBad: boolean;
+  wSet: boolean;
+  indexSet: boolean;
+  size: number;
+  sizeSet: boolean;
+  /** Шууд бүхэл /Length (-1 — байхгүй). */
+  length: number;
 }
 
 class Scan {
   /** Дээд түвшний /Size > MAX_XREF_SIZE. */
   bigSize = false;
+  /** Одоогийн дээд түвшний объект `trailer` түлхүүр үгийн араас (checkStructure тавина). */
+  fromTrailer = false;
+  /** xref хэсгийн тоо, xref stream-ийн мөрийн нийлбэр, ObjStm-ийн гишүүн хайлтын ажил (Go nestScan). */
+  sections = 0;
+  xrefEntries = 0;
+  objStmWork = 0;
 
   constructor(
     public budget: number,
@@ -173,7 +197,26 @@ class Scan {
 
   private objectBody(l: Lex, start: number, allowStream: boolean): void {
     const stack: Frame[] = [];
-    const info: ObjStmInfo = { typ: "", filter: "", filters: 0, parms: false, indirect: false, first: 0, nCount: 0 };
+    const info: ObjStmInfo = {
+      typ: "",
+      filter: "",
+      filters: 0,
+      parms: false,
+      indirect: false,
+      first: 0,
+      nCount: 0,
+      w: [],
+      index: [],
+      wBad: false,
+      indexBad: false,
+      wSet: false,
+      indexSet: false,
+      size: 0,
+      sizeSet: false,
+      length: -1,
+    };
+    const trailer = this.fromTrailer && allowStream;
+    this.fromTrailer = false;
     for (;;) {
       if (this.budget - (l.pos - start) < 0) throw new StructureError();
       const tok = l.next();
@@ -182,7 +225,9 @@ class Scan {
         if (tok === Tok.DictEnd) {
           stack.pop();
           if (stack.length === 0) {
-            if (allowStream && (info.typ === "ObjStm" || info.indirect)) this.objStm(l, info);
+            if (trailer) this.sections++;
+            if (allowStream && !trailer && info.typ === "XRef") this.xrefStm(info);
+            if (allowStream && (info.typ === "ObjStm" || info.typ === "XRef" || info.indirect)) this.objStm(l, info);
             return;
           }
           const p = stack[stack.length - 1]!;
@@ -212,6 +257,18 @@ class Scan {
             info.filter = "";
             info.filters = 0;
           }
+          if (stack.length === 1 && stack[0]!.dict && stack[0]!.key === "W") {
+            info.w = [];
+            info.wSet = true;
+            info.wBad = tok !== Tok.Arr;
+          }
+          if (stack.length === 1 && stack[0]!.dict && stack[0]!.key === "Index") {
+            info.index = [];
+            info.indexSet = true;
+            info.indexBad = tok !== Tok.Arr;
+          }
+          if (stack.length === 2 && stack[0]!.dict && stack[0]!.key === "W") info.wBad = true; // массив доторх массив/толь
+          if (stack.length === 2 && stack[0]!.dict && stack[0]!.key === "Index") info.indexBad = true;
           stack.push({ dict: tok === Tok.Dict, expectKey: tok === Tok.Dict, key: "" });
           continue;
         case Tok.ArrEnd:
@@ -229,6 +286,16 @@ class Scan {
                 // /Filter [6 0 R] — reader index()-ээр resolve хийж задална (DecodeParms-ийн гүн дэх лавлагаа, жишээ нь
                 // /JBIG2Globals, хууль ёсны тул зөвхөн Filter).
                 if (stack.length === 2 && stack[0]!.dict && stack[0]!.key === "Filter") info.indirect = true;
+                // /W, /Index-ийн лавлагаа (массив эсвэл элемент) — уншигч resolve хийхгүй, алдаа өгнө.
+                if ((stack.length === 1 || stack.length === 2) && stack[0]!.dict) {
+                  if (stack[0]!.key === "W") {
+                    info.wSet = true;
+                    info.wBad = true;
+                  } else if (stack[0]!.key === "Index") {
+                    info.indexSet = true;
+                    info.indexBad = true;
+                  }
+                }
                 done = true; // лавлагаа = нэг утга
               } else if (t3 === Tok.Word && l.val === "obj") {
                 continue; // давхар `N G obj` — дараагийн утга нь энэ объектын үргэлжлэл
@@ -278,28 +345,89 @@ class Scan {
           break;
         case "Size":
           if (tok === Tok.Word && isInt(val) && BigInt(val) > BigInt(MAX_XREF_SIZE)) this.bigSize = true;
+          info.size = parseInt64(val);
+          info.sizeSet = tok === Tok.Word && isInt(val);
           break;
         case "First":
           info.first = parseInt64(val);
+          break;
+        case "Length":
+          info.length = tok === Tok.Word && isInt(val) && parseInt64(val) >= 0 ? parseInt64(val) : -1;
+          break;
+        case "W":
+          info.w = [];
+          info.wSet = true;
+          info.wBad = true;
+          break;
+        case "Index":
+          info.index = [];
+          info.indexSet = true;
+          info.indexBad = true;
           break;
       }
     } else if (stack.length === 2 && stack[0]!.dict && stack[0]!.key === "Filter" && !stack[1]!.dict && tok === Tok.Name) {
       info.filter = val;
       info.filters++;
+    } else if (stack.length === 2 && stack[0]!.dict && !stack[1]!.dict && (stack[0]!.key === "W" || stack[0]!.key === "Index")) {
+      const ok = tok === Tok.Word && isInt(val);
+      if (stack[0]!.key === "W") {
+        info.w.push(parseInt64(val));
+        info.wBad ||= !ok;
+      } else {
+        info.index.push(parseInt64(val));
+        info.indexBad ||= !ok;
+      }
     }
+  }
+
+  /** Go xrefStm: хэсгийн тоо; /W-ийн элемент 0…8, мөрийн урт > 0; /Index-ийн хос ≥ 0, start+count ≤ 2^21; нийлбэр ≤ 2^21. */
+  private xrefStm(info: ObjStmInfo): void {
+    this.sections++;
+    if (info.wSet && !info.wBad && info.w.length >= 3) {
+      let row = 0;
+      for (const w of info.w) {
+        if (w < 0 || w > 8) throw new StructureError();
+        row += w;
+      }
+      if (row === 0) throw new StructureError();
+    }
+    if (info.indexSet && !info.indexBad && info.index.length % 2 === 0) {
+      for (let i = 0; i < info.index.length; i += 2) {
+        const start = info.index[i]!;
+        const n = info.index[i + 1]!;
+        if (start < 0 || n < 0 || start > MAX_XREF_SIZE || n > MAX_XREF_SIZE - start) throw new StructureError();
+        this.xrefEntries += n;
+      }
+    } else if (!info.indexSet && info.sizeSet && info.size >= 0) {
+      this.xrefEntries += Math.min(info.size, MAX_XREF_SIZE + 1);
+    }
+    if (this.xrefEntries > MAX_XREF_SIZE) throw new StructureError();
+  }
+
+  /** Go chargeObjStm: хосын тоо × өгөгдлийн урт → MAX_OBJSTM_WORK. */
+  private chargeObjStm(pairs: number, n: number): void {
+    if (pairs > 0 && n > 0 && pairs > (MAX_OBJSTM_WORK - this.objStmWork) / n) throw new StructureError();
+    this.objStmWork += pairs * n;
   }
 
   /** `stream`-ийн араас FlateDecode өгөгдлийг (zlib өөрөө төгсөнө) задалж, толгойн offset бүрээс объектыг шалгана. */
   private objStm(l: Lex, info: ObjStmInfo): void {
     if (l.next() !== Tok.Word || l.val !== "stream") return;
     if (info.indirect) throw new StructureError(); // /Type /Filter /N /First лавлагаагаар — хууль ёсны баримтад гардаггүй
-    if (info.typ !== "ObjStm") return;
+    if (info.typ !== "ObjStm" && info.typ !== "XRef") return;
     const b = l.b;
     let p = l.pos;
     if (p < b.length && b[p] === 0x0d) p++;
     if (p < b.length && b[p] === 0x0a) p++;
+    if (info.typ === "XRef") {
+      this.xrefData(b.subarray(p), info);
+      return;
+    }
     if (info.filters === 0) {
-      this.objStmData(b.subarray(p), info); // шахаагүй ObjStm — өгөгдөл нь файлын үлдсэн хэсэг
+      // шахаагүй ObjStm — өгөгдөл нь файлын үлдсэн хэсэг; ажлын тооцоонд шууд /Length (байвал)
+      const data = b.subarray(p);
+      const pairs = this.objStmData(data, info);
+      this.chargeObjStm(pairs, info.length >= 0 ? Math.min(data.length, info.length) : data.length);
       return;
     }
     if (info.filters > 1) throw new StructureError(); // reader [/FlateDecode /FlateDecode …]-г гинжлэн задалдаг — давтахгүй, fail-closed
@@ -311,17 +439,41 @@ class Scan {
       data = zlibInflatePrefix(b.subarray(p), this.inflateLeft, 64 << 10);
     } catch (e) {
       if (e instanceof InflateLimitError) throw new StructureError();
+      if (isOOM(e)) throw e;
       return; // reader мөн задалж чадахгүй
     }
     this.inflateLeft -= data.length;
     this.budget -= data.length;
-    this.objStmData(data, info);
+    const pairs = this.objStmData(data, info);
+    this.chargeObjStm(pairs, data.length);
   }
 
-  private objStmData(data: Uint8Array, info: ObjStmInfo): void {
+  /**
+   * Go xrefData: xref stream-ийн олон шүүлтүүр → StructureError; FlateDecode бол задалж (predictor-ийг тооцохгүй — хэмжээ
+   * л) ObjStm-тэй хуваалцсан задлалтын төсвөөс хасна.
+   */
+  private xrefData(b: Uint8Array, info: ObjStmInfo): void {
+    if (info.filters === 0) return;
+    if (info.filters > 1) throw new StructureError();
+    if (info.filter !== "FlateDecode") return;
+    let data: Uint8Array;
+    try {
+      data = zlibInflatePrefix(b, this.inflateLeft, 64 << 10);
+    } catch (e) {
+      if (e instanceof InflateLimitError) throw new StructureError();
+      if (isOOM(e)) throw e;
+      return;
+    }
+    this.inflateLeft -= data.length;
+  }
+
+  /** Толгойн хос бүрийн объектыг шалгана; буцаах утга — уншсан хосын тоо (эхний токен нь EOF биш давталт, Go-той ижил). */
+  private objStmData(data: Uint8Array, info: ObjStmInfo): number {
     const l = new Lex(data, 0);
+    let pairs = 0;
     for (let i = 0; i < info.nCount; i++) {
       if (l.next() === Tok.EOF) break;
+      pairs++;
       const t = l.next();
       if (t === Tok.EOF) break;
       // reader: бүхэл биш offset → 0, сөрөг /First ч first+off ≥ 0 бол уншина — ижил байрлалыг шалгана.
@@ -331,6 +483,7 @@ class Scan {
       this.object(data, at, false);
     }
     if (this.budget < 0) throw new StructureError();
+    return pairs;
   }
 }
 
@@ -351,10 +504,11 @@ export function checkStructure(doc: Uint8Array): void {
       i = at;
       // Токен нь хоёр талдаа зай/хязгаарлагчтай (`endobj`, `objx` — өөр түлхүүр үг).
       if ((k > 0 && !isSpace(doc[k - 1]!) && !isDelim(doc[k - 1]!)) || (at < doc.length && !isSpace(doc[at]!) && !isDelim(doc[at]!))) continue;
+      s.fromTrailer = kw === "trailer";
       s.object(doc, at, true);
     }
   }
-  if (s.bigSize) throw new StructureError();
+  if (s.bigSize || s.sections > MAX_XREF_SECTIONS || s.xrefEntries > MAX_XREF_SIZE) throw new StructureError();
   checkObjStmGraph(doc);
 }
 
@@ -369,7 +523,8 @@ function checkObjStmGraph(doc: Uint8Array): void {
   let r: Reader;
   try {
     r = new Reader(doc);
-  } catch {
+  } catch (e) {
+    if (isOOM(e)) throw e;
     return;
   }
   const xr = r.xref;
@@ -391,7 +546,8 @@ function checkObjStmGraph(doc: Uint8Array): void {
       try {
         const e = xr[p.id]!.ptr;
         v = r.resolve(e, new PRef(e.id, e.gen)).data;
-      } catch {
+      } catch (err) {
+        if (isOOM(err)) throw err;
         return; // уншигч энд унадаг баримт — дуудагч PDF_INVALID
       }
       if (!(v instanceof PStream)) break;

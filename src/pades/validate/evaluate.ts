@@ -7,6 +7,7 @@ import { equal, toHex } from "../bytes.js";
 import { ocspFreshAt, parseOCSP, parseOCSPFrom, sameCertKey, ocspRequest, type OCSPResp } from "../ltv.js";
 import { SHA1_SIG, crlFor, crlListed, freshAt, ocspCertIDMatches, parseCRL, type ParsedCRL } from "../revocation.js";
 import type { Fetcher } from "../fetch.js";
+import { isOOM } from "../pdf/reader.js";
 import { OID, isTSASigningCert, parseCertificate, verifySignature, type Certificate } from "../x509.js";
 import type { RawDSS, RawSignature, RawTimestamp } from "./extract.js";
 import { addMs, after, before, commonName, formatTime, fromDate, fromPrecise, hexSerial, isZero, nameString, subjectNames, subjectSerialNumber, type GoTime } from "./gofmt.js";
@@ -181,11 +182,16 @@ const validAt = (c: Certificate, at: GoTime): boolean => !before(at, fromDate(c.
 
 class CertPool {
   private readonly list: Certificate[] = [];
+  /** Байт-ижил гэрчилгээг hex түлхүүрээр (O(1)) — олон давхардсан гэрчилгээгээр O(n²) болохгүй (Go CertPool hash). */
+  private readonly ids = new Set<string>();
   add(c: Certificate): void {
-    if (!this.list.some((x) => equal(x.raw, c.raw))) this.list.push(c);
+    const k = certKey(c);
+    if (this.ids.has(k)) return;
+    this.ids.add(k);
+    this.list.push(c);
   }
   contains(c: Certificate): boolean {
-    return this.list.some((x) => equal(x.raw, c.raw));
+    return this.ids.has(certKey(c));
   }
   /** Go findPotentialParents: AKID=SKID → нэг нь алга → зөрсөн. */
   parents(c: Certificate): Certificate[] {
@@ -398,7 +404,8 @@ export class Evaluator {
     } else if (info.revocation.status === "unknown" && trusted) {
       s.problems.push(PROBLEMS.revocationUnknown);
     }
-    if (trusted && info.issued_by_eid && info.usage === "document_signer" && !s.problems.includes(PROBLEMS.revoked)) {
+    // Баримт гарын үсгийн дараа (гарын үсгээс өөрөөр) өөрчлөгдсөн бол /Name-ийг платформын баталсан гэж харуулахгүй (Go).
+    if (trusted && info.issued_by_eid && info.usage === "document_signer" && !s.problems.includes(PROBLEMS.revoked) && (r.coversWhole || r.laterSignaturesOnly)) {
       s.signer_name = r.signerName;
       s.signer_name_source = "platform_attested";
     }
@@ -502,45 +509,110 @@ function usageOf(c: Certificate): CertInfo["usage"] {
 const OID_OCSP_NOCHECK = "1.3.6.1.5.5.7.48.1.5";
 
 /**
+ * DSS-ийн OCSP/CRL-ийг нэг шалгалтад нэг удаа задалж, (нотолгоо, гэрчилгээ, олгогч) бүрийн гарын үсгийн шалгалтыг нэг удаа
+ * хийх кэш (Go RawDSS.CRL / CRLMatches / ocspPlain, dssStatus.ocsp): нэг шалгалтын бүх гарын үсэг ижил RawDSS объектыг
+ * хуваалцана — олон гарын үсэг × гинж × DSS-ийн мөрийн давталтаар ажил өсөхгүй.
+ */
+interface DSSCache {
+  crls?: (ParsedCRL | undefined)[];
+  crlFor: Map<string, boolean>;
+  ocspPlain: Map<string, OCSPResp | null>;
+  ocspFor: Map<string, OCSPResp | null>;
+}
+
+const dssCaches = new WeakMap<RawDSS, DSSCache>();
+const certKeys = new WeakMap<Certificate, string>();
+
+function dssCache(dss: RawDSS): DSSCache {
+  let c = dssCaches.get(dss);
+  if (!c) {
+    c = { crlFor: new Map(), ocspPlain: new Map(), ocspFor: new Map() };
+    dssCaches.set(dss, c);
+  }
+  return c;
+}
+
+function certKey(c: Certificate): string {
+  let k = certKeys.get(c);
+  if (k === undefined) {
+    k = toHex(c.raw);
+    certKeys.set(c, k);
+  }
+  return k;
+}
+
+/** CRLs[i]-ийн задалсан хэлбэр (нэг удаа); задрахгүй бол undefined. */
+function dssCRL(dss: RawDSS, i: number): ParsedCRL | undefined {
+  const c = dssCache(dss);
+  c.crls ??= dss.crls.map((der) => parseCRL(der));
+  return c.crls[i];
+}
+
+/** crlFor(CRL(i), cert, issuer) нэг удаа; задрахгүй бол false. */
+async function dssCRLMatches(dss: RawDSS, i: number, cert: Certificate, issuer: Certificate): Promise<boolean> {
+  const crl = dssCRL(dss, i);
+  if (!crl) return false;
+  const c = dssCache(dss);
+  const k = `${i}|${certKey(cert)}|${certKey(issuer)}`;
+  const hit = c.crlFor.get(k);
+  if (hit !== undefined) return hit;
+  const ok = await crlFor(crl, cert, issuer);
+  c.crlFor.set(k, ok);
+  return ok;
+}
+
+/** parseOCSP(OCSPs[i], serial, issuer) нэг удаа; алдаа бол null. */
+async function dssOCSPPlain(dss: RawDSS, i: number, cert: Certificate, issuer: Certificate): Promise<OCSPResp | null> {
+  const c = dssCache(dss);
+  const k = `${i}|${certKey(cert)}|${certKey(issuer)}`;
+  const hit = c.ocspPlain.get(k);
+  if (hit !== undefined) return hit;
+  let r: OCSPResp | null;
+  try {
+    r = await parseOCSP(dss.ocsps[i]!, intValue(cert.serial), issuer);
+  } catch (e) {
+    if (isOOM(e)) throw e;
+    r = null;
+  }
+  c.ocspPlain.set(k, r);
+  return r;
+}
+
+/**
  * Go ltvCoverage — гинжийн (leaf → root) ба TSA гинжийн root-оос бусад гэрчилгээ бүрд DSS-д олгогчийн (эсвэл delegated
  * nocheck responder-ийн) зурсан, CertID таарсан, `good`, at-д шинэлэг (freshAt) OCSP эсвэл олгогчийн, шинэлэг, тэр
  * гэрчилгээг агуулаагүй CRL. now — шалгагчийн одоо (ирээдүйн thisUpdate-ийг татгалзана).
  */
 async function ltvCoverage(dss: RawDSS | undefined, at: GoTime, now: GoTime, chains: Certificate[][]): Promise<LTVInfo> {
   const out: LTVInfo = { complete: false, missing: [] };
-  const crls: ParsedCRL[] = [];
-  for (const der of dss?.crls ?? []) {
-    const c = parseCRL(der);
-    if (c) crls.push(c);
-  }
-  const seen: Uint8Array[] = [];
+  const seen = new Set<string>();
   for (const chain of chains) {
     for (let i = 0; i + 1 < chain.length; i++) {
       const cert = chain[i]!;
       const issuer = chain[i + 1]!;
-      if (seen.some((x) => equal(x, cert.raw))) continue;
-      seen.push(cert.raw);
-      if (!(await covered(cert, issuer, at, now, dss?.ocsps ?? [], crls))) out.missing.push(commonName(cert.rawSubject));
+      const k = certKey(cert);
+      if (seen.has(k)) continue;
+      seen.add(k);
+      if (!dss || !(await covered(dss, cert, issuer, at, now))) out.missing.push(commonName(cert.rawSubject));
     }
   }
-  out.complete = out.missing.length === 0 && seen.length > 0;
+  out.complete = out.missing.length === 0 && seen.size > 0;
   return out;
 }
 
-async function covered(cert: Certificate, issuer: Certificate, at: GoTime, now: GoTime, ocsps: Uint8Array[], crls: ParsedCRL[]): Promise<boolean> {
-  for (const der of ocsps) {
-    let resp: OCSPResp;
-    try {
-      resp = await parseOCSP(der, intValue(cert.serial), issuer);
-    } catch {
-      continue;
-    }
+async function covered(dss: RawDSS, cert: Certificate, issuer: Certificate, at: GoTime, now: GoTime): Promise<boolean> {
+  for (let i = 0; i < dss.ocsps.length; i++) {
+    const resp = await dssOCSPPlain(dss, i, cert, issuer);
+    if (!resp) continue;
+    const der = dss.ocsps[i]!;
     if (resp.status !== "good" || !(await ocspCertIDMatches(der, cert, issuer))) continue;
     if (resp.certificate && !equal(resp.certificate.raw, issuer.raw) && !resp.certificate.extensions.some((e) => e.oid === OID_OCSP_NOCHECK)) continue;
     if (ocspFreshAt(resp, at, now)) return true;
   }
-  for (const crl of crls) {
-    if (!(await crlFor(crl, cert, issuer)) || !freshAt(crl.thisUpdate, crl.nextUpdate, at, now)) continue;
+  for (let i = 0; i < dss.crls.length; i++) {
+    if (!(await dssCRLMatches(dss, i, cert, issuer))) continue;
+    const crl = dssCRL(dss, i)!;
+    if (!freshAt(crl.thisUpdate, crl.nextUpdate, at, now)) continue;
     if (crlListed(crl, cert)) continue;
     return true;
   }
@@ -583,15 +655,23 @@ export class DSSStatus implements StatusSource {
       if (!revoked || before(t, revoked)) revoked = t;
     };
     let good = false;
-    for (const der of this.dss?.ocsps ?? []) {
-      const resp = await ocspFor(der, cert, issuer);
+    const dss = this.dss;
+    if (!dss) return { issued: false, revoked: false };
+    const cache = dssCache(dss);
+    for (let i = 0; i < dss.ocsps.length; i++) {
+      const k = `${i}|${certKey(cert)}|${certKey(issuer)}`;
+      let resp = cache.ocspFor.get(k);
+      if (resp === undefined) {
+        resp = (await ocspFor(dss.ocsps[i]!, cert, issuer)) ?? null;
+        cache.ocspFor.set(k, resp);
+      }
       if (!resp) continue;
       if (resp.status === "revoked") markRevoked(fromPrecise(resp.revokedAt!));
       else if (resp.status === "good") good ||= ocspFreshAt(resp, at, this.now);
     }
-    for (const der of this.dss?.crls ?? []) {
-      const crl = parseCRL(der);
-      if (!crl || !(await crlFor(crl, cert, issuer))) continue;
+    for (let i = 0; i < dss.crls.length; i++) {
+      if (!(await dssCRLMatches(dss, i, cert, issuer))) continue;
+      const crl = dssCRL(dss, i)!;
       const t = crlListed(crl, cert);
       if (t) markRevoked(t);
       else good ||= freshAt(crl.thisUpdate, crl.nextUpdate, at, this.now);

@@ -107,15 +107,26 @@ export function oid(s: string): Uint8Array {
   return tlv(TAG.OID, Uint8Array.from(body));
 }
 
-/** OID агуулга → "1.2.3". */
+/** OID-ийн агуулгын дээд урт (байт) ба нэг arc-ийн дээд урт (base-128 байт = 9 × 7 = 63 бит). */
+export const MAX_OID_BYTES = 128;
+const MAX_ARC_BYTES = 9;
+
+/**
+ * OID агуулга → "1.2.3". Дайсагнасан оролт: агуулга > 128 байт эсвэл arc > 63 бит бол Asn1Error (урт arc-ийг bigint-ээр
+ * байт тус бүр shift хийх нь O(n²) — 5 MB OID цаг болдог байв).
+ */
 export function oidString(v: Uint8Array): string {
+  if (v.length > MAX_OID_BYTES) throw new Asn1Error("asn1: OID хэт урт");
   const out: bigint[] = [];
   let cur = 0n;
+  let n = 0;
   for (const b of v) {
+    if (++n > MAX_ARC_BYTES) throw new Asn1Error("asn1: OID-ийн arc хэт том");
     cur = (cur << 7n) | BigInt(b & 0x7f);
     if (!(b & 0x80)) {
       out.push(cur);
       cur = 0n;
+      n = 0;
     }
   }
   if (out.length === 0) return "";
@@ -144,6 +155,12 @@ export function intFromBig(v: bigint): Uint8Array {
 
 /** Unsigned big-endian байт → bigint. */
 export function bigFromBytes(b: Uint8Array): bigint {
+  if (b.length > 64) {
+    // Урт утгад hex мөрөөр (шугаман) — байт тус бүрийн shift нь O(n²) (дайсагнасан мегабайтын INTEGER).
+    let hex = "0x0";
+    for (const x of b) hex += (x < 16 ? "0" : "") + x.toString(16);
+    return BigInt(hex);
+  }
   let v = 0n;
   for (const x of b) v = (v << 8n) | BigInt(x);
   return v;

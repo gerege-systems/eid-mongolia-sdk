@@ -5,6 +5,7 @@
 // Prod нь зөвхөн "own" profile (манай PAdES/digitorus бичигчийн яг хэлбэр); "broad" нь дээд хязгаар (холимог
 // хуримтлагдсан алхам ба тест).
 
+import { isOOM } from "../pdf/reader.js";
 import { ownVisible } from "./appearance.js";
 import {
   ENT_COMP,
@@ -50,6 +51,11 @@ export interface SigMeta {
   roleOK: boolean;
   /** The signer certificate is an e-Seal certificate (APPEARANCE_SPEC.md §6.1) — only the seal stamp is accepted (§6.3). */
   seal?: boolean;
+  /**
+   * Гарын үсэг зурагчийн гэрчилгээний харуулах нэр (eidcrypto.SubjectDisplayName; задрахгүй бол ""). Дардасны /Name яг
+   * үүнтэй тэнцүү байх ёстой (Go appearance.go sigMeta.name).
+   */
+  name?: string;
 }
 
 /** Гарын үсгийн мужийн дараах revision-уудын дүгнэлт. */
@@ -219,7 +225,8 @@ export class Revisions {
     let v: PdfView | null;
     try {
       v = openView(this.doc.subarray(0, n), this.budget);
-    } catch {
+    } catch (e) {
+      if (isOOM(e)) throw e;
       v = null;
     }
     this.views.set(n, v);
@@ -230,7 +237,8 @@ export class Revisions {
   async later(end: number): Promise<LaterChanges> {
     try {
       return this.laterSync(end);
-    } catch {
+    } catch (e) {
+      if (isOOM(e)) throw e; // санах ой дууссан — «өөрчлөгдсөн» гэж залгихгүй
       return { ...NOTHING };
     }
   }
@@ -588,7 +596,17 @@ export class Classifier {
         this.changed.add(num);
         continue;
       }
-      if (entEq(be, fe) && (be.kind === ENT_USE || entEq(ent(this.base.xref, be.off), ent(this.fin.xref, fe.off)))) continue;
+      if (entEq(be, fe) && (be.kind === ENT_USE || entEq(ent(this.base.xref, be.off), ent(this.fin.xref, fe.off)))) {
+        // Shadow attack (Go revisions.go diff): өөрчлөгдөөгүй объект (ба түүний ObjStm) суурийн байт дотор бүтнээрээ задрах
+        // ёстой — stream-ийн /Length суурийн төгсгөлөөс цааш үргэлжилж хожмын revision-оор «гүйцэх»-ийг хориглоно.
+        try {
+          this.base.get(num);
+        } catch (e) {
+          if (e instanceof PdfObjError) throw errNotSignatureOnly();
+          throw e;
+        }
+        continue;
+      }
       const bo = this.base.get(num);
       const fo = this.fin.get(num);
       const unpack = be.kind === ENT_COMP && fe.kind === ENT_USE && fe.gen === 0 && (this.own || (!this.strict && this.ownProfile && !this.dssOnly));
