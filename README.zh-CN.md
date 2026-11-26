@@ -44,7 +44,7 @@ Smart-ID RP 的常见模式：浏览器中**一个按钮**，所有 eID 调用�
 
 | | 请求 | 响应 |
 |---|---|---|
-| `POST /auth/eid/start` | `{"mode":"qr"}` 或 `{"mode":"push","idCode":"УБ12345678"}`（必须是 JSON） | `{mode, vc, qr?, expiresIn}` + `Set-Cookie: eid_login` |
+| `POST /auth/eid/start` | `{"mode":"qr"}` 或 `{"mode":"push","idCode":"УБ12345678"}`（必须是 JSON） | `{mode, vc, qr?, expiresIn}` + `Set-Cookie: __Host-eid_login` |
 | `GET /auth/eid/start?mode=web2app` | 手机浏览器（按钮跳转） | `302` → eID 应用 |
 | `GET /auth/eid/status` | cookie | `PENDING`（+新的 `qr`、`expiresIn`）· `WAIT_CALLBACK` · `OK`（`redirect`、`data`）· `FAILED`（`error`）· `EXPIRED` |
 | `GET /auth/eid/callback` | 应用返回：`?sessionId&userChallengeVerifier` | `303` → `onSuccess` 的 `redirect` / `successRedirect`，出错则为 `failureRedirect?eid_error=<代码>` |
@@ -101,11 +101,11 @@ export const POST = (req: Request) => eidLogin.handle(req);
 两者都未提供则不按 IP 限制（首个请求时会通过 `onError` 警告一次）。`handleRequest` 直接使用 `req.ip`
 （Express 的 `req.ip`，配合 `app.set("trust proxy", …)`）。Go：`eidlogin.Config.ClientIP`（`eidlogin.ForwardedClientIP(n)`）——规则相同。
 
-**限流**（`rateLimit`）。键：`start:<ip>`（已知 IP 时）、`push:<idCode>`；被拒绝时返回 429 + `Retry-After: 60`。
+**限流**（`rateLimit`）。键：`start:<ip>`（已知 IP 时；IPv6 取 `/64` 前缀；配置了 `trustProxy` / `getClientIp` 但 IP 为空则归入共享的 `start:unknown`）、`push:<pushKey>`（自 0.50.0 起为审计 HMAC，而非号码）；被拒绝时返回 429 + `Retry-After: 60`。
 默认 `defaultRateLimit` = `{ start: { limit: 20, windowMs: 60_000 }, push: { limit: 3, windowMs: 60_000 } }`——同一
 IP 每分钟 20 次发起（自 0.19.0 起；已知 IP 时——`req.ip` / `trustProxy`），同一号码每分钟 3 条通知
 （防 MFA 疲劳攻击）。内存限流器每种类型最多 ≤ 10 000 个键：满了就清理已过期的窗口，若仍未腾出空间，
-则以 429 拒绝**新**键（fail-closed）——绝不会清除已有计数器，因此无法通过塞满大量 IP/号码来绕过限制。
+则把**新**键计入同一个共享 overflow 桶（`maxKeys`；自 0.50.0 起，此前为 429）——绝不会清除已有计数器，因此无法通过塞满大量 IP/号码来绕过限制。
 `memoryLoginStore(max = 10_000)` 同理：满了则 start 返回 503 `{ error: "busy" }`，
 不会删除已开始的登录。多实例时请使用 Redis store/limiter。
 
@@ -250,7 +250,7 @@ RP 一侧无需额外检查。来源：eID CA 的 `docs/DEVICE_LINK_V3.md` §5�
   5 位数字——与 eID 形式相同）, expiresIn}`、相同的 cookie；`status` 在 `pollMs` 时间内不询问 eID，保持
   `PENDING`，TTL 后为 `EXPIRED`——与没有接手机的公民无法区分（真实 push 的 CA `TIMEOUT` 也会变为 `EXPIRED`）。每个 push start 的响应（真实、decoy、502）
   都不会快于 `pushFloorMs`（默认 1000）——使 decoy 无法通过时间区分（对 `handle(Request)`，请求被中断时不会
-  等待；对 `handleRequest` 请传入 `signal`）。限制（`push:<idCode>`、`start:<ip>`）同样适用于 decoy；限流器的 429 和 400
+  等待；对 `handleRequest` 请传入 `signal`）。限制（`push:<pushKey>`、`start:<ip>`）同样适用于 decoy；限流器的 429 和 400
   （`invalid_id`——格式错误，与注册情况无关）没有 floor（eID 的 429 和 503 `busy` 有 floor）。eID 的 5xx、连接错误、非 JSON 的 4xx（eID 前面的
   proxy，如 mTLS 拒绝）、401/403（RP 的 secret/权限）和 429 **不使用 decoy**——返回 `502 eid_unavailable` / `429`（eID
   门户的行为：若用 decoy 掩盖故障，公民会看到无尽的转圈；这些与号码无关，因此不构成
