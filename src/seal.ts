@@ -20,10 +20,11 @@
 // APPROVED хүртэл асууна. Эрх цуцлагдтал (захирал eID аппаас, эсвэл оператор) хүчинтэй. Биллинг тооцохгүй.
 
 import { X509Certificate } from "node:crypto";
-import { RP_ROUTES, SEAL_GRANT_REQUEST_FIELDS, SEAL_REQUEST_FIELDS, routePath } from "./contract.js";
+import { RP_ROUTES, SEAL_GRANT_REQUEST_FIELDS, SEAL_REGISTER_FIELDS, SEAL_REQUEST_FIELDS, SEAL_RESERVATION_FIELDS, routePath } from "./contract.js";
 import { hashLen } from "./crypto.js";
 import { ApiError, SealCertificateRequestError, SealGrantRequestError, ValidationError } from "./errors.js";
 import type { Http } from "./http.js";
+import { priorSplits, type PriorSignature, type RegisterSignatureResult } from "./sign.js";
 import type { CertificateLevel, HashAlgorithm } from "./types.js";
 import { verifyPrehashedSignature } from "./validator.js";
 import { certExtension, tlv } from "./subject.js";
@@ -234,8 +235,154 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
+/**
+ * Байгууллагын тамгатай PDF-ийн бүртгэл — `POST /seal/{orgEtsi}/registrations`-ийн бие (CA V158, `dto.SealRegisterRequest`,
+ * docs/PADES_CLIENT_SIDE.md §4.5; CA `DisallowUnknownFields` — medium, sessionID, onBehalfOf, signerEtsi, pageSha256 үгүй).
+ * `pades.sealPdf()`-ийн `sealRegistration` (эсвэл `pades.sealRegistration(done)`) яг энэ хэлбэртэй. Hash-ууд иргэний
+ * {@link RegisterSignatureInput}-тэй ижил тодорхойлолт.
+ */
+export interface SealRegisterInput {
+  /** Жижиг үсгийн UUID (`done.docId`). */
+  docID: string;
+  /** Тамганы файл дахь байрлал (1–16). */
+  revIndex: number;
+  /** CMS DER (≤ 28 672 байт) эсвэл түүний стандарт base64. */
+  cms: Uint8Array | string;
+  /** Заавал биш — `/verify`-д харагдах нэр (≤ 120 тэмдэгт). */
+  fileName?: string;
+  inSha256: string;
+  sigRevSha256: string;
+  outSha256: string;
+  priorCmsSha256?: string[];
+  priorRevisionSha256?: string[];
+  /** SDK-д л: 409 `PRIOR_MISMATCH` бол горим A-ийн өмнөх мөрийг revision-оор тааруулна (`registerSignature`-тэй ижил). */
+  priorSignatures?: PriorSignature[];
+}
+
+/** `POST /seal/{orgEtsi}/registrations`-ийн хариу (CA `PDFSignatureRegisterResponse` — иргэний бүртгэлтэй ижил). */
+export type SealRegisterResult = RegisterSignatureResult;
+
+const SEAL_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const SEAL_ORG_RE = /^NTRMN-[0-9A-Z]{1,58}$/;
+const SEAL_HEX64 = /^[0-9a-f]{64}$/;
+const SEAL_MAX_CMS = 28_672;
+const SEAL_MAX_FILE_NAME = 120;
+
+/**
+ * `POST /seal/{orgEtsi}/registrations`-ийн JSON бие — {@link SEAL_REGISTER_FIELDS}-ийн дарааллаар. CA-ийн
+ * `normalizeSealRegister`-ийн хэлбэрийн дүрмийг сүлжээгүй шалгана: docID жижиг UUID, revIndex 1–16, fileName ≤ 120
+ * (өгсөн бол), inSha256 / sigRevSha256 / outSha256 / prior* нь 64 жижиг hex, prior-ийн тоо = revIndex − 1, cms 1…28 672 байт.
+ * @throws {ValidationError}
+ */
+export function buildSealRegisterBody(input: SealRegisterInput): Record<string, unknown> {
+  const fail = (m: string): never => {
+    throw new ValidationError(`registerSealedPdf: ${m}`);
+  };
+  if (!SEAL_UUID_RE.test(input.docID ?? "")) fail("docID жижиг үсгийн UUID биш");
+  if (!Number.isInteger(input.revIndex) || input.revIndex < 1 || input.revIndex > 16) fail("revIndex 1–16");
+  const hex = (name: string, v: string | undefined): string => {
+    if (typeof v !== "string" || !SEAL_HEX64.test(v)) fail(`${name}: 64 жижиг hex биш`);
+    return v as string;
+  };
+  let cmsB64: string;
+  if (typeof input.cms === "string") {
+    const raw = Buffer.from(input.cms, "base64");
+    if (raw.length === 0 || raw.toString("base64") !== input.cms) fail("cms стандарт base64 биш");
+    if (raw.length > SEAL_MAX_CMS) fail(`cms > ${SEAL_MAX_CMS} байт`);
+    cmsB64 = input.cms;
+  } else {
+    if (!(input.cms instanceof Uint8Array) || input.cms.length === 0) fail("cms хоосон");
+    if (input.cms.length > SEAL_MAX_CMS) fail(`cms > ${SEAL_MAX_CMS} байт`);
+    cmsB64 = Buffer.from(input.cms).toString("base64");
+  }
+  const fileName = input.fileName?.trim() ?? "";
+  if (Array.from(fileName).length > SEAL_MAX_FILE_NAME) fail(`fileName ≤ ${SEAL_MAX_FILE_NAME} тэмдэгт`);
+  const priorCms = (input.priorCmsSha256 ?? []).map((h, i) => hex(`priorCmsSha256[${i}]`, h));
+  const priorRev = (input.priorRevisionSha256 ?? []).map((h, i) => hex(`priorRevisionSha256[${i}]`, h));
+  if (priorCms.length + priorRev.length !== input.revIndex - 1) fail("priorCmsSha256 + priorRevisionSha256-ийн тоо = revIndex − 1");
+  const body: Record<string, unknown> = { docID: input.docID, revIndex: input.revIndex, cms: cmsB64 };
+  if (fileName) body.fileName = fileName;
+  body.inSha256 = hex("inSha256", input.inSha256);
+  body.sigRevSha256 = hex("sigRevSha256", input.sigRevSha256);
+  body.outSha256 = hex("outSha256", input.outSha256);
+  if (priorCms.length) body.priorCmsSha256 = priorCms;
+  if (priorRev.length) body.priorRevisionSha256 = priorRev;
+  for (const k of Object.keys(body)) if (!(SEAL_REGISTER_FIELDS as readonly string[]).includes(k)) fail(`дотоод: үл мэдэгдэх талбар ${k}`);
+  return body;
+}
+
 export class SealApi {
-  constructor(private readonly http: Http) {}
+  /** @param registerTimeoutMs `registerSealedPdf`-ийн HTTP хугацаа (`ClientConfig.pdfTimeoutMs`; алга бол 80 000). */
+  constructor(
+    private readonly http: Http,
+    private readonly registerTimeoutMs?: number,
+  ) {}
+
+  /**
+   * `POST /seal/{orgEtsi}/registrations` (`SEAL:<orgEtsi>`, CA V158) — байгууллагын тамгатай PDF-ийг CA-ийн бүртгэлд
+   * (`/verify/{docID}`, байгууллагын мөр) оруулна; иргэний `sign.registerSignature`-ийн тамганы хувилбар. `pades.sealPdf`-ийн
+   * дараа `done.sealRegistration`-оор. CA-ийн нөхцөл: тамгыг ЭНЭ RP `POST /seal/{orgEtsi}`-ээр хүссэн (CMS-ийн
+   * SHA-256(signedAttrs) = тамгалсан digest), тамгалснаас 7 хоногийн дотор, нөөцөлсөн docId/revIndex-тэй таарах. Ижил бие
+   * давтвал 200 (`created: false`). 409 `PRIOR_MISMATCH` бол `priorSignatures`-ээр `registerSignature`-тэй ижил хослолоор
+   * дахин оролдоно. Хэлбэрийн алдаа ({@link buildSealRegisterBody}) сүлжээнд гарахгүй.
+   * @throws {ValidationError} хэлбэр; `ApiError` (`code` ∈ {@link SealRegisterErrorCode}; 429/503 `retryable`);
+   *   `ForbiddenError` (403, `SEAL:<orgEtsi>` эрхгүй).
+   */
+  async registerSealedPdf(orgEtsi: string, input: SealRegisterInput): Promise<SealRegisterResult> {
+    const org = String(orgEtsi ?? "").trim();
+    if (!SEAL_ORG_RE.test(org.toUpperCase())) throw new ValidationError("registerSealedPdf: orgEtsi нь NTRMN-…");
+    const body = buildSealRegisterBody(input);
+    const prior = input.priorSignatures ?? [];
+    if (input.priorRevisionSha256?.length || prior.length === 0 || prior.length !== input.revIndex - 1) return this.registerBody(org, body);
+    try {
+      return await this.registerBody(org, body);
+    } catch (first) {
+      if (!(first instanceof ApiError && first.code === "PRIOR_MISMATCH")) throw first;
+      // Аль өмнөх мөр горим A (revision-оор) болохыг файлаас мэдэх аргагүй — registerSignature-тэй ижил хослолууд.
+      for (const asRevision of priorSplits(prior.length)) {
+        const next: SealRegisterInput = {
+          ...input,
+          priorSignatures: undefined,
+          priorCmsSha256: prior.filter((_, i) => !asRevision[i]).map((p) => p.cmsSha256),
+          priorRevisionSha256: prior.filter((_, i) => asRevision[i]).map((p) => p.revisionSha256),
+        };
+        try {
+          return await this.registerBody(org, buildSealRegisterBody(next));
+        } catch (e) {
+          if (!(e instanceof ApiError && e.code === "PRIOR_MISMATCH")) throw e;
+        }
+      }
+      throw first;
+    }
+  }
+
+  private async registerBody(org: string, body: Record<string, unknown>): Promise<SealRegisterResult> {
+    const { status, body: raw } = await this.http.postWithStatus(routePath(RP_ROUTES.sealRegistrations, org), body, this.registerTimeoutMs ?? 80_000);
+    const r = rec(raw);
+    return {
+      docID: String(r.docID ?? body.docID),
+      revIndex: Number(r.revIndex ?? 0),
+      registeredAt: typeof r.registeredAt === "string" ? r.registeredAt : "",
+      verifyUrl: String(r.verifyUrl ?? ""),
+      created: status === 201,
+      raw,
+    };
+  }
+
+  /**
+   * `POST /seal/{orgEtsi}` `{digest, hashType: "SHA256", docId, revIndex}` (CA V158) — {@link seal}-тэй ижил, нэмээд QR-тэй
+   * тамганы баримтын нөөц: дардасны QR (`/verify/<docId>/<revIndex>`)-ийн байрлалыг өөр гарын үсгийн бүртгэлээс хамгаална
+   * (CA: бүртгэгдээгүй нөөц 7 хоног `DOC_ID_CONFLICT` / `DOC_ID_RESERVED`). Зөвхөн SHA-256 (32 байт) digest; docId жижиг
+   * UUID, revIndex 1–16 — эс бөгөөс ValidationError (сүлжээгүй; CA 400 REQUEST_INVALID). Бүртгэлийн docID/revIndex нөөцөөс
+   * өөр бол `registerSealedPdf` 409 `SEAL_DOC_MISMATCH`. `pades.sealPdf({qr: true})` дуудна.
+   */
+  async sealForDocument(orgEtsi: string, digest: Uint8Array, docId: string, revIndex: number): Promise<SealResult> {
+    if (!SEAL_UUID_RE.test(docId ?? "") || !Number.isInteger(revIndex) || revIndex < 1 || revIndex > 16) {
+      throw new ValidationError("sealForDocument: docId жижиг үсгийн UUID, revIndex 1–16");
+    }
+    const reservation: Record<(typeof SEAL_RESERVATION_FIELDS)[number], string | number> = { docId, revIndex };
+    return this.sealDigest(orgEtsi, digest, "SHA-256", reservation);
+  }
 
   /**
    * `GET /seal/certificate/{orgEtsi}` — байгууллагын одоогийн (хамгийн сүүлд олгогдсон, идэвхтэй) тамганы гэрчилгээ
@@ -366,6 +513,10 @@ export class SealApi {
    * 429 `RATE_LIMITED` (RP-д минутад 300; `retryAfterMs`).
    */
   async seal(orgEtsi: string, digest: Uint8Array, hashAlgorithm: HashAlgorithm = "SHA-256"): Promise<SealResult> {
+    return this.sealDigest(orgEtsi, digest, hashAlgorithm);
+  }
+
+  private async sealDigest(orgEtsi: string, digest: Uint8Array, hashAlgorithm: HashAlgorithm, reservation?: Record<string, string | number>): Promise<SealResult> {
     if (!["SHA-256", "SHA-384", "SHA-512"].includes(hashAlgorithm)) throw new ValidationError(`seal: дэмжигдээгүй hashAlgorithm ${hashAlgorithm}`);
     if (!(digest instanceof Uint8Array) || digest.length !== hashLen(hashAlgorithm)) {
       throw new ValidationError(`seal: digest нь ${hashAlgorithm}-ийн урт (${hashLen(hashAlgorithm)} байт) байх ёстой`);
@@ -374,7 +525,7 @@ export class SealApi {
       digest: Buffer.from(digest).toString("base64"),
       hashType: hashAlgorithm.replace("-", ""),
     };
-    const raw = await this.http.post(routePath(RP_ROUTES.seal, orgEtsi), body);
+    const raw = await this.http.post(routePath(RP_ROUTES.seal, orgEtsi), reservation ? { ...body, ...reservation } : body);
     const r = rec(raw);
     const sig = rec(r.signature);
     const cert = rec(r.cert);

@@ -131,8 +131,8 @@ test("pades golden — Go reference-тэй байт-ижил (prepare + complete
     }
     const e = c.expect as Record<string, string | number[] | string[] | boolean | number | undefined>;
     if (c.sealQr) {
-      // The public prepare never draws the QR seal stamp (sealPdf / prepare stay QR-less until the CA validator ships
-      // §6.5): the same options through dist give a different DTBS.
+      // The public prepare never draws the QR seal stamp (only sealPdf({qr: true}) does, with a reservation and the
+      // registration body): the same options through dist give a different DTBS.
       assert.notEqual(hex((await pades.prepare(input, opts)).dtbs), e.dtbs, `${c.name}: public prepare drew the QR seal stamp`);
     }
     const p = await (c.sealQr ? prepareSealQr : pades.prepare)(input, opts);

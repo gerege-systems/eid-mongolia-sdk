@@ -233,9 +233,9 @@ export interface RegisterSignatureResult {
 /**
  * `PRIOR_MISMATCH`-ийн дараах оролдлогууд (true = тухайн өмнөх гарын үсгийг revision-оор): эхлээд эхний k (k = 1…n; горим A
  * нь клиент талынхаас өмнө — §15 устгагдаж буй), дараа нь n ≤ 4 бол үлдсэн бүх хослол. Бүгдийг CMS-ээр (k = 0) аль хэдийн
- * оролдсон. Go `priorSplits`-тэй ижил дараалал.
+ * оролдсон. Go `priorSplits`-тэй ижил дараалал. Дотоод (index-ээс экспортлохгүй) — `seal.registerSealedPdf` ч ашиглана.
  */
-function priorSplits(n: number): boolean[][] {
+export function priorSplits(n: number): boolean[][] {
   const out: boolean[][] = [];
   const seen = new Set<number>();
   for (let k = 1; k <= n; k++) {

@@ -49,6 +49,8 @@ export const RP_ROUTES = {
   sealGrantStatus: { method: "GET", path: "/seal/grants/{grantId}" },
   /** Байгууллагын тамга (CA `dto.SealRequest` `{digest, hashType}` → `dto.SealResponse`). */
   seal: { method: "POST", path: "/seal/{orgEtsi}" },
+  /** Тамганы PAdES бүртгэл (CA V158): `dto.SealRegisterRequest` → 201/200 `dto.PDFSignatureRegisterResponse`. */
+  sealRegistrations: { method: "POST", path: "/seal/{orgEtsi}/registrations" },
 } as const satisfies Record<string, RpRoute>;
 
 /**
@@ -86,9 +88,30 @@ export const PDF_SIGNATURE_REGISTER_FIELDS = [
  */
 /**
  * `POST /seal/{orgEtsi}`-ийн биеийн талбарууд, SDK-ийн илгээдэг — CA `server/internal/dto/org_dtos.go` `SealRequest`-ийн
- * JSON tag (`relyingPartyUUID`/`relyingPartyName` нь CA-д заавал биш). CA `DisallowUnknownFields`.
+ * JSON tag (`relyingPartyUUID`/`relyingPartyName` нь CA-д заавал биш). `docId`/`revIndex` нөөц —
+ * {@link SEAL_RESERVATION_FIELDS}. CA `DisallowUnknownFields`.
  */
 export const SEAL_REQUEST_FIELDS = ["digest", "hashType"] as const;
+
+/** `sealForDocument`-ийн `POST /seal/{orgEtsi}` биед нэмэгдэх нөөцийн талбарууд (CA `dto.SealRequest` V158: хоёулаа эсвэл аль нь ч үгүй). */
+export const SEAL_RESERVATION_FIELDS = ["docId", "revIndex"] as const;
+
+/**
+ * `POST /seal/{orgEtsi}/registrations`-ийн биеийн талбарууд — CA `server/internal/dto/pdf.go` `SealRegisterRequest`-ийн JSON
+ * tag (CA main 70c0e09c, PR #78). CA `DisallowUnknownFields` (medium, sessionID, onBehalfOf, signerEtsi, pageSha256 → 400).
+ * Live discovery-ийн `endpoints.seal.registration` тайлбартай гэрээний тест тулгана.
+ */
+export const SEAL_REGISTER_FIELDS = [
+  "docID",
+  "revIndex",
+  "cms",
+  "fileName",
+  "inSha256",
+  "sigRevSha256",
+  "outSha256",
+  "priorCmsSha256",
+  "priorRevisionSha256",
+] as const;
 
 /** `POST /seal/grants`-ийн биеийн талбарууд (CA `handlers_seal_grant_rp.go`). */
 export const SEAL_GRANT_REQUEST_FIELDS = ["orgEtsi", "sessionId"] as const;
