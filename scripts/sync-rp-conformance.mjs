@@ -15,7 +15,7 @@ import { fileURLToPath } from "node:url";
 
 export const GO_SDK_REPO = "https://github.com/gerege-systems/eid-mongolia-sdk-go";
 // rp-conformance/1 — Go PR «test/rp-conformance-v1» (tag rp-conformance-v1 merge-ийн дараа).
-export const RP_CONFORMANCE_COMMIT = "1952a08a1edd00f5a09598426d109ffec4c6a1d2";
+export const RP_CONFORMANCE_COMMIT = "a0b00e248680dd00de23135330ede19b538417b0";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const check = process.argv.includes("--check");
