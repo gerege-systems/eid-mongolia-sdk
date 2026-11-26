@@ -1,4 +1,172 @@
 # Changelog
+## 0.50.0 — 2026-11-27
+
+### Security
+
+- **validatePdf shadow attack fixed:** an object of the signed revision whose stream ran past the signed bytes and was
+  completed by a later revision kept the signature `valid`; it is now `modified_after_signing`.
+- **Later-signature trust:** only later signatures that pass integrity count as signature-only extensions — a forged
+  later revision with a visible stamp no longer keeps earlier signatures `valid` (Go validate corpus v15). `platform_attested` is never reported together with
+  `modified_after_signing`; SHA-1/MD5 SignerInfo signature algorithms are `weak_algorithm`; RSA-PSS parameters are
+  checked strictly.
+- **Reader DoS limits** in `validatePdf`, `prepare` and `sealPdf` (no signature needed to trigger them; a 5 MB OID or a
+  1.2 MB object-stream file took hours) — see «New limits».
+- **`ResponseValidator` / My QR / OCSP hardening** (corpus `rp-conformance/2`): weak RSA citizen keys rejected;
+  duplicate SERIALNUMBER/CN rejected; the issuer allowlist is bound to the issuer actually found in the trust pool (a
+  leaf under an SKI-less CA could name the allowed CA in its own AKI); SHA-1/MD5 chain signatures no longer verify; the
+  OCSP issuer must have issued the certificate and the response CertID must match it; empty, `.` or `..` RP-API path
+  parameters throw before any request.
+- **`createEidLogin`:** `__Host-` login cookie, rate-limit keys no longer contain the citizen's id (`push:<hmac>`), a
+  request without a client IP is rate-limited, IPv6 clients are keyed by /64, the in-memory limiter table cannot be
+  exhausted.
+
+### Upgrade notes
+
+- **Login cookie name:** with a secure, host-only, `path: "/"` cookie the default name is now `__Host-eid_login` (was
+  `eid_login`; an explicit `cookie.name` is kept). **Logins in progress during the upgrade restart once.**
+- **Custom rate-limit functions** (`rateLimit`) now receive `push:<hmac>` instead of `push:<idCode>` — update any
+  limiter that parsed the citizen id from the key.
+- **PDF limits:** documents with more than 128 incremental updates (xref sections) or object streams with very many
+  members are `PDF_INVALID` in `validatePdf` and are also refused by `prepare` / `sealPdf`.
+- **Later revisions:** a later revision whose signature fails integrity now makes the earlier signatures
+  `modified_after_signing`.
+- **RSA-PSS:** certificate/CRL/OCSP signatures with non-standard RSA-PSS parameters (hash other than SHA-256/384/512, a
+  different MGF1 hash, salt ≠ hash length, or absent parameters that used to default to SHA-1) no longer verify.
+- **Validator behaviour changes:** weak RSA citizen keys, duplicate SERIALNUMBER/CN, SHA-1/MD5 chain signatures and an
+  unknown `requiredLevel` now throw (the production eID chain is unaffected). Every `validatePdf` extraction/evaluation
+  error is `PDF_INVALID`; an out-of-memory `RangeError` is rethrown.
+- **New limits:** > 128 xref sections (`/Prev` chain); xref stream rows of width 0 or `/W` entries outside 0…8; xref
+  stream rows > max(`/Size`, 2^21); multi-filter xref/object streams; inflation ≤ 256 MiB per document and a 32 MiB
+  structural inflate budget (xref + object streams); object-stream lookup work ≤ 1 GiB; OID ≤ 128 bytes / arcs ≤ 63
+  bits (all `PDF_INVALID`); per signature ≤ 32 CMS certificates, RSA modulus ≤ 8192 bits / exponent ≤ 2^32−1, serial ≤
+  160 bits; DSS ≤ 8 MiB decoded in total; in-memory rate limiter rule option `maxKeys` default 10 000.
+- **New API:** seal registration `eid.seal.registerSealedPdf` (`POST /seal/{orgEtsi}/registrations`),
+  `eid.seal.sealForDocument`, `sealPdf({ qr: true })` (QR seal stamp, APPEARANCE_SPEC §6.5). Default `sealPdf` output is
+  unchanged (golden v12 byte-identical); `prepare` stays QR-less.
+
+### README: кодын жишээний коммент орчуулсан
+
+- Юу: `README.en.md`, `README.zh-CN.md` дахь кодын жишээнүүдийн монгол коммент ба дэлгэцэнд харагдах жишээ мөр (reason, fileName, displayText г.м.)-ийг тус тусын хэл рүү орчуулсан. Танигч, API нэр, протоколын утга (`"mn"`, URL, хувилбар), бүтэц хэвээр; `README.md` өөрчлөгдөөгүй.
+- Яагаад: орчуулсан хуудсуудын код нь монгол коммент үлдээсэн тул хагас орчуулагдсан байсан.
+- Шалгасан: кодын мөр бүрийн комментоос өмнөх хэсэг (мөр утгаас бусад) `README.md`-тэй ижил эсэхийг скриптээр тулгасан; CI-ийн PR pipeline-аар батална.
+### Docs
+
+- README гурван хэлтэй боллоо: `README.en.md` (English), `README.zh-CN.md` (简体中文) — `README.md`-ийн бүрэн орчуулга (код блок, тушаал, нэр, URL, хувилбар хэвээр). Гурван файлын дээр хэлний сонголтын мөр нэмсэн. Зөвхөн баримт — код өөрчлөгдөөгүй. Шалгалт: код блокуудыг эх README-тэй `diff`-ээр харьцуулсан; CI-ийн PR pipeline-аар батална.
+### Security — cross-SDK hardening (behaviour changes; conformance corpus `rp-conformance/2`)
+
+Independent reviews of the .NET (0.17.0) and Java (0.2.0) ports found gaps that were identical in every SDK. They are
+closed here together with the Go reference SDK (PR gerege-systems/eid-mongolia-sdk-go 75); the vendored corpus is
+`rp-conformance/2` (`test/fixtures/conformance/README.md` §Changes).
+
+- **`ResponseValidator`** (`validateAuth`, `validateSign`, `validateCertificateChoice`, token auth, My QR):
+  - a citizen certificate with a weak RSA key — modulus < 2048 bits, or public exponent even or < 3 — throws
+    `ValidationError` («Гэрчилгээний RSA түлхүүр сул…», corpus key `cert.weak_key`); the constructor throws when a trust
+    anchor or intermediate has such a key;
+  - a subject with more than one SERIALNUMBER or more than one CN is rejected (`subject.duplicate_identity`; My QR:
+    `QR_CHAIN_INVALID`) — the TS parser took the first value, Go the last;
+  - issuer allowlist (`allowedIssuerSkis`, default `CITIZEN_ISSUING_CA_SKI`): when the issuer is found in the trust
+    pool only ITS key identifier counts — the SKI, or the RFC 5280 method-1 identifier when the CA has no SKI extension.
+    A leaf under an SKI-less CA could previously name the allowed CA in its own AKI and pass. The leaf AKI is used only
+    when no issuer is found (`allowUntrusted`);
+  - chain signatures with SHA-1 or MD5 (and any algorithm outside SHA-256/384/512 RSA / RSA-PSS / ECDSA, Ed25519) no
+    longer verify (`chain.untrusted`) — Go already behaved this way;
+  - an unknown `requiredLevel` throws in the constructor (it was treated as QUALIFIED).
+- **`ocspRevocationChecker`**: the given issuer must have issued the certificate (name, AKI/SKI, signature, CA, RSA
+  ≥ 2048) before any cache lookup or network call — else `"unknown"`; a response whose CertID
+  (issuerNameHash/issuerKeyHash, SHA-1/256/384/512) belongs to another issuer, or whose delegated responder has a weak
+  RSA key, is not accepted.
+- **RP-API paths** (`routePath`, every service incl. seal registration): an empty, `.` or `..` path parameter throws
+  before any request.
+- **`createEidLogin`**:
+  - the default login cookie name is `__Host-eid_login` when the cookie is secure, has no domain and path is `/`
+    (otherwise `eid_login`; an explicit `cookie.name` is kept). **Logins in flight during the upgrade restart once.**
+    A request with more than one cookie of that name is treated as unbound (status `EXPIRED`, callback
+    `eid_error=expired`). The browser component (`button`) is unaffected — the cookie is HttpOnly;
+  - rate-limit keys never contain the citizen's id: `push:<pushKey>` (the audit HMAC) in the built-in limiter and in
+    `rateLimit` functions — **a custom limiter that parsed `push:<idCode>` must be updated**;
+  - with `trustProxy` or `getClientIp` configured, a request without a client IP shares the `start:unknown` bucket
+    instead of skipping the limit; IPv6 clients are keyed by their /64 prefix; with no IP source at all the start limit
+    is off and `onError` warns once (also for `handleRequest`);
+  - the in-memory limiter, when its table is full, counts new keys in one shared overflow bucket instead of refusing
+    them (existing counters are never evicted); new rule option `maxKeys` (default 10 000).
+- Where: `src/validator.ts`, `src/myqr.ts`, `src/ocsp.ts`, `src/contract.ts`, `src/login.ts`; tests
+  `test/conformance.test.ts` (v2 harness: reason keys, cookie/IP/limiter config), `test/hardening.test.ts`; corpus pin
+  `scripts/sync-rp-conformance.mjs`.
+### Fixed
+
+- `ResponseValidator.validateAuth` / `validateSign` / `validateCertificateChoice` (and token auth verification): a
+  session result whose `cert.value` is not an X.509 certificate now throws `ValidationError` («Гэрчилгээ
+  задарсангүй») instead of the raw `node:crypto` error. Effect: `createEidLogin` answers such a COMPLETE/OK result with
+  `FAILED` / `VALIDATION` (event `unverified`) instead of HTTP 500 `internal` — the same as the Go SDK. Found by the
+  shared conformance corpus (`rp-validate` case `auth-certificate-garbage`, `eidlogin` scenario
+  `qr-complete-ok-unverifiable`).
+
+### Added (tests)
+
+- RP SDK conformance corpus `rp-conformance/1` vendored from the Go reference (`test/fixtures/conformance/`, pinned
+  commit in `scripts/sync-rp-conformance.mjs`; `npm run conformance:check` / CI step «rp conformance ↔ Go reference»
+  fails when the copy differs). `test/conformance.test.ts` runs the whole corpus against the TS SDK: response
+  validator (auth / sign / certificate-choice, fail-closed chain rule), RP-API request/response vectors,
+  interactions encoding, ACSP_V2, OCSP checker scenarios, `createEidLogin` protocol scenarios, manifest hashes and the
+  devicelink/myqr pins. Verified: `npm ci && npm test` on the macmini; CI on the PR.
+### Added — organisation e-Seal registration (CA V158, PR #78) and the QR seal stamp writer
+
+- **What:** `eid.seal.registerSealedPdf(orgEtsi, input)` → `POST /seal/{orgEtsi}/registrations` (201 `created` / 200
+  replay; result = `RegisterSignatureResult`, alias `SealRegisterResult`). Body `SealRegisterInput` / `buildSealRegisterBody`
+  = CA `dto.SealRegisterRequest` (`SEAL_REGISTER_FIELDS`: `docID, revIndex, cms, fileName?, inSha256, sigRevSha256,
+  outSha256, priorCmsSha256?, priorRevisionSha256?`), validated offline with the CA's `normalizeSealRegister` rules
+  (`ValidationError`); 409 `PRIOR_MISMATCH` retry via `priorSignatures` (same combinations as `registerSignature`).
+  `SEAL_REGISTER_ERROR_CODES` / `SealRegisterErrorCode` = discovery `seal.registerErrorCodes` (new: `SEAL_NOT_FOUND`,
+  `SEAL_DOC_MISMATCH`, `DOC_ID_RESERVED`; errors stay `ApiError` / `ForbiddenError`). `eid.seal.sealForDocument(orgEtsi,
+  digest, docId, revIndex)` — `POST /seal/{orgEtsi}` with the V158 reservation (`SEAL_RESERVATION_FIELDS`, SHA-256 only);
+  `seal()` sends the old body unchanged.
+- **pades:** `sealPdf` options `qr` (QR seal stamp, APPEARANCE_SPEC §6.5 — needs `PadesSealer.sealForDocument`, reserves
+  docId/revIndex at seal time; `qr` + `invisible`, or a signed input without a resolvable docId → `REQUEST_INVALID` before
+  any request; only an own `qr` property counts), `docId`, `fileName`; result `sealRegistration`
+  (`PadesSealRegistration`) and `sealRegistration(done, { fileName })`. Default `sealPdf` output unchanged (QR-less, golden
+  v12 byte-identical); `prepare` stays QR-less.
+- **Why:** the CA registers seals since 2026-11-25; the CA and TS validators and the `/verify` bundle (0.49.0) already
+  implement §6.5, the gate for a QR writer.
+- **Golden:** no new bytes — `sealPdf({qr: true})` reproduces golden v13 `seal-qr-visible`, `citizen-then-seal-qr`,
+  `seal-qr-then-seal-qr` byte for byte; fixtures stay at `pades-golden-v13`.
+- **Where:** `src/seal.ts`, `src/contract.ts`, `src/errors.ts`, `src/index.ts`, `src/client.ts`, `src/sign.ts`
+  (`priorSplits` shared, not exported from the entry), `src/pades.ts`, `src/pades/sealqr.ts`; tests
+  `test/seal-register.test.ts`, `test/pades-seal-register.test.ts`, `test/contract.test.ts`; README (mn/en/zh-CN) §3i.
+- **Verified:** `npm ci` + `npm test` on the macmini; PR CI.
+### Security — validatePdf hardening (Go validate corpus v15)
+
+Two independent reviews of the .NET and Java ports of `validatePdf` found weaknesses that were already in this
+implementation and in Go `pades.ValidatePDF`. Fixed in both; the validate corpus and the RP conformance corpus are
+vendored from Go main `9f6839060115` (`scripts/sync-pades-golden.mjs`, `scripts/sync-rp-conformance.mjs`). The 67
+earlier reports are unchanged; 13 new cases (README «v14», «v15» in `test/fixtures/pades/validate`).
+
+- **Shadow attack** (`src/pades/validate/revisions.ts`): an unchanged object of the signed revision must parse completely
+  inside it — a stream whose `/Length` was completed by a later (e.g. DSS-only) revision kept the signature `valid`.
+- **Later-signature trust** (`extract.ts`): only integrity-passing later signatures count as signature-only extensions.
+  The stamp's `/Name` is deliberately not compared with the certificate name (corpus v15, `later-stamp-name-mismatch`
+  stays `valid`): the released eID desktop client writes the Cyrillic portal name there while the certificate name is
+  Latin, `signerName` may set any name, and an untrusted signer chooses its own certificate name anyway; `signer_name`
+  always comes from the certificate.
+- **`platform_attested`** (`evaluate.ts`) only for documents covered or extended only by signatures.
+- **Weak algorithms**: a SHA-1/MD5 SignerInfo signature algorithm → `weak_algorithm`; RSA-PSS certificate/CRL/OCSP
+  signatures need SHA-256/384/512 with the same MGF1 hash and salt = hash length (`x509.ts`; absent parameters no longer
+  default to SHA-1).
+- **DoS** (no signature needed): OID ≤ 128 bytes / arcs ≤ 63 bits (`asn1.ts`, a 5 MB OID took hours); long INTEGERs
+  convert in linear time; the reader (`pdf/reader.ts`) rejects xref stream rows of width 0, caps xref stream rows at
+  max(`/Size`, 2^21), `/Prev` chains at 128 sections, inflation at 256 MiB per document, rejects multi-filter
+  xref/object streams and indexes an object stream's header once (was: re-inflated per member); the structure pre-check
+  (`pdf/nesting.ts`) applies Go's new rules (sections, `/W`, `/Index`, 32 MiB structural inflate budget incl. xref
+  streams, object-stream lookup work ≤ 1 GiB); ≤ 32 CMS certificates, RSA ≤ 8192 bits / e ≤ 2^32−1, serial ≤ 160 bits;
+  hash-deduplicated certificate pool; DSS ≤ 8 MiB decoded, duplicate references read once, each OCSP/CRL parsed and
+  verified once per validation.
+- **Errors**: every extraction/evaluation error is `PDF_INVALID`; an out-of-memory `RangeError` is rethrown instead of
+  being turned into "not a PDF", "modified" or a skipped check.
+- Behaviour visible to integrators: documents with more than 128 incremental updates or object streams with very many
+  members are `PDF_INVALID`; a later revision whose signature fails integrity makes earlier signatures
+  `modified_after_signing`; RSA-PSS with non-standard parameters no longer verifies.
+- Checked: `npm ci && npm test` on the macmini (new `test/validate-hardening.test.ts` with time bounds and the v15
+  `/Name` ≠ certificate name case; `validate-golden.test.ts` deep-equal with Go for all 80 cases).
+
 ## 0.49.0 — 2026-11-25
 
 ### Feat — `validatePdf` accepts the seal stamp with QR; prepare's docId rule (APPEARANCE_SPEC.md §6.5/§6.6, golden v13)
