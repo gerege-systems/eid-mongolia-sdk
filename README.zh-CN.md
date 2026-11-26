@@ -968,9 +968,10 @@ try {
   `malformed_signature`（时间戳 → `timestamp_invalid`）。DSS：每个数组 ≤ 64 项，每项 ≤ 1 MiB，解码合计 ≤ 8 MiB，同一数组中
   重复引用的 stream 只读一次；每个 OCSP/CRL 在一次验证中只解析和验证一次。SignerInfo 的 SHA-1/MD5 签名算法（如
   `sha1WithRSAEncryption`）→ 即使摘要为 SHA-256 也为 `weak_algorithm`。已签名修订中的对象若只在后续修订中才完整
-  （shadow attack）→ `modified_after_signing`；后续签名只有其自身完整性成立时才算“仅签名扩展”，其可见印章的名称必须等于其证书的
-  显示名称；签名后被修改的文档永远不会报告 `platform_attested`。
-  与 Go `pades.ValidatePDF` 相同（golden validate v14）。仅 TS：长度超过 128 字节或某一弧超过 63 位的 OID 视为解析错误（此前为
+  （shadow attack）→ `modified_after_signing`；后续签名只有其自身完整性成立时才算“仅签名扩展”（不将其印章的 `/Name` 与
+  证书名称比较——eID 桌面客户端在此写入西里尔文的门户姓名，`signerName` 也可设为任意名称；`signer_name` 始终来自证书）；
+  签名后被修改的文档永远不会报告 `platform_attested`。
+  与 Go `pades.ValidatePDF` 相同（golden validate v15）。仅 TS：长度超过 128 字节或某一弧超过 63 位的 OID 视为解析错误（此前为
   二次复杂度）；证书/CRL/OCSP 的 RSA-PSS 签名要求 SHA-256/384/512、相同的 MGF1 哈希且 salt = 哈希长度（与 Go `crypto/x509`
   相同）；PDF 读取器对 object stream 只建立一次索引，`/Prev` 链上限 128 段，xref stream 行数上限 max(`/Size`, 2^21)，每个文档
   解压上限 256 MiB。提取阶段的所有错误均为 `PDF_INVALID`；内存耗尽的 `RangeError` 会继续抛出，绝不作为结果返回。

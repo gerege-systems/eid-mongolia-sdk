@@ -1,14 +1,17 @@
-### Security — validatePdf hardening (Go validate corpus v14)
+### Security — validatePdf hardening (Go validate corpus v15)
 
 Two independent reviews of the .NET and Java ports of `validatePdf` found weaknesses that were already in this
-implementation and in Go `pades.ValidatePDF`. Fixed in both; the validate corpus is vendored from Go PR 76 head
-`15921a09ecdb` (`scripts/sync-pades-golden.mjs`; re-pin to the merge commit once that PR is merged). The 67 earlier
-reports are unchanged; 13 new cases (README «v14» in `test/fixtures/pades/validate`).
+implementation and in Go `pades.ValidatePDF`. Fixed in both; the validate corpus and the RP conformance corpus are
+vendored from Go main `9f6839060115` (`scripts/sync-pades-golden.mjs`, `scripts/sync-rp-conformance.mjs`). The 67
+earlier reports are unchanged; 13 new cases (README «v14», «v15» in `test/fixtures/pades/validate`).
 
 - **Shadow attack** (`src/pades/validate/revisions.ts`): an unchanged object of the signed revision must parse completely
   inside it — a stream whose `/Length` was completed by a later (e.g. DSS-only) revision kept the signature `valid`.
-- **Later-signature trust** (`extract.ts`, `appearance.ts`): only integrity-passing later signatures count as
-  signature-only extensions; an own-signer stamp's `/Name` must equal that signature's certificate display name.
+- **Later-signature trust** (`extract.ts`): only integrity-passing later signatures count as signature-only extensions.
+  The stamp's `/Name` is deliberately not compared with the certificate name (corpus v15, `later-stamp-name-mismatch`
+  stays `valid`): the released eID desktop client writes the Cyrillic portal name there while the certificate name is
+  Latin, `signerName` may set any name, and an untrusted signer chooses its own certificate name anyway; `signer_name`
+  always comes from the certificate.
 - **`platform_attested`** (`evaluate.ts`) only for documents covered or extended only by signatures.
 - **Weak algorithms**: a SHA-1/MD5 SignerInfo signature algorithm → `weak_algorithm`; RSA-PSS certificate/CRL/OCSP
   signatures need SHA-256/384/512 with the same MGF1 hash and salt = hash length (`x509.ts`; absent parameters no longer
@@ -24,7 +27,7 @@ reports are unchanged; 13 new cases (README «v14» in `test/fixtures/pades/vali
 - **Errors**: every extraction/evaluation error is `PDF_INVALID`; an out-of-memory `RangeError` is rethrown instead of
   being turned into "not a PDF", "modified" or a skipped check.
 - Behaviour visible to integrators: documents with more than 128 incremental updates or object streams with very many
-  members are `PDF_INVALID`; an own-signer stamp whose `/Name` differs from the certificate name makes earlier
-  signatures `modified_after_signing`; RSA-PSS with non-standard parameters no longer verifies.
-- Checked: `npm ci && npm test` on the macmini (new `test/validate-hardening.test.ts` with time bounds;
-  `validate-golden.test.ts` deep-equal with Go for all 80 cases).
+  members are `PDF_INVALID`; a later revision whose signature fails integrity makes earlier signatures
+  `modified_after_signing`; RSA-PSS with non-standard parameters no longer verifies.
+- Checked: `npm ci && npm test` on the macmini (new `test/validate-hardening.test.ts` with time bounds and the v15
+  `/Name` ≠ certificate name case; `validate-golden.test.ts` deep-equal with Go for all 80 cases).

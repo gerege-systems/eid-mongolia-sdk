@@ -52,8 +52,8 @@ export function ownVisible(c: Classifier, d: PDict, widget: number): void {
   // The sig dict check rejects a /Name over OWN_TEXT_LIMIT anyway; failing here keeps a hostile multi-megabyte name
   // out of the (quadratic) stamp text wrap below.
   if (!(ns instanceof PStr) || !(ms instanceof PStr) || ns.v.length > OWN_TEXT_LIMIT) throw fail();
-  // Дардасны нэр = гарын үсэг зурагчийн гэрчилгээний харуулах нэр (хожмын хуурамч гарын үсэг өөр хүний нэрээр дардас нэмэхгүй).
-  if (!meta.name || pdfTextString(ns) !== meta.name) throw fail();
+  // /Name-ийг гэрчилгээний нэртэй ХАРЬЦУУЛАХГҮЙ (corpus v15; Go appearance.go sigMeta): eID desktop кирилл порталын нэр,
+  // интеграторын signerName бичдэг; итгэмжлэгдээгүй зурагч гэрчилгээнийхээ нэрийг өөрөө сонгодог.
   const m = ms.v;
   if (!ownDate(m) || m.slice(16) !== "+08'00'") throw fail();
   const date = `${m.slice(2, 6)}-${m.slice(6, 8)}-${m.slice(8, 10)} ${m.slice(10, 12)}:${m.slice(12, 14)} (+08)`;

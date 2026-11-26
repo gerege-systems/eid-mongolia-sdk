@@ -8,7 +8,7 @@ import { digest, sha256 } from "../crypto.js";
 import { StructureError, checkStructure } from "../pdf/nesting.js";
 import { PRef, Reader, isOOM, type Value } from "../pdf/reader.js";
 import { OID, parseCertificate, sealCertificateDER, verifySignature, type Certificate } from "../x509.js";
-import { commonName, fromPrecise, hexSerial, pdfText, subjectNames, ZERO_TIME, type GoTime } from "./gofmt.js";
+import { fromPrecise, hexSerial, pdfText, ZERO_TIME, type GoTime } from "./gofmt.js";
 import { Revisions, type SigMeta } from "./revisions.js";
 
 /** PDF-ийн дээд хэмжээ (CA MaxPDFBytes). */
@@ -144,11 +144,11 @@ export async function extract(doc: Uint8Array, profile: Profile = "own"): Promis
   const known = new Map<number, number[]>();
   const metas = new Map<number, SigMeta>();
   // Зөвхөн бүрэн бүтэн (integrity) гарын үсэг л «гарын үсгийн өргөтгөл» (Go extract.go): криптографаар таараагүй гарын
-  // үсэгтэй revision DSS-only горимд орж татгалзагдана. name — дардасны /Name-тэй тулгах гэрчилгээний нэр.
+  // үсэгтэй revision DSS-only горимд орж татгалзагдана.
   for (const s of sigs) {
     if (!s.malformed && s.integrity) {
       known.set(s.objNum, s.byteRange!);
-      metas.set(s.objNum, { revIndex: 1, role: "", roleOK: s.claimedRoles.length <= 1, seal: sealCertificateDER(s.leaf), name: certDisplayNameDER(s.leaf) });
+      metas.set(s.objNum, { revIndex: 1, role: "", roleOK: s.claimedRoles.length <= 1, seal: sealCertificateDER(s.leaf) });
     }
   }
   for (const [num, m] of metas) {
@@ -172,20 +172,6 @@ export async function extract(doc: Uint8Array, profile: Profile = "own"): Promis
     s.laterVisible = later.visible;
   }
   return { sigs, metas, docID };
-}
-
-/** Go certDisplayName: DER гэрчилгээний харуулах нэр (GIVENNAME SURNAME, эс бөгөөс CN); задрахгүй бол "". */
-function certDisplayNameDER(der: Uint8Array | undefined): string {
-  if (!der) return "";
-  let c: Certificate;
-  try {
-    c = parseCertificate(der);
-  } catch {
-    return "";
-  }
-  const { given, surname } = subjectNames(c.rawSubject);
-  const n = `${given} ${surname}`.trim();
-  return n !== "" ? n : commonName(c.rawSubject);
 }
 
 /** widget харагдах: /AP-тэй эсвэл /Rect-ийн өргөн, өндөр хоёулаа 0 биш. */
