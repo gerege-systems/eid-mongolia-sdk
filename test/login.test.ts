@@ -116,8 +116,8 @@ const req = (method: string, url: string, init: Partial<EidLoginRequest> = {}): 
 });
 
 function cookieOf(h: Record<string, string | string[]>): string {
-  const sc = [h["Set-Cookie"] ?? []].flat().find((c) => c.startsWith("eid_login="));
-  assert.ok(sc, "eid_login cookie");
+  const sc = [h["Set-Cookie"] ?? []].flat().find((c) => c.startsWith("__Host-eid_login="));
+  assert.ok(sc, "__Host-eid_login cookie");
   assert.match(sc, /HttpOnly/);
   assert.match(sc, /SameSite=Lax/);
   assert.match(sc, /Secure/);
@@ -162,7 +162,7 @@ test("QR: start → PENDING (шинэ QR) → OK (validateAuth QR, onSuccess, co
   assert.equal(identities[0]!.documentNumber, "doc-1");
   assert.equal(identities[0]!.certificateDerB64, "AAAA");
   const sc = [ok.headers["Set-Cookie"]].flat();
-  assert.ok(sc.some((c) => c.startsWith("eid_login=;") && c.includes("Max-Age=0")));
+  assert.ok(sc.some((c) => c.startsWith("__Host-eid_login=;") && c.includes("Max-Age=0")));
   assert.ok(sc.includes("app_session=s1; Path=/; HttpOnly"));
 
   // Нэг удаа л: дахин status → EXPIRED.
@@ -175,7 +175,7 @@ test("status: cookie-гүй / өөр binding → EXPIRED (sessionId мэдсэн
   const { login } = setup();
   const s = await login.handleRequest(req("POST", "/auth/eid/start", { body: { mode: "qr" } }));
   const cookie = cookieOf(s.headers);
-  for (const c of ["", `eid_login=${SID}.${"A".repeat(43)}`, cookie.replace(/.$/, "x")]) {
+  for (const c of ["", `__Host-eid_login=${SID}.${"A".repeat(43)}`, cookie.replace(/.$/, "x")]) {
     const r = await login.handleRequest(req("GET", "/auth/eid/status", { headers: { cookie: c } }));
     assert.equal(JSON.parse(r.body).state, "EXPIRED", c);
   }
@@ -227,7 +227,9 @@ test("rateLimit функц: анхдагч push хязгаар дээр нэмэ
   const keys: string[] = [];
   const { login } = setup({ rateLimit: (k) => (keys.push(k), true) });
   assert.deepEqual(await pushStatuses(login, 4), [200, 200, 200, 429]);
-  assert.deepEqual(keys, Array(3).fill("push:УБ12345678"), "анхдагч татгалзсан үед хэрэглэгчийн функц дуудагдахгүй");
+  assert.equal(keys.length, 3, "анхдагч татгалзсан үед хэрэглэгчийн функц дуудагдахгүй");
+  // 0.50.0-аас push түлхүүр = аудитын HMAC (регистрийн дугаар биш), нэг дугаарт тогтмол.
+  assert.ok(keys.every((k) => k === keys[0] && /^push:[0-9a-f]{32}$/.test(k)), keys.join());
 });
 
 test("rateLimit объект: push-ийг дарна ({limit,windowMs}, функц, false); start-ийн window", async () => {
@@ -260,7 +262,7 @@ test("start: анхдагчаар нэг IP-ээс 60 секундэд 20 (21 д
   for (let i = 0; i < 25; i++) assert.equal((await off.handleRequest(qr)).status, 200);
 });
 
-test("хязгаарлагч: 10 000 түлхүүрээр дүүргэж тухайн түлхүүрийн хязгаарыг тойрох боломжгүй (шинэ түлхүүр fail-closed)", async () => {
+test("хязгаарлагч: 10 000 түлхүүрээр дүүргэж тухайн түлхүүрийн хязгаарыг тойрох боломжгүй (шинэ түлхүүрүүд overflow bucket-д)", async () => {
   const store = new Map<string, unknown>();
   const mapStore = { get: (k: string) => store.get(k) as never, set: (k: string, tx: unknown) => void store.set(k, tx), delete: (k: string) => store.delete(k) };
   const { login } = setup({ store: mapStore, rateLimit: { start: { limit: 1, windowMs: 60_000 } } });
@@ -269,9 +271,10 @@ test("хязгаарлагч: 10 000 түлхүүрээр дүүргэж тух�
   assert.equal((await login.handleRequest(qr("victim"))).status, 429);
   let denied = 0;
   for (let i = 0; i < 10_000; i++) if ((await login.handleRequest(qr(`10.0.${i >> 8}.${i & 255}`))).status === 429) denied++;
-  assert.equal(denied, 1); // 9 999 шинэ түлхүүр орж, 10 000 дахь нь дүүрсэн тул татгалзагдана
+  // 9 999 шинэ түлхүүр орж хүснэгт дүүрнэ; 10 000 дахь нь overflow bucket-ийн эхний (limit 1) — 0.50.0-аас татгалзахгүй.
+  assert.equal(denied, 0);
   assert.equal((await login.handleRequest(qr("victim"))).status, 429); // 0.18.x-д бүгд цэвэрлэгдээд 200 болдог байв
-  assert.equal((await login.handleRequest(qr("new-ip"))).status, 429);
+  assert.equal((await login.handleRequest(qr("new-ip"))).status, 429); // overflow bucket дүүрсэн
 });
 
 test("memoryLoginStore: дээд хэмжээ — дүүрвэл хугацаа дууссаныг цэвэрлэж, үгүй бол LoginStoreFullError (хуучныг устгахгүй)", async () => {
@@ -434,7 +437,7 @@ test("handle(Request): Next.js/Web-standard", async () => {
     new Request("https://bank.example.mn/auth/eid/start", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode: "qr" }) }),
   );
   assert.equal(r.status, 200);
-  assert.match(r.headers.get("set-cookie") ?? "", /^eid_login=/);
+  assert.match(r.headers.get("set-cookie") ?? "", /^__Host-eid_login=/);
   assert.equal((await r.json()).mode, "qr");
   const nf = await login.handle(new Request("https://bank.example.mn/auth/eid/other"));
   assert.equal(nf.status, 404);
@@ -473,7 +476,7 @@ test("push decoy: eID татгалзсан дугаар бодит push-тэй �
   assert.match(db.vc, /^[0-9]{5}$/);
   assert.deepEqual(keysOf(decoy.headers), keysOf(real.headers));
   const dc = cookieOf(decoy.headers);
-  assert.match(dc, /^eid_login=[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\./);
+  assert.match(dc, /^__Host-eid_login=[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\./);
 
   const calls = fake.calls.length;
   const rp = JSON.parse((await login.handleRequest(req("GET", "/auth/eid/status", { headers: { cookie: cookieOf(real.headers) } }))).body);
@@ -669,7 +672,8 @@ test("onEvent алдаа урсгалыг зогсоохгүй (onError руу)"
   const errs: unknown[] = [];
   const { login } = setup({ onEvent: () => { throw new Error("audit down"); }, onError: (e) => errs.push(e) });
   assert.equal((await login.handleRequest(push())).status, 200);
-  assert.match(String(errs[0]), /audit down/);
+  // 0.50.0-аас IP-гүй handleRequest нэг удаа анхааруулна — аудитын алдаа ч onError-д ирнэ.
+  assert.ok(errs.some((e) => /audit down/.test(String(e))), String(errs));
 });
 
 test("push: CA TIMEOUT → EXPIRED (decoy-той ижил төгсгөл, FAILED/TIMEOUT биш)", async () => {
@@ -682,7 +686,7 @@ test("push: CA TIMEOUT → EXPIRED (decoy-той ижил төгсгөл, FAILED
 });
 
 const maxAge = (h: Record<string, string | string[]>) =>
-  /Max-Age=(\d+)/.exec([h["Set-Cookie"] ?? []].flat().find((c) => c.startsWith("eid_login=")) ?? "")?.[1];
+  /Max-Age=(\d+)/.exec([h["Set-Cookie"] ?? []].flat().find((c) => c.startsWith("__Host-eid_login=")) ?? "")?.[1];
 
 test("push TTL: бодит ба decoy хоёулаа min(ttlMs, discovery sessionTtl.auth) — CA-ийн expiresAt-аас биш", async () => {
   const { login, fake } = setup();
