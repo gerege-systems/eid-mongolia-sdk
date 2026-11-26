@@ -14,8 +14,8 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const GO_SDK_REPO = "https://github.com/gerege-systems/eid-mongolia-sdk-go";
-// rp-conformance/2 — Go main 222acbd6e769 (PR 75 «feat/hardening-corpus-v2»-ийн head 704e7b1c6610-тай байт-ижил).
-export const RP_CONFORMANCE_COMMIT = "222acbd6e7693695a654d9e5b8fe64ef548df101";
+// rp-conformance/2 — Go main 9f6839060115 (testdata/conformance byte-identical to Go PR 75 head 704e7b1c6610).
+export const RP_CONFORMANCE_COMMIT = "9f6839060115bbbfb9559f7ab2086ff9b6a2d800";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const check = process.argv.includes("--check");
