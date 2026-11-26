@@ -37,7 +37,7 @@ import {
   signatureCMSList,
   type PrecheckedSignature,
 } from "./pades/precheck.js";
-import { sealQrRequested } from "./pades/sealqr.js";
+import { sealQrRequested, withSealQr } from "./pades/sealqr.js";
 import { suggestVisible } from "./pades/page/suggest.js";
 import { decodeState, encodeState } from "./pades/state.js";
 import { OID, checkSignatureFrom, parseCertificate, sealCertificate, verifyCitizen, type Certificate } from "./pades/x509.js";
@@ -313,6 +313,67 @@ export interface PadesCompleted {
    * invisible. The citizen flow returns it from {@link prepare} ({@link PadesPrepared.placement}).
    */
   placement?: PadesPlacement;
+  /**
+   * CA-ийн тамганы бүртгэлийн (`POST /seal/{orgEtsi}/registrations`) бэлэн бие — зөвхөн {@link sealPdf} бөглөнө; `docId`
+   * хоосон бол байхгүй (гарын үсэгтэй, docId олдохгүй баримт — `PadesSealOptions.docId`). `eid.seal.registerSealedPdf(org,
+   * done.sealRegistration)`.
+   */
+  sealRegistration?: PadesSealRegistration;
+}
+
+/**
+ * Тамганы бүртгэлийн бие (CA `dto.SealRegisterRequest`; main entry-ийн `SealRegisterInput`-тэй ижил хэлбэр). Hash-ууд
+ * {@link complete}-ийнх: inSha256 = sha256(оролт), sigRevSha256 = sha256(гаралт[:ByteRange[2]+ByteRange[3]]), outSha256 =
+ * sha256(гаралт), priorCmsSha256 = өмнөх гарын үсэг бүрийн /Contents CMS DER-ийн sha256 (CA `validate.SignatureProof`).
+ */
+export interface PadesSealRegistration {
+  docID: string;
+  revIndex: number;
+  cms: Uint8Array;
+  fileName?: string;
+  inSha256: string;
+  sigRevSha256: string;
+  outSha256: string;
+  priorCmsSha256?: string[];
+  /** SDK-д л — `registerSealedPdf`-ийн PRIOR_MISMATCH хослол (горим A-ийн өмнөх мөр). */
+  priorSignatures?: { cmsSha256: string; revisionSha256: string }[];
+}
+
+/**
+ * e-Seal-ийн {@link complete}/{@link sealPdf}-ийн үр дүнгээс CA-ийн тамганы бүртгэлийн бие (Go `pades.SealRegistration`).
+ * `sealPdf` үүнийг `sealRegistration`-д аль хэдийн тавьдаг. `opts.fileName` — CA-ийн бүртгэл дэх нэр (заавал биш; NFC, ≤ 120). CA CMS-ийн SHA-256(signedAttrs)-ийг тамгалсан digest
+ * (`prepare().dtbs`)-тэй тулгадаг.
+ * @throws {PadesError} REQUEST_INVALID — docId хоосон, эсвэл зурагч e-Seal биш (иргэнд `registrationFromCompleted`).
+ */
+export function sealRegistration(done: PadesCompleted, opts: { fileName?: string } = {}): PadesSealRegistration {
+  if (!done || !done.docId) throw new PadesError("REQUEST_INVALID", "docId хоосон — гарын үсэгтэй баримтад sealPdf({docId})");
+  let seal = false;
+  try {
+    seal = sealCertificate(parseCertificate(u8(done.signerCert, "signerCert")));
+  } catch {
+    seal = false;
+  }
+  if (!seal) throw new PadesError("REQUEST_INVALID", "зурагч e-Seal биш — иргэний гарын үсэгт registrationFromCompleted");
+  const out: PadesSealRegistration = {
+    docID: done.docId,
+    revIndex: done.revIndex,
+    cms: done.cms,
+    inSha256: done.inSha256,
+    sigRevSha256: done.sigRevSha256,
+    outSha256: done.outSha256,
+  };
+  if (opts.fileName !== undefined && opts.fileName.trim() !== "") {
+    const name = cleanFileName(opts.fileName);
+    if (name === undefined) throw new PadesError("REQUEST_INVALID", "fileName ≤ 120 тэмдэгт");
+    out.fileName = name;
+  }
+  if (done.priorCmsSha256.length) {
+    out.priorCmsSha256 = [...done.priorCmsSha256];
+    if (done.priorRevisionSha256.length === done.priorCmsSha256.length) {
+      out.priorSignatures = done.priorCmsSha256.map((c, i) => ({ cmsSha256: c, revisionSha256: done.priorRevisionSha256[i]! }));
+    }
+  }
+  return out;
 }
 
 const MAX_OUTPUT_BYTES = 10 << 20;
@@ -822,13 +883,18 @@ export async function complete(state: Uint8Array | ArrayBuffer, signature: Uint8
 export interface PadesSealer {
   getCertificate(orgEtsi: string): Promise<{ certificate: Uint8Array }>;
   seal(orgEtsi: string, digest: Uint8Array, hashAlgorithm: "SHA-256"): Promise<{ signature: Uint8Array; certificate: Uint8Array }>;
+  /**
+   * Тамгалахдаа docId/revIndex-ийг нөөцөлнө (`EidClient.seal.sealForDocument`, CA V158) — `qr: true`-д заавал (QR нь
+   * `/verify/<docId>/<revIndex>`-ийг амладаг). Go `pades.DocumentSealer`.
+   */
+  sealForDocument?(orgEtsi: string, digest: Uint8Array, docId: string, revIndex: number): Promise<{ signature: Uint8Array; certificate: Uint8Array }>;
 }
 
 /**
- * {@link sealPdf}-ийн тохиргоо. Баталгаажуулалтын (QR) хуудасгүй: verify хуудас нь CA-ийн бүртгэл (`/verify/{docId}`) рүү
- * заадаг ч тамга иргэний гарын үсгийн бүртгэлд (`POST /pdf/signatures`) ордоггүй. Анхдагчаар тамга ХАРАГДАНА (Go
+ * {@link sealPdf}-ийн тохиргоо. Баталгаажуулалтын хуудас нэмэхгүй (тамганы бүртгэл хуудасгүй баримт үүсгэнэ — CA V158).
+ * Анхдагчаар тамга ХАРАГДАНА (Go
  * `pades.SealOptions`, APPEARANCE_SPEC.md §6.4): баримтын сүүлийн (eID verify биш) хуудасны баруун доод буланд байгууллагын
- * тамганы дардас (QR/холбоосгүй), агуулгатай давхцвал чөлөөт байрлал руу (PLACEMENT_SPEC.md).
+ * тамганы дардас (QR/холбоосгүй; QR-тэй бол `qr: true`), агуулгатай давхцвал чөлөөт байрлал руу (PLACEMENT_SPEC.md).
  */
 export interface PadesSealOptions {
   /**
@@ -850,6 +916,22 @@ export interface PadesSealOptions {
   chain?: Uint8Array[];
   /** TSA/OCSP/CRL ({@link complete}-тэй ижил). RFC 3161 timestamp ЗААВАЛ — TSA унавал `TSA_UNAVAILABLE`. */
   complete?: PadesCompleteOptions;
+  /**
+   * QR-тэй тамганы дардас (APPEARANCE_SPEC.md §6.5, golden v13): QR = `/verify/<docId>/<revIndex>`. `sealer.sealForDocument`
+   * заавал (тамгалах үед байрлалыг нөөцөлнө, CA V158), эс бөгөөс `REQUEST_INVALID`. QR бүртгэлийг амладаг:
+   * `sealRegistration`-ийг 7 хоногийн дотор `eid.seal.registerSealedPdf`-ээр бүртгэнэ. `invisible`-тэй хамт →
+   * `REQUEST_INVALID`. Автомат дардас багтахгүй бол (QR-тэй дардас ≥ 45 pt өндөр) үл харагдах тамга, нөөцгүй. false
+   * (анхдагч) — QR-гүй дардас (§6.2), golden v12-тэй байт-ижил.
+   */
+  qr?: boolean;
+  /**
+   * Баримтын UUID (жижиг үсэг; {@link prepare}-ийн `docId`, §6.6): гарын үсэггүй баримтад алга бол санамсаргүй; гарын үсэгтэй
+   * баримтад verify хуудас / QR-тэй тамганы docId олдвол түүнийг (зөрвөл REQUEST_INVALID), олдохгүй бол энэ — алга бол
+   * `docId` "" ба `sealRegistration` байхгүй (QR бол REQUEST_INVALID).
+   */
+  docId?: string;
+  /** CA-ийн бүртгэл дэх нэр (`/verify`; заавал биш, NFC, ≤ 120 — эс бөгөөс REQUEST_INVALID). PDF-д бичигдэхгүй. */
+  fileName?: string;
 }
 
 /**
@@ -860,6 +942,9 @@ export interface PadesSealOptions {
  * ({@link PadesSealOptions}); эцсийн байршил `placement`-д. Тамганы дардсыг таньдаггүй шалгагчид (APPEARANCE_SPEC.md §6.3
  * хэрэгжүүлэхээс өмнөх CA `/v3/validate/pdf`, энэ SDK-ийн өмнөх хувилбарууд) өмнөх гарын үсгийг modified гэж мэдээлнэ —
  * тэдгээр шинэчлэгдэх хүртэл `invisible: true` ашиглана уу.
+ *
+ * CA-ийн `/verify/{docId}`-д бүртгэх: `eid.seal.registerSealedPdf(orgEtsi, done.sealRegistration)` (7 хоногийн дотор, тамгалсан RP
+ * өөрөө) — `qr: true` үед заавал (QR бүртгэлийг амладаг).
  *
  * `sealer` нь RP backend-ийн `EidClient.seal` (RP secret) — хөтөчөөс шууд дуудахгүй.
  *
@@ -873,6 +958,17 @@ export interface PadesSealOptions {
 export async function sealPdf(sealer: PadesSealer, orgEtsi: string, pdf: Uint8Array | ArrayBuffer, opts: PadesSealOptions = {}): Promise<PadesCompleted> {
   if (!sealer || typeof sealer.getCertificate !== "function" || typeof sealer.seal !== "function") {
     throw new PadesError("REQUEST_INVALID", "sealer (EidClient.seal) заавал");
+  }
+  // Own property only — an Object.prototype `qr` never turns the QR stamp on (same rule as the internal switch).
+  const qr = Object.prototype.hasOwnProperty.call(opts, "qr") && opts.qr === true;
+  if (qr && opts.invisible === true) throw new PadesError("REQUEST_INVALID", "qr ба invisible хамт боломжгүй");
+  if (qr && typeof sealer.sealForDocument !== "function") {
+    throw new PadesError("REQUEST_INVALID", "QR-тэй тамганд sealer.sealForDocument (EidClient.seal) заавал — docId/revIndex нөөц");
+  }
+  let fileName: string | undefined;
+  if (opts.fileName !== undefined && opts.fileName !== "") {
+    fileName = cleanFileName(opts.fileName);
+    if (fileName === undefined) throw new PadesError("REQUEST_INVALID", "fileName ≤ 120 тэмдэгт");
   }
   const sc = await sealer.getCertificate(orgEtsi);
   let cert: Certificate;
@@ -890,6 +986,7 @@ export async function sealPdf(sealer: PadesSealer, orgEtsi: string, pdf: Uint8Ar
     signerName: opts.signerName,
     reason: opts.reason,
     signingTime: opts.signingTime,
+    docId: opts.docId,
   };
   let auto = false;
   if (opts.invisible !== true) {
@@ -897,6 +994,7 @@ export async function sealPdf(sealer: PadesSealer, orgEtsi: string, pdf: Uint8Ar
     po.appearance = opts.appearance ?? (await defaultSealAppearance(doc));
     auto = opts.appearance == null && po.appearance !== undefined;
   }
+  if (qr) withSealQr(po);
   let p: PadesPrepared;
   try {
     p = await prepare(doc, po);
@@ -907,12 +1005,23 @@ export async function sealPdf(sealer: PadesSealer, orgEtsi: string, pdf: Uint8Ar
     delete po.appearance;
     p = await prepare(doc, po);
   }
-  const r = await sealer.seal(orgEtsi, p.dtbs, "SHA-256");
+  if (qr && !p.docId) {
+    // A signed input with no verify page and no marked seal stamp, and no docId given — nothing for the QR (or the
+    // registration) to point at (APPEARANCE_SPEC.md §6.6 step 4).
+    throw new PadesError("REQUEST_INVALID", "QR-тэй тамганд docId заавал (sealPdf({docId}))");
+  }
+  // The QR stamp was drawn: reserve /verify/<docId>/<revIndex> at seal time (CA V158; registration checks it —
+  // SEAL_DOC_MISMATCH). An automatic stamp that fell back to invisible draws no QR and reserves nothing.
+  const r =
+    qr && po.appearance !== undefined
+      ? await sealer.sealForDocument!(orgEtsi, p.dtbs, p.docId, (await decodeState(p.state)).revIndex)
+      : await sealer.seal(orgEtsi, p.dtbs, "SHA-256");
   if (!eq(u8(r.certificate, "certificate"), cert.raw)) {
     throw new PadesError("SIGNER_INVALID", "тамгалах хооронд байгууллагын тамганы гэрчилгээ солигдсон — дахин оролдоно уу");
   }
   const res = await complete(p.state, r.signature, opts.complete);
   if (p.placement) res.placement = p.placement;
+  if (res.docId) res.sealRegistration = sealRegistration(res, { fileName });
   return res;
 }
 

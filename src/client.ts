@@ -145,7 +145,7 @@ export class EidClient {
     this.auth = new AuthApi(http, cfg.credentials, { certificateLevel: level });
     this.sign = new SignApi(http, cfg.credentials, { certificateLevel: level, sessionTtlMs: cfg.signSessionTtlMs, pdfTimeoutMs: cfg.pdfTimeoutMs });
     this.organization = new OrganizationApi(http);
-    this.seal = new SealApi(http);
+    this.seal = new SealApi(http, cfg.pdfTimeoutMs);
     this.person = new PersonApi(http);
     this.validator = new ResponseValidator(cfg.trust ?? {});
     this.token = new TokenApi(http, cfg.credentials, this.validator);

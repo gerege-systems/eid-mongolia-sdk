@@ -1036,8 +1036,8 @@ writeFileSync("sealed.pdf", done.pdf); // PAdES-BASELINE-LT, байгуулла�
   32 байт DTBS-ийг `eid.seal.seal(org, dtbs, "SHA-256")` (`POST /seal/{orgEtsi}`, `{digest, hashType}`) → `complete`.
   PDF eID руу очихгүй.
 - **RFC 3161 timestamp заавал** (eID TSA, `complete.tsaUrl`): TSA хүрэхгүй бол `TSA_UNAVAILABLE`, цагийн тэмдэггүй файл
-  буцаахгүй; OCSP/CRL + DSS → B-LT. Баталгаажуулалтын (QR) хуудасгүй — тамга иргэний гарын үсгийн бүртгэлд
-  (`registerSignature`) ордоггүй тул `/verify/{docId}` холбоос өгөхгүй.
+  буцаахгүй; OCSP/CRL + DSS → B-LT. Баталгаажуулалтын хуудас нэмэхгүй; `/verify/{docId}`-д
+  тамганы бүртгэл — доорх «Тамгыг CA-д бүртгэх».
 - Шалгагч (`validatePdf`, CA `/v3/validate/pdf`) энэ гарын үсгийг `certificate.usage: "seal"` гэж ангилна — хэрэглэгчид
   «Байгууллагын тамга» гэж харуулна уу.
 - **Харагдах тамганы дардас — `sealPdf`-ийн анхдагч ӨӨРЧЛӨГДСӨН** (APPEARANCE_SPEC.md §6.4, Go `SealPDF`-тэй ижил):
@@ -1059,9 +1059,9 @@ writeFileSync("sealed.pdf", done.pdf); // PAdES-BASELINE-LT, байгуулла�
   QR-тэй тамганы дардсыг ч хүлээн авна: e-Seal гэрчилгээний form stream `/EIDVerify`-ээр эхэлбэл иргэний дардастай
   ижил бүтэц (QR, `/EIDVerify` BDC, URL-ийн rev/docId шалгалт) «eID Mongolia-аар тамгалсан» label-тай, үүргийн мөргүй
   дардсаар дахин үүсгэж тулгана; эхлэхгүй бол QR-гүй дардсаар. Тэмдэг (marker) хувилбарыг шийднэ — нөгөөгөөр дахин
-  оролдохгүй, зөрвөл өмнөх гарын үсгүүд `modified_after_signing`. **Бичигчид QR-гүй дардсаа хэвээр гаргана:** `sealPdf`
-  ба `prepare` QR-тэй тамга гаргах нийтийн сонголтгүй (`sealPdf`-ийн гаралт 0.48.x-тэй байт-ижил); QR-гүй дардас
-  үүрд хүчинтэй. QR-тэй тамгыг CA validator ба `/verify` bundle §6.5-ийг гаргах хүртэл ямар ч бичигч гаргахгүй.
+  оролдохгүй, зөрвөл өмнөх гарын үсгүүд `modified_after_signing`. **Бичигчид анхдагчаар QR-гүй дардсаа гаргана** (`sealPdf`-ийн
+  анхдагч гаралт 0.48.x-тэй байт-ижил; `prepare` QR-гүй хэвээр); QR-тэй дардас — `sealPdf({qr: true})`, тамганы бүртгэлтэй
+  хамт (доор). QR-гүй дардас үүрд хүчинтэй.
 - **`prepare`-ийн docId (APPEARANCE_SPEC.md §6.6):** гарын үсэгтэй баримтад verify хуудасны холбоос байхгүй бол шалгасан
   **e-Seal** гарын үсгийн хамгийн эрт зурсан `/EIDVerify` дардсын docId-г авна (маркерын rev = тэр гарын үсгийн
   дараалал, `/V` шууд бус, гарын үсэг бүрт ганц widget, `/Filter` байхгүй эсвэл шууд `null`); иргэний дардас хэзээ ч эх
@@ -1082,6 +1082,38 @@ writeFileSync("sealed.pdf", done.pdf); // PAdES-BASELINE-LT, байгуулла�
   олгохгүй; олгогдоогүй / цуцлагдсан / хугацааны гадна бол **409** (`SealNotIssuedError` | `SealCertRevokedError` |
   `SealCertExpiredError` | `SealCertNotYetValidError`) — 200-аар хүчингүй гэрчилгээ буцаахгүй. Go: `pades.SealPDF`; .NET:
   `EidPades.SealAsync`.
+
+### Тамгыг CA-д бүртгэх — `eid.seal.registerSealedPdf`, QR-тэй дардас (Unreleased, CA V158)
+
+```ts
+const done = await sealPdf(eid.seal, org, pdfBytes, { qr: true, fileName: "Нэхэмжлэх.pdf" });
+// done.pdf — QR-тэй дардас (/verify/<docId>/<revIndex>); done.sealRegistration — бүртгэлийн бэлэн бие
+const reg = await eid.seal.registerSealedPdf(org, done.sealRegistration!);
+// reg.verifyUrl — https://ca.eidmongolia.mn/verify/<docID>; reg.created: 201 true, ижил биеийн давталт 200 false
+```
+
+- `POST /seal/{orgEtsi}/registrations` (`SEAL:<orgEtsi>`): тамгыг `/verify/{docID}`-д байгууллагын мөрөөр (хүний нэр үгүй)
+  харуулна — иргэний `eid.sign.registerSignature`-ийн тамганы хувилбар. Бие (`SealRegisterInput`, `SEAL_REGISTER_FIELDS`):
+  `docID, revIndex, cms, fileName?, inSha256, sigRevSha256, outSha256, priorCmsSha256?, priorRevisionSha256?` — `medium`,
+  `sessionID`, `onBehalfOf`, `signerEtsi`, `pageSha256` **үгүй**. `buildSealRegisterBody` CA-ийн хэлбэрийн дүрмийг сүлжээгүй
+  шалгана (`ValidationError`). Нөхцөл: тамгыг **ЭНЭ RP** хүссэн, тамгалснаас **7 хоногийн дотор**, RP-д 10 минутад 600.
+- `qr: true` — QR-тэй дардас (APPEARANCE_SPEC §6.5); тамгалахдаа `eid.seal.sealForDocument`-оор `{docId, revIndex}`-ийг
+  нөөцөлнө (`PadesSealer.sealForDocument`). QR бүртгэлийг амладаг — заавал бүртгэ. Анхдагч — QR-гүй дардас, өмнөхтэй
+  байт-ижил; түүнийг ч бүртгэж болно. `docId` — гарын үсэгтэй, verify хуудас / QR-тэй тамгагүй баримтад заавал (эс бөгөөс
+  `sealRegistration` байхгүй; QR бол `REQUEST_INVALID`). `pades.sealRegistration(done, { fileName })` — гараар бөглөх.
+- 409 `PRIOR_MISMATCH` бол `priorSignatures`-ээр иргэний бүртгэлтэй ижил хослолоор өөрөө дахин оролдоно.
+
+| Код (`SEAL_REGISTER_ERROR_CODES`) | HTTP | Утга |
+|---|---|---|
+| `REQUEST_INVALID` / `CMS_INVALID` / `SIGNATURE_INVALID` / `TIMESTAMP_INVALID` | 400 | хэлбэр / CMS профайл / гарын үсэг / TST (тамгалсан цагаас −5 мин…+1 цаг) |
+| `REQUEST_TOO_LARGE` | 413 | бие > 64 KiB |
+| `SEAL_NOT_FOUND` | 409 | энэ RP-ийн тамгалалт олдсонгүй эсвэл 7 хоног өнгөрсөн |
+| `SEAL_DOC_MISMATCH` | 409 | нөөцөлсөн docId/revIndex бүртгэлийнхээс өөр |
+| `DOC_ID_RESERVED` | 409 | өөр бүртгэгдээгүй QR тамга docID-г бага байрлалд нөөцөлсөн |
+| `SIGNER_MISMATCH` / `SIGNER_CERT_INVALID` | 409 | гэрчилгээний байгууллага URL-тэй таарахгүй / гэрчилгээ хүчингүй |
+| `DOC_ID_CONFLICT` / `PRIOR_MISMATCH` / `REGISTRY_CONFLICT` | 409 | иргэний бүртгэлтэй ижил гинжийн дүрэм |
+| `RATE_LIMITED` / `STATE_UNAVAILABLE` | 429 / 503 | `ApiError.retryable`, `retryAfterMs` |
+| — | 403 | `ForbiddenError` — `SEAL:<orgEtsi>` эрхгүй |
 
 ### Тамганы эрх хүсэх — RP-ийн санаачилсан (0.47.0)
 

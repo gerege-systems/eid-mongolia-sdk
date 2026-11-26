@@ -19,12 +19,22 @@ export {
   registrationFromCompleted,
   buildRegisterBody,
 } from "./sign.js";
-export { PDF_SIGNATURE_REGISTER_FIELDS, SEAL_GRANT_REQUEST_FIELDS, SEAL_REQUEST_FIELDS, SHARE_FORM_FIELDS } from "./contract.js";
+export {
+  PDF_SIGNATURE_REGISTER_FIELDS,
+  SEAL_GRANT_REQUEST_FIELDS,
+  SEAL_REGISTER_FIELDS,
+  SEAL_REQUEST_FIELDS,
+  SEAL_RESERVATION_FIELDS,
+  SHARE_FORM_FIELDS,
+} from "./contract.js";
 export { SessionApi, parseSessionResult, personMatchesCertificate, DEFAULT_MAX_WAIT_MS, WAIT_GRACE_MS } from "./session.js";
 export { OrganizationApi } from "./organization.js";
 export {
   SealApi,
   isSealCertificate,
+  buildSealRegisterBody,
+  type SealRegisterInput,
+  type SealRegisterResult,
   DEFAULT_SEAL_WAIT_TIMEOUT_MS,
   DEFAULT_SEAL_POLL_INTERVAL_MS,
   type SealCertificate,
@@ -216,12 +226,14 @@ export {
   RETRYABLE_ERROR_CODES,
   SEAL_ERROR_CODES,
   SEAL_GRANT_ERROR_CODES,
+  SEAL_REGISTER_ERROR_CODES,
   parseRetryAfter,
   type OnBehalfErrorCode,
   type PdfRegisterErrorCode,
   type RetryableErrorCode,
   type SealErrorCode,
   type SealGrantErrorCode,
+  type SealRegisterErrorCode,
   type SealGrantOutcome,
   type SealRequestOutcome,
   type SealService,

@@ -452,6 +452,51 @@ export const PDF_REGISTER_ERROR_CODES: readonly PdfRegisterErrorCode[] = [
 ];
 
 /**
+ * `POST /seal/{orgEtsi}/registrations` (`seal.registerSealedPdf`)-ийн CA алдааны кодууд — `ApiError.code` (CA
+ * `pades_seal_register.go` `SealRegisterErrorCodes`, `handlers_seal_register.go`; discovery `seal.registerErrorCodes`).
+ * 400: REQUEST_INVALID, CMS_INVALID, SIGNATURE_INVALID, TIMESTAMP_INVALID; 409: SIGNER_MISMATCH, SIGNER_CERT_INVALID,
+ * SEAL_NOT_FOUND (энэ RP-ийн тамгалалт олдсонгүй / 7 хоног өнгөрсөн), SEAL_DOC_MISMATCH (нөөцөлсөн docId/revIndex өөр),
+ * DOC_ID_RESERVED (өөр бүртгэгдээгүй QR тамга docID-г бага байрлалд нөөцөлсөн), DOC_ID_CONFLICT, PRIOR_MISMATCH,
+ * REGISTRY_CONFLICT; 413: REQUEST_TOO_LARGE; 429: RATE_LIMITED; 503: STATE_UNAVAILABLE. `SEAL:<orgEtsi>` эрхгүй RP →
+ * 403 `ForbiddenError` (code-гүй).
+ */
+export type SealRegisterErrorCode =
+  | "REQUEST_TOO_LARGE"
+  | "REQUEST_INVALID"
+  | "RATE_LIMITED"
+  | "STATE_UNAVAILABLE"
+  | "CMS_INVALID"
+  | "SIGNER_MISMATCH"
+  | "SIGNER_CERT_INVALID"
+  | "SIGNATURE_INVALID"
+  | "SEAL_NOT_FOUND"
+  | "SEAL_DOC_MISMATCH"
+  | "TIMESTAMP_INVALID"
+  | "DOC_ID_RESERVED"
+  | "DOC_ID_CONFLICT"
+  | "PRIOR_MISMATCH"
+  | "REGISTRY_CONFLICT";
+
+/** {@link SealRegisterErrorCode}-ийн бүх утга, CA-ийн дарааллаар (Go `eid.SealRegisterErrorCodes`). */
+export const SEAL_REGISTER_ERROR_CODES: readonly SealRegisterErrorCode[] = [
+  "REQUEST_TOO_LARGE",
+  "REQUEST_INVALID",
+  "RATE_LIMITED",
+  "STATE_UNAVAILABLE",
+  "CMS_INVALID",
+  "SIGNER_MISMATCH",
+  "SIGNER_CERT_INVALID",
+  "SIGNATURE_INVALID",
+  "SEAL_NOT_FOUND",
+  "SEAL_DOC_MISMATCH",
+  "TIMESTAMP_INVALID",
+  "DOC_ID_RESERVED",
+  "DOC_ID_CONFLICT",
+  "PRIOR_MISMATCH",
+  "REGISTRY_CONFLICT",
+];
+
+/**
  * Сүлжээ/timeout — upstream хариу өгсөнгүй. Мессеж ба `op`-д хувь хүний таних тэмдэг ОРОХГҮЙ (замын `/etsi/{…}`,
  * `/document/{…}` → `…`) — шууд лог руу бичиж болно.
  */
